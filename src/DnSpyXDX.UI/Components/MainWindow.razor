@@ -35,7 +35,7 @@
     <button class="toolbar-icon search-toolbar-button @(searchOpen ? "active" : null)" title="@(searchOpen ? "Close search" : "Open search")" aria-label="@(searchOpen ? "Close search" : "Open search")" aria-pressed="@searchOpen" disabled="@(Backend.Assemblies.Count == 0)" @onclick="ToggleSearchPanel">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m15.5 15.5 5 5"></path></svg>
     </button>
-    <label class="language-selector"><span>Language</span><select value="@language" disabled="@(Workspace.ActiveTab is null)" @onchange="LanguageChangedAsync"><option value="@DecompilerLanguage.CSharp">C#</option><option value="@DecompilerLanguage.IL">IL</option><option value="@DecompilerLanguage.ILWithCSharp">IL with C#</option></select></label>
+    <label class="language-selector"><span>Language</span><select value="@language" @onchange="LanguageChangedAsync"><option value="@DecompilerLanguage.CSharp">C#</option><option value="@DecompilerLanguage.IL">IL</option><option value="@DecompilerLanguage.ILWithCSharp">IL with C#</option></select></label>
   </header>
   <main>
     <div class="explorer-pane" @ref="explorer" style="width:@($"{explorerWidth}px")">
