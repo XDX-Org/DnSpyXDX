@@ -36,9 +36,9 @@ public sealed class WorkspaceState
         Changed?.Invoke();
     }
 
-    public string OpenLoading(SymbolId symbol, string title, string assemblyName, bool newTab = false)
+    public string OpenLoading(SymbolId symbol, string title, string assemblyName, DecompilerLanguage language, bool newTab = false)
     {
-        var placeholder = new DecompilerDocument(symbol, title, "csharp", "", [], []);
+        var placeholder = new DecompilerDocument(symbol, title, language.Key(), "", [], []);
         var tab = ActiveTab;
         if (newTab || tab is null)
         {
@@ -50,6 +50,16 @@ public sealed class WorkspaceState
         Status = $"Decompiling {title}…";
         Changed?.Invoke();
         return tab.Id;
+    }
+
+    public bool RefreshLoading(string id, DecompilerLanguage language)
+    {
+        var tab = tabs.FirstOrDefault(t => t.Id == id);
+        if (tab is null) return false;
+        tab.RefreshLoading(language);
+        Status = $"Decompiling {tab.Title}…";
+        Changed?.Invoke();
+        return true;
     }
 
     public bool CompleteLoading(string id, DecompilerDocument document)
@@ -156,6 +166,13 @@ public sealed class DocumentTab(string id, DecompilerDocument document, string a
     {
         Document = document;
         IsLoading = false;
+        Error = null;
+    }
+
+    internal void RefreshLoading(DecompilerLanguage language)
+    {
+        Document = Document with { Language = language.Key(), Text = "" };
+        IsLoading = true;
         Error = null;
     }
 

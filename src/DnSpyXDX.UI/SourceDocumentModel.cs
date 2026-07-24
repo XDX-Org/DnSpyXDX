@@ -69,7 +69,7 @@ public sealed partial class SourceDocumentModel
             if ((index & 0x3FFF) == 0) cancellationToken.ThrowIfCancellationRequested();
             if (text[index] is not ('\r' or '\n')) continue;
 
-            IndexLine(text, lineStart, index - lineStart, lineNumber, tokens, ref maximumColumns);
+            IndexLine(text, lineStart, index - lineStart, lineNumber, key.Language, tokens, ref maximumColumns);
             lengths.Add(index - lineStart);
             if (text[index] == '\r' && index + 1 < text.Length && text[index + 1] == '\n') index++;
             lineStart = index + 1;
@@ -78,7 +78,7 @@ public sealed partial class SourceDocumentModel
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        IndexLine(text, lineStart, text.Length - lineStart, lineNumber, tokens, ref maximumColumns);
+        IndexLine(text, lineStart, text.Length - lineStart, lineNumber, key.Language, tokens, ref maximumColumns);
         lengths.Add(text.Length - lineStart);
         return new SourceDocumentModel(key, text, starts.ToArray(), lengths.ToArray(), maximumColumns, tokens);
     }
@@ -114,6 +114,7 @@ public sealed partial class SourceDocumentModel
         int count,
         IReadOnlyDictionary<string, SymbolId?>? symbolLinks = null,
         IReadOnlyDictionary<string, string>? typeKinds = null,
+        IReadOnlyList<ReferenceSpan>? references = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(startLine);
@@ -139,10 +140,10 @@ public sealed partial class SourceDocumentModel
                     var line = GetLine(lineNumber);
                     var text = line.GetText(Text).ToString();
                     var startState = state;
-                    var tokenized = SourceTokenizer.Tokenize(text, state, symbolLinks, typeKinds);
+                    var tokenized = SourceTokenizer.Tokenize(text, state, symbolLinks, typeKinds, Key.Language);
                     state = tokenized.EndState;
                     if (lineNumber >= startLine)
-                        result.Add(new SourceTokenizedLine(lineNumber, line.StartOffset, text, tokenized.Tokens, startState, state));
+                        result.Add(new SourceTokenizedLine(lineNumber, line.StartOffset, text, ApplyReferences(tokenized.Tokens, line.StartOffset, references), startState, state));
                 }
                 return result;
             }, cancellationToken);
@@ -150,11 +151,47 @@ public sealed partial class SourceDocumentModel
         finally { tokenizerGate.Release(); }
     }
 
+    private static IReadOnlyList<SourceToken> ApplyReferences(IReadOnlyList<SourceToken> tokens, int lineOffset, IReadOnlyList<ReferenceSpan>? references)
+    {
+        if (references is null || references.Count == 0) return tokens;
+        var lineEnd = lineOffset + (tokens.Count == 0 ? 0 : tokens.Max(token => token.Start + token.Length));
+        var relevant = references.Where(reference => reference.StartOffset < lineEnd && reference.StartOffset + reference.Length > lineOffset).ToArray();
+        if (relevant.Length == 0) return tokens;
+        var result = new List<SourceToken>(tokens.Count + relevant.Length);
+        foreach (var token in tokens)
+        {
+            var boundaries = new SortedSet<int> { token.Start, token.Start + token.Length };
+            foreach (var reference in relevant)
+            {
+                var start = Math.Clamp(reference.StartOffset - lineOffset, token.Start, token.Start + token.Length);
+                var end = Math.Clamp(reference.StartOffset + reference.Length - lineOffset, token.Start, token.Start + token.Length);
+                if (start < end) { boundaries.Add(start); boundaries.Add(end); }
+            }
+            var points = boundaries.ToArray();
+            for (var index = 0; index < points.Length - 1; index++)
+            {
+                var start = points[index];
+                var reference = relevant.FirstOrDefault(candidate => candidate.StartOffset <= lineOffset + start && lineOffset + start < candidate.StartOffset + candidate.Length);
+                result.Add(token with
+                {
+                    Start = start,
+                    Length = points[index + 1] - start,
+                    Target = reference?.LocalTarget ?? token.Target,
+                    SymbolName = reference is null ? token.SymbolName : reference.Tooltip,
+                    DocumentOffset = reference?.DocumentOffset,
+                    Tooltip = reference?.Tooltip
+                });
+            }
+        }
+        return result;
+    }
+
     private static void IndexLine(
         string source,
         int start,
         int length,
         int lineNumber,
+        string language,
         Dictionary<int, SourcePosition> tokenLocations,
         ref int maximumColumns)
     {
@@ -165,10 +202,25 @@ public sealed partial class SourceDocumentModel
         maximumColumns = Math.Max(maximumColumns, columns);
 
         var match = TokenComment().Match(source, start, length);
+        if (match.Success && language.StartsWith("il", StringComparison.Ordinal) && !NextLineIsILDeclaration(source, start + length)) match = Match.Empty;
+        if (!match.Success) match = ILDeclarationToken().Match(source, start, length);
         if (!match.Success || !int.TryParse(match.Groups[1].ValueSpan, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var token)) return;
         tokenLocations.TryAdd(token, new SourcePosition(lineNumber, match.Index - start));
     }
 
+    private static bool NextLineIsILDeclaration(string source, int offset)
+    {
+        while (offset < source.Length && source[offset] is '\r' or '\n') offset++;
+        while (offset < source.Length && char.IsWhiteSpace(source[offset]) && source[offset] is not ('\r' or '\n')) offset++;
+        return offset < source.Length && ILDeclaration().IsMatch(source, offset);
+    }
+
     [GeneratedRegex(@"//\s*Token:\s*0x([0-9A-Fa-f]{8})", RegexOptions.CultureInvariant)]
     private static partial Regex TokenComment();
+
+    [GeneratedRegex(@"\s*\.(?:class|method|field|property|event)\b.*?/\*\s*([0-9A-Fa-f]{8})\s*\*/", RegexOptions.CultureInvariant)]
+    private static partial Regex ILDeclarationToken();
+
+    [GeneratedRegex(@"\G\.(?:class|method|field|property|event)\b", RegexOptions.CultureInvariant)]
+    private static partial Regex ILDeclaration();
 }

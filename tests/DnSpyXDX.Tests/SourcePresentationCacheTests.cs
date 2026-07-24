@@ -13,8 +13,8 @@ public sealed class SourcePresentationCacheTests
         var key = Key(1);
         var model = await cache.GetModelAsync(key, "class C {}\n");
         var sameModel = await cache.GetModelAsync(key, "class C {}\n");
-        var first = await cache.GetLinesAsync(model, 0, 1, null, null, default);
-        var second = await cache.GetLinesAsync(model, 0, 1, null, null, default);
+        var first = await cache.GetLinesAsync(model, 0, 1, null, null, null, default);
+        var second = await cache.GetLinesAsync(model, 0, 1, null, null, null, default);
 
         Assert.Same(model, sameModel);
         Assert.Same(first, second);
@@ -43,7 +43,7 @@ public sealed class SourcePresentationCacheTests
         var cache = Create();
         var key = Key(1);
         var model = await cache.GetModelAsync(key, "class C {}");
-        await cache.GetLinesAsync(model, 0, 1, null, null, default);
+        await cache.GetLinesAsync(model, 0, 1, null, null, null, default);
 
         cache.RemoveAssembly(key.ModuleMvid);
 

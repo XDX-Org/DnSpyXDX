@@ -22,7 +22,7 @@ else
   <div class="source-viewport" @ref="viewport" tabindex="0" role="region" aria-label="Decompiled source">
     <div class="source-canvas" style="min-width:@CanvasWidth">
       <Virtualize @key="model.Key" @ref="virtualizer" Context="line" ItemsProvider="LoadLinesAsync" ItemSize="LineHeight" OverscanCount="Overscan">
-        <SourceLineView @key="line.Number" Line="line" LineHeight="LineHeight" Matches="FindSpans(line.Number)" ActiveMatchOffset="ActiveMatchOffset" FocusedLine="focusedLine" HoveredSymbol="hoveredSymbol" OnHoverSymbol="HighlightSymbol" OnNavigate="NavigateAsync" />
+        <SourceLineView @key="line.Number" Line="line" LineHeight="LineHeight" Matches="FindSpans(line.Number)" ActiveMatchOffset="ActiveMatchOffset" FocusedLine="focusedLine" HoveredSymbol="hoveredSymbol" OnHoverSymbol="HighlightSymbol" OnNavigate="NavigateAsync" OnNavigateOffset="NavigateOffsetAsync" />
       </Virtualize>
     </div>
   </div>
@@ -126,7 +126,7 @@ else
   private async ValueTask<ItemsProviderResult<SourceTokenizedLine>> LoadLinesAsync(ItemsProviderRequest request)
   {
     if (model is null) return new ItemsProviderResult<SourceTokenizedLine>([], 0);
-    var lines = await Cache.GetLinesAsync(model, request.StartIndex, request.Count, Document.SymbolLinks, Document.TypeClassifications, request.CancellationToken);
+    var lines = await Cache.GetLinesAsync(model, request.StartIndex, request.Count, Document.SymbolLinks, Document.TypeClassifications, Document.References, request.CancellationToken);
     return new ItemsProviderResult<SourceTokenizedLine>(lines, model.LineCount);
   }
 
@@ -234,6 +234,19 @@ else
 
   private Task NavigateAsync(NavigationRequest request) =>
     request.Symbol == Document.Symbol && !request.NewTab ? Task.CompletedTask : OnNavigate.InvokeAsync(request);
+
+  private async Task NavigateOffsetAsync(int offset)
+  {
+    if (model is null) return;
+    var position = model.GetPosition(offset);
+    focusedLine = position.Line;
+    if (virtualizer is not null) await virtualizer.RefreshDataAsync();
+    await JS.InvokeVoidAsync("dnSpyXdx.scrollSourceToLine", viewport, position.Line, LineHeight);
+    focusDelay?.Cancel();
+    focusDelay?.Dispose();
+    focusDelay = new CancellationTokenSource();
+    _ = ClearFocusAsync(focusDelay.Token);
+  }
 
   private IReadOnlyList<SourceFindSpan> FindSpans(int line) =>
     findSpans.TryGetValue(line, out var spans) ? spans : [];

@@ -11,7 +11,11 @@
       var matchClass = segment.IsActiveMatch ? "source-find-match active" : segment.IsMatch ? "source-find-match" : null;
       if (segment.Token.Target is { } target)
       {
-        <button type="button" class="source-token @CssClass(segment.Token) code-link @matchClass @(IsHovered(segment.Token) ? "code-link-active" : null)" title="Go to @segment.Token.SymbolName" @onclick="e => NavigateAsync(target, e)" @onmouseenter="() => HoverAsync(segment.Token.SymbolName)" @onmouseleave="() => HoverAsync(null)">@text</button>
+        <button type="button" class="source-token @CssClass(segment.Token) code-link @matchClass @(IsHovered(segment.Token) ? "code-link-active" : null)" title="@(segment.Token.Tooltip ?? $"Go to {segment.Token.SymbolName}")" @onclick="e => NavigateAsync(target, e)" @onmouseenter="() => HoverAsync(segment.Token.SymbolName)" @onmouseleave="() => HoverAsync(null)">@text</button>
+      }
+      else if (segment.Token.DocumentOffset is { } offset)
+      {
+        <button type="button" class="source-token @CssClass(segment.Token) code-link @matchClass" title="@(segment.Token.Tooltip ?? "Go to IL instruction")" @onclick="e => NavigateOffsetAsync(offset, e)">@text</button>
       }
       else
       {
@@ -26,6 +30,7 @@
 
   [Parameter, EditorRequired] public SourceTokenizedLine Line { get; set; } = null!;
   [Parameter] public EventCallback<NavigationRequest> OnNavigate { get; set; }
+  [Parameter] public EventCallback<int> OnNavigateOffset { get; set; }
   [Parameter] public IReadOnlyList<SourceFindSpan> Matches { get; set; } = [];
   [Parameter] public int ActiveMatchOffset { get; set; } = -1;
   [Parameter] public int FocusedLine { get; set; } = -1;
@@ -39,6 +44,8 @@
 
   private Task NavigateAsync(SymbolId target, MouseEventArgs e) =>
     e.AltKey || e.ShiftKey ? Task.CompletedTask : OnNavigate.InvokeAsync(new NavigationRequest(target, e.CtrlKey || e.MetaKey));
+  private Task NavigateOffsetAsync(int offset, MouseEventArgs e) =>
+    e.AltKey || e.ShiftKey ? Task.CompletedTask : OnNavigateOffset.InvokeAsync(offset);
 
   private IEnumerable<SourceBrace> VisibleGuides()
   {

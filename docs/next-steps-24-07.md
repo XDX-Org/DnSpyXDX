@@ -2,6 +2,8 @@
 
 Prepared on 2026-07-24. This supersedes the delivery order in `next-steps-23-07.md`.
 
+Implementation status: complete on branch `il`; automated tests and `linux-x64`/`win-x64` publishes pass. Interactive GUI smoke testing remains part of merge review.
+
 ## Decision
 
 Language selection is the next milestone. Decompilation performance measurement moves to the end of the current backlog; performance work should begin earlier only if language-mode implementation exposes a blocking regression.

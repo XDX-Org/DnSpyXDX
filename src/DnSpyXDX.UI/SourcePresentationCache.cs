@@ -14,6 +14,7 @@ public sealed class SourcePresentationCache(ILogger<SourcePresentationCache> log
     private readonly object gate = new();
     private readonly object noLinks = new();
     private readonly object noKinds = new();
+    private readonly object noReferences = new();
     private readonly Dictionary<SourceDocumentKey, ModelEntry> models = [];
     private readonly Dictionary<BatchKey, BatchEntry> batches = [];
     private long clock;
@@ -50,10 +51,10 @@ public sealed class SourcePresentationCache(ILogger<SourcePresentationCache> log
     }
 
     public async Task<IReadOnlyList<SourceTokenizedLine>> GetLinesAsync(SourceDocumentModel model, int start, int count,
-        IReadOnlyDictionary<string, SymbolId?>? links, IReadOnlyDictionary<string, string>? typeKinds, CancellationToken token)
+        IReadOnlyDictionary<string, SymbolId?>? links, IReadOnlyDictionary<string, string>? typeKinds, IReadOnlyList<ReferenceSpan>? references, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        var key = new BatchKey(model.Key, start, count, links ?? noLinks, typeKinds ?? noKinds);
+        var key = new BatchKey(model.Key, start, count, links ?? noLinks, typeKinds ?? noKinds, references ?? noReferences);
         CancellationToken evictionToken;
         lock (gate)
         {
@@ -69,7 +70,7 @@ public sealed class SourcePresentationCache(ILogger<SourcePresentationCache> log
 
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, evictionToken);
         var timer = Stopwatch.StartNew();
-        var lines = await model.TokenizeLinesAsync(start, count, links, typeKinds, linked.Token);
+        var lines = await model.TokenizeLinesAsync(start, count, links, typeKinds, references, linked.Token);
         timer.Stop();
         token.ThrowIfCancellationRequested();
         var bytes = Estimate(lines);
@@ -164,6 +165,6 @@ public sealed class SourcePresentationCache(ILogger<SourcePresentationCache> log
         public void Dispose() { Cancellation.Cancel(); Cancellation.Dispose(); }
     }
     private sealed class BatchEntry(IReadOnlyList<SourceTokenizedLine> lines, long bytes, long used) { public IReadOnlyList<SourceTokenizedLine> Lines { get; } = lines; public long Bytes { get; } = bytes; public long Used { get; set; } = used; }
-    private readonly record struct BatchKey(SourceDocumentKey Document, int Start, int Count, object Links, object TypeKinds);
+    private readonly record struct BatchKey(SourceDocumentKey Document, int Start, int Count, object Links, object TypeKinds, object References);
     private sealed class Lease(SourcePresentationCache owner, SourceDocumentKey key) : IDisposable { private SourcePresentationCache? cache = owner; public void Dispose() => Interlocked.Exchange(ref cache, null)?.Release(key); }
 }

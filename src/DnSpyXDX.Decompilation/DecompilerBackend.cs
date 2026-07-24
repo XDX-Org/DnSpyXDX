@@ -3,9 +3,13 @@ using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 using System.Reflection;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Collections.Immutable;
 using ICSharpCode.Decompiler;
 using ICSharpCode.Decompiler.CSharp;
+using ICSharpCode.Decompiler.CSharp.OutputVisitor;
+using ICSharpCode.Decompiler.Disassembler;
 using ICSharpCode.Decompiler.Metadata;
 using DnSpyXDX.Application;
 
@@ -51,11 +55,12 @@ public sealed class DecompilerBackend : IDecompilerBackend
             ? Task.Run(() => session.GetChildren(parent, cancellationToken), cancellationToken)
             : Task.FromResult<IReadOnlyList<TreeNodeDescriptor>>([]);
 
-    public async Task<DecompilerDocument> DecompileAsync(SymbolId symbol, CancellationToken cancellationToken = default)
+    public async Task<DecompilerDocument> DecompileAsync(SymbolId symbol, DecompilerLanguage language, CancellationToken cancellationToken = default)
     {
+        if (!Enum.IsDefined(language)) throw new ArgumentOutOfRangeException(nameof(language));
         var session = sessions.Values.FirstOrDefault(s => s.Descriptor.ModuleMvid == symbol.ModuleMvid)
             ?? throw new KeyNotFoundException("The symbol's assembly is no longer open.");
-        return await session.DecompileAsync(symbol, cancellationToken);
+        return await session.DecompileAsync(symbol, language, cancellationToken);
     }
 
     public Task<IReadOnlyList<NodeId>> GetPathAsync(SymbolId symbol, CancellationToken cancellationToken = default)
@@ -105,18 +110,20 @@ internal sealed class AssemblySession : IDisposable
     private readonly PEFile module;
     private readonly MetadataReader metadata;
     private readonly CSharpDecompiler decompiler;
+    private readonly DecompilerSettings settings;
     private readonly MetadataTypeNameProvider typeNames;
     private readonly SemaphoreSlim gate = new(1, 1);
-    private readonly Dictionary<int, DecompilerDocument> cache = [];
+    private readonly Dictionary<(int Token, DecompilerLanguage Language), DecompilerDocument> cache = [];
     private IReadOnlyDictionary<string, SymbolId>? typeLinks;
     private IReadOnlyDictionary<string, string>? typeClassifications;
     public AssemblyDescriptor Descriptor { get; }
 
-    private AssemblySession(PEFile module, CSharpDecompiler decompiler, AssemblyDescriptor descriptor)
+    private AssemblySession(PEFile module, CSharpDecompiler decompiler, DecompilerSettings settings, AssemblyDescriptor descriptor)
     {
         this.module = module;
         metadata = module.Metadata;
         this.decompiler = decompiler;
+        this.settings = settings;
         typeNames = new MetadataTypeNameProvider(metadata);
         Descriptor = descriptor;
     }
@@ -138,7 +145,7 @@ internal sealed class AssemblySession : IDisposable
         var decompiler = new CSharpDecompiler(module, resolver, settings);
         var sessionId = Guid.NewGuid();
         var descriptor = new AssemblyDescriptor(sessionId, mvid, name, path, module.DetectTargetFrameworkId() ?? "Unknown", module.Reader.PEHeaders.CoffHeader.Machine.ToString(), new NodeId(sessionId, "root"));
-        return new AssemblySession(module, decompiler, descriptor);
+        return new AssemblySession(module, decompiler, settings, descriptor);
     }
 
     public IReadOnlyList<TreeNodeDescriptor> GetChildren(NodeId parent, CancellationToken ct)
@@ -330,27 +337,213 @@ internal sealed class AssemblySession : IDisposable
         TypeAttributes.NestedFamANDAssem => "private protected", TypeAttributes.NestedPrivate => "private", _ => "internal"
     };
 
-    public async Task<DecompilerDocument> DecompileAsync(SymbolId symbol, CancellationToken ct)
+    public async Task<DecompilerDocument> DecompileAsync(SymbolId symbol, DecompilerLanguage language, CancellationToken ct)
     {
-        if (cache.TryGetValue(symbol.MetadataToken, out var cached)) return cached;
+        if (!Enum.IsDefined(language)) throw new ArgumentOutOfRangeException(nameof(language));
+        var key = (symbol.MetadataToken, language);
+        if (cache.TryGetValue(key, out var cached)) return cached;
         await gate.WaitAsync(ct);
         try
         {
-            if (cache.TryGetValue(symbol.MetadataToken, out cached)) return cached;
+            if (cache.TryGetValue(key, out cached)) return cached;
             var handle = MetadataTokens.EntityHandle(symbol.MetadataToken);
             decompiler.CancellationToken = ct;
-            var text = await Task.Run(() =>
+            var text = await Task.Run(() => language switch
             {
-                var source = decompiler.DecompileAsString([handle]);
-                return AddTokenComments(AddNamespaceDeclaration(source, DeclaringTypeOf(handle)), handle);
+                DecompilerLanguage.CSharp => DecompileCSharp(handle),
+                DecompilerLanguage.IL => Disassemble(handle, ct),
+                DecompilerLanguage.ILWithCSharp => DisassembleWithCSharp(handle, ct),
+                _ => throw new ArgumentOutOfRangeException(nameof(language))
             }, ct);
             ct.ThrowIfCancellationRequested();
             var title = GetEntityName(handle);
-            var result = new DecompilerDocument(symbol, title, "csharp", text, [], [], BuildSymbolLinks(handle), TypeClassifications: BuildClassifications(handle));
-            cache[symbol.MetadataToken] = result;
+            var links = language == DecompilerLanguage.CSharp ? BuildSymbolLinks(handle) : null;
+            var references = language == DecompilerLanguage.CSharp ? [] : BuildILReferences(text);
+            var result = new DecompilerDocument(symbol, title, language.Key(), text, references, [], links, TypeClassifications: BuildClassifications(handle));
+            cache[key] = result;
             return result;
         }
         finally { decompiler.CancellationToken = default; gate.Release(); }
+    }
+
+    private string DecompileCSharp(EntityHandle handle)
+    {
+        var source = decompiler.DecompileAsString([handle]);
+        return AddTokenComments(AddNamespaceDeclaration(source, DeclaringTypeOf(handle)), handle);
+    }
+
+    private string Disassemble(EntityHandle handle, CancellationToken ct, bool formatDeclarationTokens = true)
+    {
+        var output = new PlainTextOutput();
+        var disassembler = new ReflectionDisassembler(output, ct) { DetectControlStructure = true, ShowMetadataTokens = true };
+        switch (handle.Kind)
+        {
+            case HandleKind.TypeDefinition: disassembler.DisassembleType(module, (TypeDefinitionHandle)handle); break;
+            case HandleKind.MethodDefinition: disassembler.DisassembleMethod(module, (MethodDefinitionHandle)handle); break;
+            case HandleKind.FieldDefinition: disassembler.DisassembleField(module, (FieldDefinitionHandle)handle); break;
+            case HandleKind.PropertyDefinition: disassembler.DisassembleProperty(module, (PropertyDefinitionHandle)handle); break;
+            case HandleKind.EventDefinition: disassembler.DisassembleEvent(module, (EventDefinitionHandle)handle); break;
+            default: throw new NotSupportedException($"Cannot disassemble metadata handle {handle.Kind}.");
+        }
+        var text = output.ToString();
+        return formatDeclarationTokens ? FormatMetadataTokens(text) : text;
+    }
+
+    private string DisassembleWithCSharp(EntityHandle handle, CancellationToken ct)
+    {
+        var syntaxTree = decompiler.Decompile([handle]);
+        using var writer = new StringWriter();
+        var tokenWriter = TokenWriter.CreateWriterThatSetsLocationsInAST(writer, "");
+        syntaxTree.AcceptVisitor(new CSharpOutputVisitor(tokenWriter, settings.CSharpFormattingOptions));
+        var csharp = writer.ToString();
+        var sequencePoints = decompiler.CreateSequencePoints(syntaxTree)
+            .Where(pair => pair.Key.Method?.MetadataToken.Kind == HandleKind.MethodDefinition)
+            .GroupBy(pair => MetadataTokens.GetToken(pair.Key.Method!.MetadataToken))
+            .ToDictionary(
+                group => group.Key,
+                group => group.SelectMany(pair => pair.Value).Where(point => !point.IsHidden).OrderBy(point => point.Offset).ToArray());
+        var il = Disassemble(handle, ct, formatDeclarationTokens: false);
+        var sourceLines = csharp.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        var output = new StringBuilder(il.Length + csharp.Length / 3);
+        IReadOnlyList<ICSharpCode.Decompiler.DebugInfo.SequencePoint> points = [];
+        string? previousAnnotation = null;
+        foreach (var line in il.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
+        {
+            ct.ThrowIfCancellationRequested();
+            var method = MethodToken.Match(line);
+            if (method.Success)
+            {
+                points = sequencePoints.GetValueOrDefault(Convert.ToInt32(method.Groups[1].Value, 16)) ?? [];
+                previousAnnotation = null;
+            }
+            var instruction = InstructionOffset.Match(line);
+            if (instruction.Success && points.Count > 0)
+            {
+                var offset = Convert.ToInt32(instruction.Groups[1].Value, 16);
+                var point = points.FirstOrDefault(candidate => candidate.Offset <= offset && offset < candidate.EndOffset);
+                if (point is not null)
+                {
+                    var annotation = SourceText(sourceLines, point);
+                    if (annotation.Length > 0 && annotation != previousAnnotation)
+                        output.Append(line.AsSpan(0, line.Length - line.TrimStart().Length)).Append("// C#: ").AppendLine(annotation);
+                    previousAnnotation = annotation;
+                }
+                else previousAnnotation = null;
+            }
+            output.AppendLine(line);
+        }
+        return FormatMetadataTokens(output.ToString());
+    }
+
+    private static string FormatMetadataTokens(string text) => MetadataTokenLine.Replace(text, match =>
+    {
+        var indent = match.Groups[1].Value;
+        var content = match.Groups[2].Value;
+        var comments = new StringBuilder();
+        foreach (Match tokenMatch in InlineMetadataToken.Matches(content))
+        {
+            var tokenText = tokenMatch.Groups[1].Value;
+            var token = Convert.ToInt32(tokenText, 16);
+            comments.Append(indent).Append("// Token: 0x").Append(tokenText.ToUpperInvariant()).Append(" RID: ").Append(token & 0x00FFFFFF).Append('\n');
+        }
+        return comments.Append(indent).Append(InlineMetadataToken.Replace(content, "").TrimEnd()).ToString();
+    });
+
+    private static string SourceText(string[] lines, ICSharpCode.Decompiler.DebugInfo.SequencePoint point)
+    {
+        var start = Math.Clamp(point.StartLine - 1, 0, lines.Length - 1);
+        var end = Math.Clamp(point.EndLine - 1, start, lines.Length - 1);
+        var parts = new List<string>(end - start + 1);
+        for (var line = start; line <= end; line++)
+        {
+            var from = line == start ? Math.Clamp(point.StartColumn - 1, 0, lines[line].Length) : 0;
+            var to = line == end ? Math.Clamp(point.EndColumn - 1, from, lines[line].Length) : lines[line].Length;
+            var part = lines[line][from..to].Trim();
+            if (part.Length > 0) parts.Add(part);
+        }
+        var text = string.Join(' ', parts);
+        return Regex.Replace(text, "\\s+", " ");
+    }
+
+    private static readonly Regex MethodToken = new(@"\.method\s+/\*\s*([0-9A-Fa-f]{8})\s*\*/", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex InstructionOffset = new(@"\bIL_([0-9A-Fa-f]+):", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex MetadataTokenLine = new(@"(?m)^([ \t]*)(.*?/\*\s*[0-9A-Fa-f]{8}\s*\*/.*)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex InlineMetadataToken = new(@"\s*/\*\s*([0-9A-Fa-f]{8})\s*\*/", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex TokenCommentLine = new(@"^\s*//\s*Token:\s*0x([0-9A-Fa-f]{8})\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex ILLabel = new(@"\bIL_[0-9A-Fa-f]+\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private IReadOnlyList<ReferenceSpan> BuildILReferences(string text)
+    {
+        var lines = SourceLines(text);
+        var method = -1;
+        var definitions = new Dictionary<(int Method, string Label), int>();
+        var methodByLine = new int[lines.Count];
+        for (var index = 0; index < lines.Count; index++)
+        {
+            var content = lines[index].Text;
+            if (content.TrimStart().StartsWith(".method ", StringComparison.Ordinal)) method++;
+            methodByLine[index] = method;
+            var label = ILLabel.Match(content);
+            if (method >= 0 && label.Success && content.AsSpan(label.Index + label.Length).TrimStart().StartsWith(":"))
+                definitions[(method, label.Value)] = lines[index].Offset + label.Index;
+        }
+
+        var references = new List<ReferenceSpan>();
+        for (var index = 0; index < lines.Count; index++)
+        {
+            var content = lines[index].Text;
+            foreach (Match label in ILLabel.Matches(content))
+            {
+                var isDefinition = content.AsSpan(label.Index + label.Length).TrimStart().StartsWith(":");
+                if (!isDefinition && definitions.TryGetValue((methodByLine[index], label.Value), out var target))
+                    references.Add(new ReferenceSpan(lines[index].Offset + label.Index, label.Length, null, null, $"Go to {label.Value}", target));
+            }
+
+            var tokenMatch = TokenCommentLine.Match(content);
+            if (!tokenMatch.Success || !int.TryParse(tokenMatch.Groups[1].Value, System.Globalization.NumberStyles.HexNumber, null, out var token)) continue;
+            if (!TryResolveLocalILTarget(token, out var targetSymbol, out var name)) continue;
+            var targetLine = index + 1;
+            while (targetLine < lines.Count && TokenCommentLine.IsMatch(lines[targetLine].Text)) targetLine++;
+            if (targetLine >= lines.Count) continue;
+            var nameIndex = lines[targetLine].Text.IndexOf(name, StringComparison.Ordinal);
+            if (nameIndex >= 0)
+                references.Add(new ReferenceSpan(lines[targetLine].Offset + nameIndex, name.Length, targetSymbol, null, $"Go to {name}"));
+        }
+        return references;
+    }
+
+    private bool TryResolveLocalILTarget(int token, out SymbolId symbol, out string name)
+    {
+        symbol = default;
+        name = "";
+        EntityHandle handle;
+        try { handle = MetadataTokens.EntityHandle(token); }
+        catch (ArgumentException) { return false; }
+        if (handle.Kind == HandleKind.MethodSpecification) handle = metadata.GetMethodSpecification((MethodSpecificationHandle)handle).Method;
+        if (handle.Kind is not (HandleKind.TypeDefinition or HandleKind.MethodDefinition or HandleKind.FieldDefinition or HandleKind.PropertyDefinition or HandleKind.EventDefinition))
+        {
+            var entity = ((ICSharpCode.Decompiler.TypeSystem.MetadataModule)decompiler.TypeSystem.MainModule).ResolveEntity(handle, default);
+            if (entity is null || entity.ParentModule?.IsMainModule != true || entity.MetadataToken.IsNil) return false;
+            handle = entity.MetadataToken;
+        }
+        symbol = new SymbolId(Descriptor.ModuleMvid, MetadataTokens.GetToken(handle));
+        name = handle.Kind == HandleKind.TypeDefinition
+            ? metadata.GetString(metadata.GetTypeDefinition((TypeDefinitionHandle)handle).Name)
+            : GetEntityName(handle);
+        return name.Length > 0;
+    }
+
+    private static List<(int Offset, string Text)> SourceLines(string text)
+    {
+        var lines = new List<(int, string)>();
+        var offset = 0;
+        foreach (var line in text.Split('\n'))
+        {
+            var content = line.TrimEnd('\r');
+            lines.Add((offset, content));
+            offset += line.Length + 1;
+        }
+        return lines;
     }
 
     private IReadOnlyDictionary<string, SymbolId> TypeLinks => typeLinks ??= BuildTypeLinks();
