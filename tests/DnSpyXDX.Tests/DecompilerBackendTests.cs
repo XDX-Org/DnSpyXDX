@@ -100,6 +100,17 @@ public sealed class DecompilerBackendTests
         Assert.Contains("// C#:", combined.Text, StringComparison.Ordinal);
         Assert.Contains("IL_0000:", combined.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("// Decompiled C# reference", combined.Text, StringComparison.Ordinal);
+
+        var later = Assert.Single(await backend.SearchAsync(nameof(SampleMembers.Later)), result =>
+            result.Kind == "Method" && result.QualifiedName == "DnSpyXDX.Tests.SampleMembers.Later");
+        Assert.Contains(il.References, reference =>
+            reference.LocalTarget == later.Symbol && il.Text.AsSpan(reference.StartOffset, reference.Length).SequenceEqual(nameof(SampleMembers.Later)));
+
+        var branchType = Assert.Single(await backend.SearchAsync(nameof(SwitchFormattingSample)), result => result.Kind == "Type");
+        var branchDocument = await backend.DecompileAsync(branchType.Symbol, DecompilerLanguage.IL);
+        var branch = Assert.Single(branchDocument.References.Where(reference => reference.DocumentOffset is not null).Take(1));
+        var label = branchDocument.Text.Substring(branch.StartOffset, branch.Length);
+        Assert.StartsWith(label + ":", branchDocument.Text[branch.DocumentOffset!.Value..], StringComparison.Ordinal);
     }
 
     [Fact]

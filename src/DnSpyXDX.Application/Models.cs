@@ -55,7 +55,8 @@ public sealed record ReferenceSpan(
     int Length,
     SymbolId? LocalTarget,
     string? ExternalAssembly,
-    string Tooltip);
+    string Tooltip,
+    int? DocumentOffset = null);
 
 public sealed record DiagnosticMessage(string Severity, string Message);
 

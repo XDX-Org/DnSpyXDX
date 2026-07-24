@@ -114,6 +114,7 @@ public sealed partial class SourceDocumentModel
         int count,
         IReadOnlyDictionary<string, SymbolId?>? symbolLinks = null,
         IReadOnlyDictionary<string, string>? typeKinds = null,
+        IReadOnlyList<ReferenceSpan>? references = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(startLine);
@@ -142,12 +143,47 @@ public sealed partial class SourceDocumentModel
                     var tokenized = SourceTokenizer.Tokenize(text, state, symbolLinks, typeKinds, Key.Language);
                     state = tokenized.EndState;
                     if (lineNumber >= startLine)
-                        result.Add(new SourceTokenizedLine(lineNumber, line.StartOffset, text, tokenized.Tokens, startState, state));
+                        result.Add(new SourceTokenizedLine(lineNumber, line.StartOffset, text, ApplyReferences(tokenized.Tokens, line.StartOffset, references), startState, state));
                 }
                 return result;
             }, cancellationToken);
         }
         finally { tokenizerGate.Release(); }
+    }
+
+    private static IReadOnlyList<SourceToken> ApplyReferences(IReadOnlyList<SourceToken> tokens, int lineOffset, IReadOnlyList<ReferenceSpan>? references)
+    {
+        if (references is null || references.Count == 0) return tokens;
+        var lineEnd = lineOffset + (tokens.Count == 0 ? 0 : tokens.Max(token => token.Start + token.Length));
+        var relevant = references.Where(reference => reference.StartOffset < lineEnd && reference.StartOffset + reference.Length > lineOffset).ToArray();
+        if (relevant.Length == 0) return tokens;
+        var result = new List<SourceToken>(tokens.Count + relevant.Length);
+        foreach (var token in tokens)
+        {
+            var boundaries = new SortedSet<int> { token.Start, token.Start + token.Length };
+            foreach (var reference in relevant)
+            {
+                var start = Math.Clamp(reference.StartOffset - lineOffset, token.Start, token.Start + token.Length);
+                var end = Math.Clamp(reference.StartOffset + reference.Length - lineOffset, token.Start, token.Start + token.Length);
+                if (start < end) { boundaries.Add(start); boundaries.Add(end); }
+            }
+            var points = boundaries.ToArray();
+            for (var index = 0; index < points.Length - 1; index++)
+            {
+                var start = points[index];
+                var reference = relevant.FirstOrDefault(candidate => candidate.StartOffset <= lineOffset + start && lineOffset + start < candidate.StartOffset + candidate.Length);
+                result.Add(token with
+                {
+                    Start = start,
+                    Length = points[index + 1] - start,
+                    Target = reference?.LocalTarget ?? token.Target,
+                    SymbolName = reference is null ? token.SymbolName : reference.Tooltip,
+                    DocumentOffset = reference?.DocumentOffset,
+                    Tooltip = reference?.Tooltip
+                });
+            }
+        }
+        return result;
     }
 
     private static void IndexLine(

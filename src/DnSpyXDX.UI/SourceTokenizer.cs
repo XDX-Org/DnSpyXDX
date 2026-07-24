@@ -36,7 +36,9 @@ public readonly record struct SourceToken(
     SymbolId? Target = null,
     string? SymbolName = null,
     int? BraceDepth = null,
-    int? BracePair = null);
+    int? BracePair = null,
+    int? DocumentOffset = null,
+    string? Tooltip = null);
 
 public readonly record struct SourceBrace(int Pair, int Depth, int Column);
 

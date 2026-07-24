@@ -7,6 +7,24 @@ namespace DnSpyXDX.Tests;
 public sealed class SourceTokenizerTests
 {
     [Fact]
+    public async Task Applies_exact_symbol_and_document_links_to_il_tokens()
+    {
+        const string source = "br.s IL_0004\nIL_0004: call void C::M()";
+        var symbol = new SymbolId(Guid.NewGuid(), 0x06000001);
+        var references = new ReferenceSpan[]
+        {
+            new(source.IndexOf("IL_0004", StringComparison.Ordinal), 7, null, null, "Go to IL_0004", source.LastIndexOf("IL_0004", StringComparison.Ordinal)),
+            new(source.IndexOf("M()", StringComparison.Ordinal), 1, symbol, null, "Go to M")
+        };
+        var model = SourceDocumentModel.Create(Key with { Language = "il" }, source);
+
+        var lines = await model.TokenizeLinesAsync(0, 2, references: references);
+
+        Assert.Equal(references[0].DocumentOffset, lines[0].Tokens.Single(token => token.DocumentOffset is not null).DocumentOffset);
+        Assert.Equal(symbol, lines[1].Tokens.Single(token => token.Target is not null).Target);
+    }
+
+    [Fact]
     public void Highlights_il_directives_and_opcodes()
     {
         var (tokens, _) = SourceTokenizer.Tokenize(".method public hidebysig instance void M() cil managed", SourceTokenizerState.Initial, language: "il");
