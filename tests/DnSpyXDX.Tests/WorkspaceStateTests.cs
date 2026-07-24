@@ -11,6 +11,23 @@ public sealed class WorkspaceStateTests
         new(new SymbolId(moduleMvid, token), $"Type{token}", "csharp", "// body", [], []);
 
     [Fact]
+    public void Refreshing_language_keeps_tab_and_history_in_place()
+    {
+        var workspace = new WorkspaceState();
+        workspace.Open(Document(1), "Sample");
+        workspace.Open(Document(2), "Sample");
+        var tab = workspace.ActiveTab!;
+
+        Assert.True(workspace.RefreshLoading(tab.Id, DecompilerLanguage.IL));
+
+        Assert.Equal(tab.Id, workspace.ActiveTabId);
+        Assert.Equal("il", tab.Document.Language);
+        Assert.True(tab.IsLoading);
+        Assert.True(tab.CanGoBack);
+        Assert.False(tab.CanGoForward);
+    }
+
+    [Fact]
     public void Plain_navigation_reuses_the_active_tab()
     {
         var workspace = new WorkspaceState();
@@ -132,14 +149,14 @@ public sealed class WorkspaceStateTests
         workspace.Open(Document(1), "Sample");
         var originalTab = workspace.ActiveTabId;
 
-        var reusedTab = workspace.OpenLoading(Document(2).Symbol, "Type2", "Sample");
+        var reusedTab = workspace.OpenLoading(Document(2).Symbol, "Type2", "Sample", DecompilerLanguage.CSharp);
 
         Assert.Equal(originalTab, reusedTab);
         Assert.Single(workspace.Tabs);
         Assert.True(workspace.ActiveTab!.IsLoading);
         Assert.True(workspace.ActiveTab.CanGoBack);
 
-        var newTab = workspace.OpenLoading(Document(3).Symbol, "Type3", "Sample", newTab: true);
+        var newTab = workspace.OpenLoading(Document(3).Symbol, "Type3", "Sample", DecompilerLanguage.CSharp, newTab: true);
 
         Assert.NotEqual(reusedTab, newTab);
         Assert.Equal(2, workspace.Tabs.Count);

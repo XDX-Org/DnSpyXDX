@@ -6,6 +6,17 @@ namespace DnSpyXDX.Tests;
 
 public sealed class SourceTokenizerTests
 {
+    [Fact]
+    public void Highlights_il_directives_and_opcodes()
+    {
+        var (tokens, _) = SourceTokenizer.Tokenize(".method public hidebysig instance void M() cil managed", SourceTokenizerState.Initial, language: "il");
+        var line = ".method public hidebysig instance void M() cil managed";
+
+        Assert.Equal(SourceTokenKind.Keyword, tokens.Single(token => line.Substring(token.Start, token.Length) == "method").Kind);
+        Assert.Equal(SourceTokenKind.Keyword, tokens.Single(token => line.Substring(token.Start, token.Length) == "cil").Kind);
+        Assert.Equal(SourceTokenKind.Keyword, tokens.Single(token => line.Substring(token.Start, token.Length) == "managed").Kind);
+    }
+
     private static readonly SourceDocumentKey Key = new(Guid.Empty, 0x02000001, "csharp", "default");
     private static readonly Dictionary<string, SymbolId?> Links = new(StringComparer.Ordinal)
     {

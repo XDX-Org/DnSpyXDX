@@ -7,6 +7,16 @@ namespace DnSpyXDX.Tests;
 public sealed class DecompilerBackendTests
 {
     [Fact]
+    public async Task Rejects_unsupported_language_values()
+    {
+        await using var backend = new DecompilerBackend();
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            backend.DecompileAsync(new SymbolId(Guid.Empty, 0x02000001), (DecompilerLanguage)99));
+        Assert.Equal(DecompilerLanguage.CSharp, ((DecompilerLanguage)99).ValidOrDefault());
+    }
+
+    [Fact]
     public async Task Opens_browses_and_decompiles_a_managed_assembly()
     {
         await using var backend = new DecompilerBackend();
@@ -40,7 +50,7 @@ public sealed class DecompilerBackendTests
         var sampleDelegate = Assert.Single(topLevel, n => n.Name == nameof(SampleDelegate));
         Assert.Equal("delegate", sampleDelegate.NameClassification);
         Assert.Equal("delegate", sampleDelegate.TypeDisplay);
-        var document = await backend.DecompileAsync(testType.Symbol!.Value);
+        var document = await backend.DecompileAsync(testType.Symbol!.Value, DecompilerLanguage.CSharp);
 
         Assert.Contains("class DecompilerBackendTests", document.Text, StringComparison.Ordinal);
         Assert.Contains("namespace DnSpyXDX.Tests;", document.Text, StringComparison.Ordinal);
@@ -57,13 +67,39 @@ public sealed class DecompilerBackendTests
         var types = await backend.GetChildrenAsync(namespaces.Single(n => n.Name == "DnSpyXDX.Tests").Id);
         var testType = types.Single(n => n.Name == nameof(DecompilerBackendTests));
 
-        var document = await backend.DecompileAsync(testType.Symbol!.Value);
+        var document = await backend.DecompileAsync(testType.Symbol!.Value, DecompilerLanguage.CSharp);
 
         Assert.NotNull(document.SymbolLinks);
         Assert.Equal(testType.Symbol!.Value, document.SymbolLinks![nameof(DecompilerBackendTests)]);
         Assert.True(document.SymbolLinks.ContainsKey(nameof(SourceTokenizerTests)));
         // Members of the type on screen are linkable too, scoped to that type.
         Assert.True(document.SymbolLinks.ContainsKey(nameof(Opens_browses_and_decompiles_a_managed_assembly)));
+    }
+
+    [Fact]
+    public async Task Decompiles_csharp_il_and_sequence_point_annotated_il_independently()
+    {
+        await using var backend = new DecompilerBackend();
+        await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
+        var type = (await backend.SearchAsync(nameof(SampleMembers))).First(result =>
+            result.Kind == "Type" && result.QualifiedName == "DnSpyXDX.Tests.SampleMembers");
+
+        var csharp = await backend.DecompileAsync(type.Symbol, DecompilerLanguage.CSharp);
+        var il = await backend.DecompileAsync(type.Symbol, DecompilerLanguage.IL);
+        var combined = await backend.DecompileAsync(type.Symbol, DecompilerLanguage.ILWithCSharp);
+
+        Assert.Equal("csharp", csharp.Language);
+        Assert.Equal("il", il.Language);
+        Assert.Equal("il-csharp", combined.Language);
+        Assert.Contains("class SampleMembers", csharp.Text, StringComparison.Ordinal);
+        Assert.Contains(".class", il.Text, StringComparison.Ordinal);
+        Assert.Contains("IL_0000:", il.Text, StringComparison.Ordinal);
+        Assert.Matches(@"// Token: 0x040[0-9A-F]{5} RID: \d+\n\s*\.field public", il.Text);
+        Assert.DoesNotMatch(@"\.field\s+/\*\s*040[0-9A-F]{5}", il.Text);
+        Assert.DoesNotMatch(@"/\*\s*[0-9A-F]{8}\s*\*/", il.Text);
+        Assert.Contains("// C#:", combined.Text, StringComparison.Ordinal);
+        Assert.Contains("IL_0000:", combined.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("// Decompiled C# reference", combined.Text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -125,7 +161,7 @@ public sealed class DecompilerBackendTests
         var constructor = members.Single(n => n.Kind == TreeNodeKind.Constructor);
         var searchResult = Assert.Single(await backend.SearchAsync("GenericSample"), result => result.Kind == "Type");
         var fieldSearchResult = Assert.Single(await backend.SearchAsync(nameof(GenericSample<object>.Field)), result => result.Kind == "Field" && result.Name == nameof(GenericSample<object>.Field));
-        var document = await backend.DecompileAsync(genericType.Symbol!.Value);
+        var document = await backend.DecompileAsync(genericType.Symbol!.Value, DecompilerLanguage.CSharp);
 
         Assert.Equal("GenericSample<TItem>", constructor.Name);
         Assert.Equal("TItem", members.Single(n => n.Name == nameof(GenericSample<object>.Item)).TypeDisplay);
@@ -180,7 +216,7 @@ public sealed class DecompilerBackendTests
         var ownNamespace = (await backend.GetChildrenAsync(namespaces.Id)).Single(n => n.Name == "DnSpyXDX.Tests");
         var sampleType = (await backend.GetChildrenAsync(ownNamespace.Id)).Single(n => n.Name == nameof(SampleMembers));
         var members = await backend.GetChildrenAsync(sampleType.Id);
-        var document = await backend.DecompileAsync(sampleType.Symbol!.Value);
+        var document = await backend.DecompileAsync(sampleType.Symbol!.Value, DecompilerLanguage.CSharp);
         var lines = document.Text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
 
         foreach (var name in new[] { nameof(SampleMembers.CallsLater), nameof(SampleMembers.Later) })
@@ -203,7 +239,7 @@ public sealed class DecompilerBackendTests
         var ownNamespace = (await backend.GetChildrenAsync(namespaces.Id)).Single(n => n.Name == "DnSpyXDX.Tests");
         var sampleType = (await backend.GetChildrenAsync(ownNamespace.Id)).Single(n => n.Name == nameof(SwitchFormattingSample));
 
-        var document = await backend.DecompileAsync(sampleType.Symbol!.Value);
+        var document = await backend.DecompileAsync(sampleType.Symbol!.Value, DecompilerLanguage.CSharp);
 
         Assert.Contains("\n\t\t\tcase 1:\n", document.Text, StringComparison.Ordinal);
         Assert.Contains("\n\t\t\t\tValue = 10;\n", document.Text, StringComparison.Ordinal);

@@ -72,12 +72,14 @@ public static class SourceTokenizer
     // keyword.control from the rest. dnSpy uses one keyword color, so both map to it there.
     private static readonly HashSet<string> ControlKeywords = ["break", "case", "catch", "continue", "do", "else", "finally", "for", "foreach", "goto", "if", "in", "lock", "return", "switch", "throw", "try", "when", "while", "yield"];
     private static readonly HashSet<string> Keywords = ["abstract", "as", "async", "await", "base", "break", "case", "catch", "checked", "class", "const", "continue", "default", "delegate", "do", "else", "enum", "event", "explicit", "extern", "finally", "fixed", "for", "foreach", "get", "if", "implicit", "in", "interface", "is", "lock", "namespace", "new", "operator", "out", "override", "params", "readonly", "record", "ref", "required", "return", "sealed", "set", "sizeof", "stackalloc", "static", "struct", "switch", "this", "throw", "true", "try", "typeof", "unchecked", "unsafe", "using", "virtual", "volatile", "while", "yield"];
+    private static readonly HashSet<string> ILKeywords = ["add", "and", "beq", "bge", "bgt", "ble", "blt", "bne", "box", "br", "break", "call", "calli", "callvirt", "castclass", "catch", "cil", "class", "constrained", "conv", "cpblk", "cpobj", "div", "dup", "endfilter", "endfinally", "event", "extends", "fault", "field", "filter", "finally", "hidebysig", "implements", "initblk", "initobj", "instance", "interface", "isinst", "jmp", "ldarg", "ldarga", "ldc", "ldelem", "ldelema", "ldfld", "ldflda", "ldftn", "ldind", "ldlen", "ldloc", "ldloca", "ldnull", "ldobj", "ldsfld", "ldsflda", "ldstr", "ldtoken", "ldvirtftn", "leave", "localloc", "managed", "maxstack", "method", "mul", "neg", "newarr", "newobj", "nop", "not", "or", "pop", "property", "readonly", "rem", "ret", "rethrow", "rtspecialname", "sealed", "shl", "shr", "sizeof", "specialname", "starg", "stelem", "stfld", "stind", "stloc", "stobj", "stsfld", "sub", "switch", "tail", "throw", "try", "unbox", "unaligned", "volatile", "xor"];
 
     public static (IReadOnlyList<SourceToken> Tokens, SourceTokenizerState EndState) Tokenize(
         string line,
         SourceTokenizerState state,
         IReadOnlyDictionary<string, SymbolId?>? symbolLinks = null,
-        IReadOnlyDictionary<string, string>? typeKinds = null)
+        IReadOnlyDictionary<string, string>? typeKinds = null,
+        string language = "csharp")
     {
         ArgumentNullException.ThrowIfNull(line);
         ArgumentNullException.ThrowIfNull(state);
@@ -175,7 +177,7 @@ public static class SourceTokenizer
                 var end = index + (character == '@' ? 1 : 0) + 1;
                 while (end < line.Length && (char.IsLetterOrDigit(line[end]) || line[end] == '_')) end++;
                 var word = line[index..end];
-                var kind = ClassifyWord(line, word, end, typeKinds, namespaceLine);
+                var kind = ClassifyWord(line, word, end, typeKinds, namespaceLine, language);
                 var isLinkable = kind is SourceTokenKind.Type or SourceTokenKind.StaticType or SourceTokenKind.Interface or SourceTokenKind.Enum or SourceTokenKind.Struct or SourceTokenKind.Delegate or SourceTokenKind.Method or SourceTokenKind.Field or SourceTokenKind.Property or SourceTokenKind.Event or SourceTokenKind.Identifier;
                 SymbolId? target = null;
                 string? symbolName = null;
@@ -227,12 +229,13 @@ public static class SourceTokenizer
     private static bool IsIdentifierStart(string line, int index) =>
         char.IsLetter(line[index]) || line[index] == '_' || line[index] == '@' && index + 1 < line.Length && (char.IsLetter(line[index + 1]) || line[index + 1] == '_');
 
-    private static SourceTokenKind ClassifyWord(string line, string word, int end, IReadOnlyDictionary<string, string>? typeKinds, bool namespaceLine)
+    private static SourceTokenKind ClassifyWord(string line, string word, int end, IReadOnlyDictionary<string, string>? typeKinds, bool namespaceLine, string language)
     {
         if (Visibility.Contains(word)) return SourceTokenKind.Visibility;
         if (Constants.Contains(word)) return SourceTokenKind.Constant;
         if (ControlKeywords.Contains(word)) return SourceTokenKind.ControlKeyword;
         if (Keywords.Contains(word)) return SourceTokenKind.Keyword;
+        if (language.StartsWith("il", StringComparison.Ordinal) && ILKeywords.Contains(word.Split('.')[0])) return SourceTokenKind.Keyword;
         if (namespaceLine) return SourceTokenKind.Namespace;
         var next = end;
         while (next < line.Length && char.IsWhiteSpace(line[next])) next++;

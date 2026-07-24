@@ -49,7 +49,8 @@ public sealed class WorkspaceSessionService(IDecompilerBackend backend, Workspac
             var assembly = backend.Assemblies.FirstOrDefault(a => a.ModuleMvid == saved.Symbol.ModuleMvid);
             if (assembly is null) continue;
             var title = string.IsNullOrWhiteSpace(saved.Title) ? $"0x{saved.Symbol.MetadataToken:X8}" : saved.Title;
-            var tabId = workspace.OpenLoading(saved.Symbol, title, saved.AssemblyName ?? assembly.Name, newTab: true);
+            var language = saved.Language.ValidOrDefault();
+            var tabId = workspace.OpenLoading(saved.Symbol, title, saved.AssemblyName ?? assembly.Name, language, newTab: true);
             documents.Add((saved, tabId));
             lock (restoreGate) pendingDocumentTabs.Add(tabId);
         }
@@ -71,7 +72,7 @@ public sealed class WorkspaceSessionService(IDecompilerBackend backend, Workspac
             }
             try
             {
-                var document = await backend.DecompileAsync(saved.Symbol, restore.Token);
+                var document = await backend.DecompileAsync(saved.Symbol, saved.Language.ValidOrDefault(), restore.Token);
                 workspace.CompleteLoading(tabId, document);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { }
@@ -105,7 +106,7 @@ public sealed class WorkspaceSessionService(IDecompilerBackend backend, Workspac
         {
             var snapshot = new SessionSnapshot(
                 backend.Assemblies.Select(a => a.Path).ToArray(),
-                workspace.Tabs.Where(t => !t.IsLoading && t.Error is null).Select(t => new SavedDocument(t.Document.Symbol, t.Title, t.AssemblyName)).ToArray(),
+                workspace.Tabs.Where(t => !t.IsLoading && t.Error is null).Select(t => new SavedDocument(t.Document.Symbol, t.Title, t.AssemblyName, ParseLanguage(t.Document.Language))).ToArray(),
                 workspace.Tabs.ToList().FindIndex(t => t.Id == workspace.ActiveTabId),
                 UiState);
             var directory = Path.GetDirectoryName(SessionPath)!;
@@ -118,6 +119,12 @@ public sealed class WorkspaceSessionService(IDecompilerBackend backend, Workspac
     }
 
     private static StringComparer PathComparer() => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+    private static DecompilerLanguage ParseLanguage(string value) => value switch
+    {
+        "il" => DecompilerLanguage.IL,
+        "il-csharp" => DecompilerLanguage.ILWithCSharp,
+        _ => DecompilerLanguage.CSharp
+    };
     private sealed record SessionSnapshot(string[] AssemblyPaths, SavedDocument[] Documents, int ActiveIndex, UiSessionState? UiState = null);
-    private sealed record SavedDocument(SymbolId Symbol, string? Title = null, string? AssemblyName = null);
+    private sealed record SavedDocument(SymbolId Symbol, string? Title = null, string? AssemblyName = null, DecompilerLanguage Language = DecompilerLanguage.CSharp);
 }

@@ -9,6 +9,16 @@ public sealed class SourceDocumentModelTests
     private static readonly SourceDocumentKey Key = new(Guid.Parse("fd4da291-c9d7-4db5-8d0c-12fa28425ac8"), 0x02000001, "csharp", "default");
 
     [Fact]
+    public void Indexes_il_declaration_tokens_without_using_operand_tokens()
+    {
+        const string source = "// Token: 0x0600002A RID: 42\nIL_0001: call void C::M()\n// Token: 0x0600002A RID: 42\n.method public void M() cil managed";
+        var model = SourceDocumentModel.Create(Key with { Language = "il" }, source);
+
+        Assert.True(model.TryGetTokenLocation(0x0600002A, out var position));
+        Assert.Equal(2, position.Line);
+    }
+
+    [Fact]
     public void Indexes_lf_crlf_empty_and_final_lines_without_normalizing_text()
     {
         const string source = "first\r\n\nthird\n";

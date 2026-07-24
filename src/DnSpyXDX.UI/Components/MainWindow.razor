@@ -35,6 +35,7 @@
     <button class="toolbar-icon search-toolbar-button @(searchOpen ? "active" : null)" title="@(searchOpen ? "Close search" : "Open search")" aria-label="@(searchOpen ? "Close search" : "Open search")" aria-pressed="@searchOpen" disabled="@(Backend.Assemblies.Count == 0)" @onclick="ToggleSearchPanel">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m15.5 15.5 5 5"></path></svg>
     </button>
+    <label class="language-selector"><span>Language</span><select value="@language" disabled="@(Workspace.ActiveTab is null)" @onchange="LanguageChangedAsync"><option value="@DecompilerLanguage.CSharp">C#</option><option value="@DecompilerLanguage.IL">IL</option><option value="@DecompilerLanguage.ILWithCSharp">IL with C#</option></select></label>
   </header>
   <main>
     <div class="explorer-pane" @ref="explorer" style="width:@($"{explorerWidth}px")">
@@ -53,7 +54,7 @@
     </div>
     <section class="document-area">
       <nav class="tabs">
-        @foreach (var tab in Workspace.Tabs) { <button class="tab @(Workspace.ActiveTabId == tab.Id ? "active" : null)" @onclick="() => Workspace.Activate(tab.Id)" @onmouseup="e => TabMouseUp(e, tab.Id)" @onmousedown:preventDefault="true"><span>@tab.Title</span><small>@(tab.IsLoading ? "Decompiling…" : tab.AssemblyName)</small><i @onclick:stopPropagation @onclick="() => CloseTab(tab.Id)">×</i></button> }
+        @foreach (var tab in Workspace.Tabs) { <button class="tab @(Workspace.ActiveTabId == tab.Id ? "active" : null)" @onclick="() => ActivateTabAsync(tab.Id)" @onmouseup="e => TabMouseUp(e, tab.Id)" @onmousedown:preventDefault="true"><span>@tab.Title</span><small>@(tab.IsLoading ? "Decompiling…" : tab.AssemblyName)</small><i @onclick:stopPropagation @onclick="() => CloseTab(tab.Id)">×</i></button> }
       </nav>
       <div class="document-content">
         @if (restoring && Workspace.ActiveTab is null) { <div class="decompiling-panel"><span class="decompiling-spinner"></span><strong>Restoring session…</strong><small>Loading assemblies and rebuilding the assembly tree.</small></div> }
@@ -133,6 +134,7 @@
   private int zoomPercent = 100;
   private string themeId = Themes.DefaultId;
   private bool debugLogging;
+  private DecompilerLanguage language = DecompilerLanguage.CSharp;
   private AssemblyDescriptor? contextAssembly;
   private int contextMenuX;
   private int contextMenuY;
@@ -155,6 +157,7 @@
       zoomPercent = ui.ZoomPercent <= 0 ? 100 : Math.Clamp(ui.ZoomPercent, MinimumZoom, MaximumZoom);
       themeId = Themes.Normalize(ui.ThemeId);
       debugLogging = ui.DebugLogging;
+      language = ui.Language.ValidOrDefault();
       LoggingSettings.DebugEnabled = debugLogging;
       Zoom.SetZoom(zoomPercent);
     }
@@ -209,7 +212,7 @@
     }
   }
   private void ScheduleSave() { saveDelay?.Cancel(); saveDelay?.Dispose(); saveDelay = new CancellationTokenSource(); var token = saveDelay.Token; _ = SaveAfterDelayAsync(token); }
-  private UiSessionState CaptureUiState() => new(explorerWidth, searchPanelHeight, searchOpen, searchKind, searchScope, zoomPercent, themeId, debugLogging);
+  private UiSessionState CaptureUiState() => new(explorerWidth, searchPanelHeight, searchOpen, searchKind, searchScope, zoomPercent, themeId, debugLogging, language);
   private async Task SaveAfterDelayAsync(CancellationToken token) { try { await Task.Delay(350, token); Session.UiState = CaptureUiState(); await Session.SaveAsync(token); } catch (OperationCanceledException) { } }
   private async Task OpenAsync() { var path = await Dialogs.OpenAssemblyAsync(); if (path is null) return; Workspace.SetBusy(true, "Opening assembly…"); try { await Backend.OpenAsync(path); Workspace.SetBusy(false, $"Opened {Path.GetFileName(path)}"); } catch (Exception ex) { Workspace.SetBusy(false, ex.Message); } }
   private void ToggleMenu() => menuOpen = !menuOpen;
@@ -272,14 +275,14 @@
     if (!newTab && Workspace.ActiveTab is { IsLoading: true } loadingTab) CancelDecompilation(loadingTab.Id);
     if (isType || IsTypeSymbol(symbol))
     {
-      var tabId = Workspace.OpenLoading(symbol, displayName ?? "Type", assemblyName, newTab);
+      var tabId = Workspace.OpenLoading(symbol, displayName ?? "Type", assemblyName, language, newTab);
       var cancellation = new CancellationTokenSource();
       decompilations[tabId] = cancellation;
       _ = DecompileTypeIntoTabAsync(tabId, symbol, focusSymbol, cancellation);
       return;
     }
     Workspace.SetBusy(true, "Decompiling…");
-    try { var doc = await Backend.DecompileAsync(symbol); Workspace.Open(doc, assemblyName, newTab); Workspace.SetBusy(false, $"Decompiled {doc.Title}"); }
+    try { var doc = await Backend.DecompileAsync(symbol, language); Workspace.Open(doc, assemblyName, newTab); Workspace.SetBusy(false, $"Decompiled {doc.Title}"); }
     catch (Exception ex) { Workspace.SetBusy(false, ex.Message); }
   }
   private Task OpenTreeSymbolAsync(NavigationRequest request) => OpenSymbolAsync(request.Symbol, request.NewTab || Workspace.Tabs.Count == 0, request.DisplayName, request.Kind == TreeNodeKind.Type);
@@ -310,12 +313,13 @@
     var token = cancellation.Token;
     try
     {
-      var document = await Backend.DecompileAsync(symbol, token);
+      var requestedLanguage = language;
+      var document = await Backend.DecompileAsync(symbol, requestedLanguage, token);
       if (focusSymbol is not null) document = document with { FocusSymbol = focusSymbol };
       token.ThrowIfCancellationRequested();
       await InvokeAsync(() =>
       {
-        if (!IsCurrentDecompilation(tabId, cancellation)) return;
+        if (!IsCurrentDecompilation(tabId, cancellation) || requestedLanguage != language) return;
         Workspace.CompleteLoading(tabId, document);
         Workspace.SetBusy(false, $"Decompiled {document.Title}");
       });
@@ -327,6 +331,32 @@
       if (IsCurrentDecompilation(tabId, cancellation)) decompilations.Remove(tabId);
       cancellation.Dispose();
     }
+  }
+  private async Task LanguageChangedAsync(ChangeEventArgs e)
+  {
+    if (!Enum.TryParse<DecompilerLanguage>(e.Value?.ToString(), out var selected)) selected = DecompilerLanguage.CSharp;
+    selected = selected.ValidOrDefault();
+    if (selected == language) return;
+    language = selected;
+    Session.UiState = CaptureUiState();
+    ScheduleSave();
+    if (Workspace.ActiveTab is not { } tab) return;
+    await RefreshTabLanguageAsync(tab);
+  }
+  private async Task ActivateTabAsync(string id)
+  {
+    Workspace.Activate(id);
+    if (Workspace.ActiveTab is { } tab && tab.Document.Language != language.Key()) await RefreshTabLanguageAsync(tab);
+  }
+  private Task RefreshTabLanguageAsync(DocumentTab tab)
+  {
+    CancelDecompilation(tab.Id);
+    Session.CancelDocumentRestore(tab.Id);
+    Workspace.RefreshLoading(tab.Id, language);
+    var cancellation = new CancellationTokenSource();
+    decompilations[tab.Id] = cancellation;
+    _ = DecompileTypeIntoTabAsync(tab.Id, tab.Document.Symbol, tab.Document.FocusSymbol, cancellation);
+    return Task.CompletedTask;
   }
   private bool IsCurrentDecompilation(string tabId, CancellationTokenSource cancellation) => decompilations.TryGetValue(tabId, out var current) && ReferenceEquals(current, cancellation);
   private void CancelDecompilation(string tabId)
@@ -350,6 +380,7 @@
     if (Workspace.ActiveTab is not { } tab) return;
     selectedSymbol = tab.Document.Symbol;
     revealedPath = (await Backend.GetPathAsync(tab.Document.Symbol)).ToHashSet();
+    if (tab.Document.Language != language.Key()) await RefreshTabLanguageAsync(tab);
     StateHasChanged();
   }
   private void QueueSearch() { searchDelay?.Cancel(); searchDelay?.Dispose(); searchDelay = new CancellationTokenSource(); _ = SearchAfterDelayAsync(searchDelay.Token); }

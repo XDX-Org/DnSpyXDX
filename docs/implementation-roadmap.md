@@ -38,7 +38,7 @@ Build these tickets in order. Checked items are supported by concrete production
 4. [x] Implement `AssemblySession` with `PEFile` and `UniversalAssemblyResolver`.
 5. [x] Show assembly details, references, resources, namespaces, and types lazily.
 6. [x] Decompile a selected type into a plain read-only source view.
-7. [ ] Add a dnSpy-style main-panel language selector with **C#**, **IL**, and **IL with C#** modes. C# remains the default; IL uses the metadata disassembler; IL with C# annotates IL ranges with the higher-level C# statements that produced them instead of merely concatenating two documents. Changing mode must refresh the active document in place, preserve navigation and selection, persist across sessions, support cancellation, and key the document cache by both symbol and language.
+7. [x] Add a dnSpy-style main-panel language selector with **C#**, **IL**, and **IL with C#** modes. C# remains the default; IL uses the metadata disassembler; IL with C# annotates IL ranges with sequence-point-mapped C# statements. Mode changes refresh the active document in place, preserve navigation and per-language view state, persist across sessions, support cancellation, and key caches by symbol and language.
 8. [x] Add a large-document source pipeline: cache presentation output, tokenize incrementally off the UI thread, render only visible lines, load nearby line ranges on scroll, and cancel pending presentation work when its tab closes.
 9. [x] Use the pure-Blazor virtualized viewer and preserve scroll state per tab; Monaco is intentionally not required.
 10. [x] Stop interactive tree expansion at types; retain backend member discovery and open members through search and source navigation in their declaring type.

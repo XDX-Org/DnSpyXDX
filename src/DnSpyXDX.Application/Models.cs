@@ -1,5 +1,26 @@
 namespace DnSpyXDX.Application;
 
+public enum DecompilerLanguage
+{
+    CSharp = 0,
+    IL = 1,
+    ILWithCSharp = 2
+}
+
+public static class DecompilerLanguages
+{
+    public static string Key(this DecompilerLanguage language) => language switch
+    {
+        DecompilerLanguage.CSharp => "csharp",
+        DecompilerLanguage.IL => "il",
+        DecompilerLanguage.ILWithCSharp => "il-csharp",
+        _ => throw new ArgumentOutOfRangeException(nameof(language))
+    };
+
+    public static DecompilerLanguage ValidOrDefault(this DecompilerLanguage language) =>
+        Enum.IsDefined(language) ? language : DecompilerLanguage.CSharp;
+}
+
 public readonly record struct SymbolId(Guid ModuleMvid, int MetadataToken);
 public readonly record struct NodeId(Guid SessionId, string Value);
 
@@ -66,4 +87,5 @@ public sealed record UiSessionState(
     string SearchScope = "All",
     int ZoomPercent = 100,
     string ThemeId = "default",
-    bool DebugLogging = false);
+    bool DebugLogging = false,
+    DecompilerLanguage Language = DecompilerLanguage.CSharp);
