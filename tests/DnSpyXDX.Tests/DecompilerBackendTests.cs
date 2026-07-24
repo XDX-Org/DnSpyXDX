@@ -98,6 +98,12 @@ public sealed class DecompilerBackendTests
         Assert.DoesNotMatch(@"\.field\s+/\*\s*040[0-9A-F]{5}", il.Text);
         Assert.DoesNotMatch(@"/\*\s*[0-9A-F]{8}\s*\*/", il.Text);
         Assert.Contains("// C#:", combined.Text, StringComparison.Ordinal);
+        Assert.Contains("Later();", combined.Text, StringComparison.Ordinal);
+        Assert.Contains("// C#: if (update)", combined.Text, StringComparison.Ordinal);
+        Assert.Contains("// C#: SampleField++;", combined.Text, StringComparison.Ordinal);
+        Assert.Contains("// C#: return SampleField;", combined.Text, StringComparison.Ordinal);
+        Assert.Single(combined.Text.Split('\n'), line => line.Contains("Later();", StringComparison.Ordinal));
+        Assert.DoesNotContain("// C#: using ", combined.Text, StringComparison.Ordinal);
         Assert.Contains("IL_0000:", combined.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("// Decompiled C# reference", combined.Text, StringComparison.Ordinal);
 
@@ -280,6 +286,11 @@ public sealed class SampleMembers
     public void SampleMethod() { }
     public void CallsLater() => Later();
     public void Later() { }
+    public int Combined(bool update)
+    {
+        if (update) SampleField++;
+        return SampleField;
+    }
     public sealed class SampleNested { }
 }
 

@@ -8,6 +8,7 @@ using System.Text.RegularExpressions;
 using System.Collections.Immutable;
 using ICSharpCode.Decompiler;
 using ICSharpCode.Decompiler.CSharp;
+using ICSharpCode.Decompiler.CSharp.OutputVisitor;
 using ICSharpCode.Decompiler.Disassembler;
 using ICSharpCode.Decompiler.Metadata;
 using DnSpyXDX.Application;
@@ -109,6 +110,7 @@ internal sealed class AssemblySession : IDisposable
     private readonly PEFile module;
     private readonly MetadataReader metadata;
     private readonly CSharpDecompiler decompiler;
+    private readonly DecompilerSettings settings;
     private readonly MetadataTypeNameProvider typeNames;
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly Dictionary<(int Token, DecompilerLanguage Language), DecompilerDocument> cache = [];
@@ -116,11 +118,12 @@ internal sealed class AssemblySession : IDisposable
     private IReadOnlyDictionary<string, string>? typeClassifications;
     public AssemblyDescriptor Descriptor { get; }
 
-    private AssemblySession(PEFile module, CSharpDecompiler decompiler, AssemblyDescriptor descriptor)
+    private AssemblySession(PEFile module, CSharpDecompiler decompiler, DecompilerSettings settings, AssemblyDescriptor descriptor)
     {
         this.module = module;
         metadata = module.Metadata;
         this.decompiler = decompiler;
+        this.settings = settings;
         typeNames = new MetadataTypeNameProvider(metadata);
         Descriptor = descriptor;
     }
@@ -142,7 +145,7 @@ internal sealed class AssemblySession : IDisposable
         var decompiler = new CSharpDecompiler(module, resolver, settings);
         var sessionId = Guid.NewGuid();
         var descriptor = new AssemblyDescriptor(sessionId, mvid, name, path, module.DetectTargetFrameworkId() ?? "Unknown", module.Reader.PEHeaders.CoffHeader.Machine.ToString(), new NodeId(sessionId, "root"));
-        return new AssemblySession(module, decompiler, descriptor);
+        return new AssemblySession(module, decompiler, settings, descriptor);
     }
 
     public IReadOnlyList<TreeNodeDescriptor> GetChildren(NodeId parent, CancellationToken ct)
@@ -389,7 +392,10 @@ internal sealed class AssemblySession : IDisposable
     private string DisassembleWithCSharp(EntityHandle handle, CancellationToken ct)
     {
         var syntaxTree = decompiler.Decompile([handle]);
-        var csharp = syntaxTree.ToString();
+        using var writer = new StringWriter();
+        var tokenWriter = TokenWriter.CreateWriterThatSetsLocationsInAST(writer, "");
+        syntaxTree.AcceptVisitor(new CSharpOutputVisitor(tokenWriter, settings.CSharpFormattingOptions));
+        var csharp = writer.ToString();
         var sequencePoints = decompiler.CreateSequencePoints(syntaxTree)
             .Where(pair => pair.Key.Method?.MetadataToken.Kind == HandleKind.MethodDefinition)
             .GroupBy(pair => MetadataTokens.GetToken(pair.Key.Method!.MetadataToken))
@@ -400,7 +406,7 @@ internal sealed class AssemblySession : IDisposable
         var sourceLines = csharp.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
         var output = new StringBuilder(il.Length + csharp.Length / 3);
         IReadOnlyList<ICSharpCode.Decompiler.DebugInfo.SequencePoint> points = [];
-        ICSharpCode.Decompiler.DebugInfo.SequencePoint? previous = null;
+        string? previousAnnotation = null;
         foreach (var line in il.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
         {
             ct.ThrowIfCancellationRequested();
@@ -408,19 +414,21 @@ internal sealed class AssemblySession : IDisposable
             if (method.Success)
             {
                 points = sequencePoints.GetValueOrDefault(Convert.ToInt32(method.Groups[1].Value, 16)) ?? [];
-                previous = null;
+                previousAnnotation = null;
             }
             var instruction = InstructionOffset.Match(line);
             if (instruction.Success && points.Count > 0)
             {
                 var offset = Convert.ToInt32(instruction.Groups[1].Value, 16);
                 var point = points.FirstOrDefault(candidate => candidate.Offset <= offset && offset < candidate.EndOffset);
-                if (point is not null && !ReferenceEquals(point, previous))
+                if (point is not null)
                 {
                     var annotation = SourceText(sourceLines, point);
-                    if (annotation.Length > 0) output.Append(line.AsSpan(0, line.Length - line.TrimStart().Length)).Append("// C#: ").AppendLine(annotation);
-                    previous = point;
+                    if (annotation.Length > 0 && annotation != previousAnnotation)
+                        output.Append(line.AsSpan(0, line.Length - line.TrimStart().Length)).Append("// C#: ").AppendLine(annotation);
+                    previousAnnotation = annotation;
                 }
+                else previousAnnotation = null;
             }
             output.AppendLine(line);
         }
@@ -445,7 +453,15 @@ internal sealed class AssemblySession : IDisposable
     {
         var start = Math.Clamp(point.StartLine - 1, 0, lines.Length - 1);
         var end = Math.Clamp(point.EndLine - 1, start, lines.Length - 1);
-        var text = string.Join(' ', lines[start..(end + 1)].Select(line => line.Trim()).Where(line => line.Length > 0));
+        var parts = new List<string>(end - start + 1);
+        for (var line = start; line <= end; line++)
+        {
+            var from = line == start ? Math.Clamp(point.StartColumn - 1, 0, lines[line].Length) : 0;
+            var to = line == end ? Math.Clamp(point.EndColumn - 1, from, lines[line].Length) : lines[line].Length;
+            var part = lines[line][from..to].Trim();
+            if (part.Length > 0) parts.Add(part);
+        }
+        var text = string.Join(' ', parts);
         return Regex.Replace(text, "\\s+", " ");
     }
 
