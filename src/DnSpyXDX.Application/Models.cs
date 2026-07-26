@@ -4,7 +4,8 @@ public enum DecompilerLanguage
 {
     CSharp = 0,
     IL = 1,
-    ILWithCSharp = 2
+    ILWithCSharp = 2,
+    Hex = 3
 }
 
 public static class DecompilerLanguages
@@ -14,6 +15,7 @@ public static class DecompilerLanguages
         DecompilerLanguage.CSharp => "csharp",
         DecompilerLanguage.IL => "il",
         DecompilerLanguage.ILWithCSharp => "il-csharp",
+        DecompilerLanguage.Hex => "hex",
         _ => throw new ArgumentOutOfRangeException(nameof(language))
     };
 
@@ -59,6 +61,7 @@ public sealed record ReferenceSpan(
     int? DocumentOffset = null);
 
 public sealed record DiagnosticMessage(string Severity, string Message);
+public sealed record BinaryRegion(int Offset, int Length, string Tooltip, bool IsEntity = false);
 
 public sealed record DecompilerDocument(
     SymbolId Symbol,
@@ -69,7 +72,11 @@ public sealed record DecompilerDocument(
     IReadOnlyList<DiagnosticMessage> Diagnostics,
     IReadOnlyDictionary<string, SymbolId?>? SymbolLinks = null,
     SymbolId? FocusSymbol = null,
-    IReadOnlyDictionary<string, string>? TypeClassifications = null);
+    IReadOnlyDictionary<string, string>? TypeClassifications = null,
+    byte[]? Binary = null,
+    int? BinarySelectionOffset = null,
+    int BinarySelectionLength = 0,
+    IReadOnlyList<BinaryRegion>? BinaryRegions = null);
 
 public sealed record SearchResult(SymbolId Symbol, string Name, string Kind, string AssemblyName, string Namespace, SymbolId DeclaringType, string? QualifiedName = null);
 

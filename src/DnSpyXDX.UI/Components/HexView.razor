@@ -1,0 +1,136 @@
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<div class="hex-viewport" @ref="viewport" tabindex="0" role="region" aria-label="Assembly hex data">
+  <div class="hex-scroll-surface" style="height:@($"{ScrollHeight}px")">
+    <div class="hex-window" style="top:@($"{windowTop}px")">
+      @foreach (var row in VisibleRows)
+      {
+        var offset = row * bytesPerRow;
+        <div class="hex-row" style="grid-template-columns:82px @HexColumnWidth auto"><span class="hex-offset">@offset.ToString("X8")</span><code>@for (var index = 0; index < bytesPerRow; index++) { var byteOffset = offset + index; var region = RegionAt(byteOffset); <span class="hex-byte @(((index + 1) % 8 == 0 && index + 1 < bytesPerRow) ? "hex-byte-group" : null) @(IsSelected(byteOffset) ? "selected" : null) @(region == hoveredRegion ? "region-hover" : null)" title="@region?.Tooltip" @onmouseenter="() => hoveredRegion = region" @onmouseleave="() => hoveredRegion = null">@(byteOffset < Data.Length ? Data[byteOffset].ToString("X2") : "  ")</span> }</code><span class="hex-ascii">@Ascii(offset)</span></div>
+      }
+    </div>
+  </div>
+</div>
+
+@code {
+  private const int RowHeight = 20;
+  private const int Overscan = 8;
+  private const int MaximumScrollHeight = 5_000_000;
+
+  [Parameter, EditorRequired] public byte[] Data { get; set; } = [];
+  [Parameter] public int? SelectionOffset { get; set; }
+  [Parameter] public int SelectionLength { get; set; }
+  [Parameter] public IReadOnlyList<BinaryRegion> Regions { get; set; } = [];
+
+  private ElementReference viewport;
+  private DotNetObjectReference<HexView>? selfReference;
+  private byte[]? currentData;
+  private int? currentSelection;
+  private int firstRow;
+  private int renderedRows = 50;
+  private double windowTop;
+  private bool initialize;
+  private int bytesPerRow = 16;
+  private int logicalTopOffset;
+  private int? pendingScrollOffset;
+  private BinaryRegion? hoveredRegion;
+  private BinaryRegion[] entityRegions = [];
+  private BinaryRegion[] containerRegions = [];
+
+  private int TotalRows => (int)(((long)Data.Length + bytesPerRow - 1) / bytesPerRow);
+  private int ScrollHeight => (int)Math.Min(MaximumScrollHeight, Math.Max((long)RowHeight, (long)TotalRows * RowHeight));
+  private IEnumerable<int> VisibleRows => Enumerable.Range(firstRow, Math.Min(renderedRows, Math.Max(0, TotalRows - firstRow)));
+  private string HexColumnWidth => $"{bytesPerRow * 3 + Math.Max(0, bytesPerRow / 8 - 1)}ch";
+
+  protected override void OnParametersSet()
+  {
+    if (ReferenceEquals(currentData, Data) && currentSelection == SelectionOffset) return;
+    currentData = Data;
+    currentSelection = SelectionOffset;
+    entityRegions = Regions.Where(region => region.IsEntity).OrderBy(region => region.Offset).ToArray();
+    containerRegions = Regions.Where(region => !region.IsEntity).ToArray();
+    firstRow = 0;
+    logicalTopOffset = 0;
+    windowTop = 0;
+    initialize = true;
+  }
+
+  protected override async Task OnAfterRenderAsync(bool firstRender)
+  {
+    if (initialize)
+    {
+      initialize = false;
+      selfReference ??= DotNetObjectReference.Create(this);
+      await JS.InvokeVoidAsync("dnSpyXdx.initHexView", viewport, selfReference);
+      if (SelectionOffset is { } selection)
+        await JS.InvokeVoidAsync("dnSpyXdx.scrollHexToRow", viewport, selection / bytesPerRow, TotalRows, RowHeight);
+    }
+    if (pendingScrollOffset is { } pending)
+    {
+      pendingScrollOffset = null;
+      await JS.InvokeVoidAsync("dnSpyXdx.scrollHexToRow", viewport, pending / bytesPerRow, TotalRows, RowHeight);
+    }
+  }
+
+  [JSInvokable]
+  public void HexScrolled(double scrollTop, double clientHeight, double scrollHeight)
+  {
+    var visible = Math.Max(1, (int)Math.Ceiling(clientHeight / RowHeight));
+    var maximumFirst = Math.Max(0, TotalRows - visible);
+    var ratio = scrollHeight <= clientHeight ? 0 : scrollTop / (scrollHeight - clientHeight);
+    var topRow = Math.Clamp((int)Math.Round(ratio * maximumFirst), 0, maximumFirst);
+    logicalTopOffset = topRow * bytesPerRow;
+    firstRow = Math.Max(0, topRow - Overscan);
+    renderedRows = Math.Min(TotalRows - firstRow, visible + Overscan * 2);
+    windowTop = Math.Max(0, scrollTop - (topRow - firstRow) * RowHeight);
+    StateHasChanged();
+  }
+
+  [JSInvokable]
+  public void HexResized(double width)
+  {
+    var availableColumns = Math.Max(8, (int)Math.Floor((width - 120) / 31));
+    var next = Math.Clamp(availableColumns / 8 * 8, 8, 128);
+    if (next == bytesPerRow) return;
+    pendingScrollOffset = logicalTopOffset == 0 ? SelectionOffset ?? 0 : logicalTopOffset;
+    bytesPerRow = next;
+    firstRow = 0;
+    StateHasChanged();
+  }
+
+  private bool IsSelected(int offset) => SelectionOffset is { } start && offset >= start && offset < start + SelectionLength;
+  private BinaryRegion? RegionAt(int offset)
+  {
+    var low = 0;
+    var high = entityRegions.Length - 1;
+    while (low <= high)
+    {
+      var middle = low + (high - low) / 2;
+      if (entityRegions[middle].Offset <= offset) low = middle + 1;
+      else high = middle - 1;
+    }
+    if (high >= 0 && offset < entityRegions[high].Offset + entityRegions[high].Length) return entityRegions[high];
+    return containerRegions.Where(region => offset >= region.Offset && offset < region.Offset + region.Length).OrderBy(region => region.Length).FirstOrDefault();
+  }
+
+  private string Ascii(int offset)
+  {
+    var count = Math.Min(bytesPerRow, Data.Length - offset);
+    return string.Create(count, (Data, offset), static (output, state) =>
+    {
+      for (var index = 0; index < output.Length; index++)
+      {
+        var value = state.Data[state.offset + index];
+        output[index] = value is >= 0x20 and <= 0x7E ? (char)value : '.';
+      }
+    });
+  }
+
+  public async ValueTask DisposeAsync()
+  {
+    try { await JS.InvokeVoidAsync("dnSpyXdx.disposeHexView", viewport); }
+    catch (JSDisconnectedException) { }
+    selfReference?.Dispose();
+  }
+}

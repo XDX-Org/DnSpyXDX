@@ -36,7 +36,7 @@
     <button class="toolbar-icon search-toolbar-button @(searchOpen ? "active" : null)" title="@(searchOpen ? "Close search" : "Open search")" aria-label="@(searchOpen ? "Close search" : "Open search")" aria-pressed="@searchOpen" disabled="@(Backend.Assemblies.Count == 0)" @onclick="ToggleSearchPanel">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m15.5 15.5 5 5"></path></svg>
     </button>
-    <label class="language-selector"><span>Language</span><select value="@language" @onchange="LanguageChangedAsync"><option value="@DecompilerLanguage.CSharp">C#</option><option value="@DecompilerLanguage.IL">IL</option><option value="@DecompilerLanguage.ILWithCSharp">IL with C#</option></select></label>
+    <label class="language-selector"><span>Language</span><select value="@language" @onchange="LanguageChangedAsync"><option value="@DecompilerLanguage.CSharp">C#</option><option value="@DecompilerLanguage.IL">IL</option><option value="@DecompilerLanguage.ILWithCSharp">IL with C#</option><option value="@DecompilerLanguage.Hex">Hex</option></select></label>
   </header>
   <main>
     <div class="explorer-pane" @ref="explorer" style="width:@($"{explorerWidth}px")">
@@ -61,6 +61,7 @@
         @if (restoring && Workspace.ActiveTab is null) { <div class="decompiling-panel"><span class="decompiling-spinner"></span><strong>Restoring session…</strong><small>Loading assemblies and rebuilding the assembly tree.</small></div> }
         else if (Workspace.ActiveTab is { IsLoading: true } loading) { <div class="decompiling-panel"><span class="decompiling-spinner"></span><strong>Decompiling @loading.Title…</strong><small>Restoring saved source after the assembly tree has loaded.</small></div> }
         else if (Workspace.ActiveTab is { Error: not null } failed) { <div class="decompiling-panel error"><strong>Decompilation failed</strong><small>@failed.Error</small></div> }
+        else if (Workspace.ActiveTab is { Document.Language: "hex", Document.Binary: { } binary } hex) { <HexView Data="binary" SelectionOffset="hex.Document.BinarySelectionOffset" SelectionLength="hex.Document.BinarySelectionLength" Regions="hex.Document.BinaryRegions ?? []" /> }
         else if (Workspace.ActiveTab is { } active) { <SourceView TabId="active.Id" Document="active.Document" OnNavigate="NavigateFromSourceAsync" /> }
       </div>
       @if (searchOpen) {
@@ -320,6 +321,11 @@
     {
       var requestedLanguage = language;
       var document = await Backend.DecompileAsync(symbol, requestedLanguage, token);
+      if (requestedLanguage == DecompilerLanguage.Hex && focusSymbol is { } focusedSymbol)
+      {
+        var focused = await Backend.DecompileAsync(focusedSymbol, requestedLanguage, token);
+        document = document with { BinarySelectionOffset = focused.BinarySelectionOffset, BinarySelectionLength = focused.BinarySelectionLength, BinaryRegions = focused.BinaryRegions };
+      }
       if (focusSymbol is not null) document = document with { FocusSymbol = focusSymbol };
       token.ThrowIfCancellationRequested();
       await InvokeAsync(() =>

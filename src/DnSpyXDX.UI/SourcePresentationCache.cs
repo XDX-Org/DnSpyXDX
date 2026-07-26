@@ -131,13 +131,13 @@ public sealed class SourcePresentationCache(ILogger<SourcePresentationCache> log
     {
         while (models.Count > MaximumModels || EstimatedBytesLocked() > MaximumBytes)
         {
-            var victim = models.Where(pair => pair.Key != protectedKey && pair.Value.Active == 0).MinBy(pair => pair.Value.Used);
+            var victim = models.Where(pair => pair.Key != protectedKey && pair.Value.Active == 0).OrderBy(pair => pair.Value.Used).FirstOrDefault();
             if (victim.Equals(default(KeyValuePair<SourceDocumentKey, ModelEntry>))) break;
             RemoveDocumentLocked(victim.Key);
         }
         while (batches.Values.Sum(batch => batch.Bytes) > MaximumBatchBytes)
         {
-            var victim = batches.Where(pair => pair.Key.Document != protectedKey).MinBy(pair => pair.Value.Used);
+            var victim = batches.Where(pair => pair.Key.Document != protectedKey).OrderBy(pair => pair.Value.Used).FirstOrDefault();
             if (victim.Equals(default(KeyValuePair<BatchKey, BatchEntry>))) break;
             batches.Remove(victim.Key);
             evictions++;

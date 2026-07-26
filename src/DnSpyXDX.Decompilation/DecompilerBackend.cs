@@ -119,6 +119,8 @@ internal sealed class AssemblySession : IDisposable
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly RuntimeDisplaySettings displaySettings;
     private readonly Dictionary<(int Token, DecompilerLanguage Language, bool ShowMetadataTokens), DecompilerDocument> cache = [];
+    private byte[]? image;
+    private IReadOnlyList<BinaryRegion>? binaryRegions;
     private IReadOnlyDictionary<string, SymbolId>? typeLinks;
     private IReadOnlyDictionary<string, string>? typeClassifications;
     public AssemblyDescriptor Descriptor { get; }
@@ -360,13 +362,19 @@ internal sealed class AssemblySession : IDisposable
                 DecompilerLanguage.CSharp => DecompileCSharp(handle, showMetadataTokens),
                 DecompilerLanguage.IL => Disassemble(handle, ct, showMetadataTokens),
                 DecompilerLanguage.ILWithCSharp => DisassembleWithCSharp(handle, ct, showMetadataTokens),
+                DecompilerLanguage.Hex => "",
                 _ => throw new ArgumentOutOfRangeException(nameof(language))
             }, ct);
             ct.ThrowIfCancellationRequested();
             var title = GetEntityName(handle);
             var links = language == DecompilerLanguage.CSharp ? BuildSymbolLinks(handle) : null;
-            var references = language == DecompilerLanguage.CSharp ? [] : BuildILReferences(text);
-            var result = new DecompilerDocument(symbol, title, language.Key(), text, references, [], links, TypeClassifications: BuildClassifications(handle));
+            var references = language is DecompilerLanguage.IL or DecompilerLanguage.ILWithCSharp ? BuildILReferences(text) : [];
+            var binary = language == DecompilerLanguage.Hex ? image ??= module.Reader.GetEntireImage().GetContent().ToArray() : null;
+            var selection = language == DecompilerLanguage.Hex ? GetHexEntityRegion(handle) : null;
+            var baseRegions = language == DecompilerLanguage.Hex ? binaryRegions ??= BuildHexRegions() : null;
+            var regions = baseRegions;
+            var result = new DecompilerDocument(symbol, title, language.Key(), text, references, [], links, TypeClassifications: BuildClassifications(handle), Binary: binary,
+                BinarySelectionOffset: selection?.Offset, BinarySelectionLength: selection?.Length ?? 0, BinaryRegions: regions);
             cache[key] = result;
             return result;
         }
@@ -378,6 +386,151 @@ internal sealed class AssemblySession : IDisposable
         var source = decompiler.DecompileAsString([handle]);
         source = AddNamespaceDeclaration(source, DeclaringTypeOf(handle));
         return showMetadataTokens ? AddTokenComments(source, handle) : source;
+    }
+
+    private BinaryRegion? GetHexEntityRegion(EntityHandle handle)
+    {
+        var table = handle.Kind switch
+        {
+            HandleKind.TypeDefinition => TableIndex.TypeDef,
+            HandleKind.MethodDefinition => TableIndex.MethodDef,
+            HandleKind.FieldDefinition => TableIndex.Field,
+            HandleKind.PropertyDefinition => TableIndex.Property,
+            HandleKind.EventDefinition => TableIndex.Event,
+            _ => (TableIndex?)null
+        };
+        if (table is null || module.Reader.PEHeaders.CorHeader is not { } corHeader ||
+            !module.Reader.PEHeaders.TryGetDirectoryOffset(corHeader.MetadataDirectory, out var metadataOffset)) return null;
+        var row = MetadataTokens.GetRowNumber(handle);
+        var rowSize = metadata.GetTableRowSize(table.Value);
+        var offset = metadataOffset + metadata.GetTableMetadataOffset(table.Value) + (row - 1) * rowSize;
+        return offset >= 0 && offset + rowSize <= module.Reader.GetEntireImage().Length
+            ? new BinaryRegion(offset, rowSize, $"{table} row {row}: {GetEntityName(handle)} (token 0x{MetadataTokens.GetToken(handle):X8})", IsEntity: true)
+            : null;
+    }
+
+    private IReadOnlyList<BinaryRegion> BuildHexRegions()
+    {
+        var headers = module.Reader.PEHeaders;
+        var regions = new List<BinaryRegion>();
+        AddRegion(regions, 0, Math.Min(64, headers.PEHeaderStartOffset), "DOS header");
+        AddRegion(regions, 64, headers.PEHeaderStartOffset - 64, "DOS stub");
+        AddRegion(regions, headers.PEHeaderStartOffset, 4, "PE signature");
+        AddRegion(regions, headers.PEHeaderStartOffset + 4, 20, "COFF file header");
+        AddRegion(regions, headers.PEHeaderStartOffset + 24, headers.CoffHeader.SizeOfOptionalHeader, "PE optional header");
+        var sectionHeaderOffset = headers.PEHeaderStartOffset + 24 + headers.CoffHeader.SizeOfOptionalHeader;
+        for (var index = 0; index < headers.SectionHeaders.Length; index++)
+        {
+            var section = headers.SectionHeaders[index];
+            AddRegion(regions, sectionHeaderOffset + index * 40, 40, $"{section.Name} section header");
+            AddRegion(regions, section.PointerToRawData, section.SizeOfRawData, $"{section.Name} section data");
+        }
+        if (headers.PEHeader is { } peHeader && headers.TryGetDirectoryOffset(peHeader.CorHeaderTableDirectory, out var clrOffset))
+            AddRegion(regions, clrOffset, peHeader.CorHeaderTableDirectory.Size, "CLR header");
+        if (headers.CorHeader is { } corHeader && headers.TryGetDirectoryOffset(corHeader.MetadataDirectory, out var metadataOffset))
+        {
+            AddRegion(regions, metadataOffset, corHeader.MetadataDirectory.Size, ".NET metadata");
+            foreach (var heap in Enum.GetValues<HeapIndex>())
+            {
+                var size = metadata.GetHeapSize(heap);
+                if (size > 0)
+                {
+                    var heapOffset = metadataOffset + metadata.GetHeapMetadataOffset(heap);
+                    AddRegion(regions, heapOffset, size, $"#{heap} metadata heap");
+                    AddHeapEntries(regions, heap, heapOffset, size);
+                }
+            }
+            var firstTableOffset = Enum.GetValues<TableIndex>()
+                .Where(table => metadata.GetTableRowCount(table) > 0)
+                .Select(metadata.GetTableMetadataOffset)
+                .DefaultIfEmpty(0)
+                .Min();
+            if (firstTableOffset > 0) AddRegion(regions, metadataOffset, firstTableOffset, ".NET metadata root, stream headers, and tables header");
+            foreach (var table in Enum.GetValues<TableIndex>())
+            {
+            var rows = metadata.GetTableRowCount(table);
+            var rowSize = metadata.GetTableRowSize(table);
+            if (rows == 0 || rowSize == 0) continue;
+            for (var row = 1; row <= rows; row++)
+            {
+                var offset = metadataOffset + metadata.GetTableMetadataOffset(table) + (row - 1) * rowSize;
+                var token = ((int)table << 24) | row;
+                var name = table switch
+                {
+                    TableIndex.TypeDef => metadata.GetString(metadata.GetTypeDefinition(MetadataTokens.TypeDefinitionHandle(row)).Name),
+                    TableIndex.MethodDef => metadata.GetString(metadata.GetMethodDefinition(MetadataTokens.MethodDefinitionHandle(row)).Name),
+                    TableIndex.Field => metadata.GetString(metadata.GetFieldDefinition(MetadataTokens.FieldDefinitionHandle(row)).Name),
+                    TableIndex.Property => metadata.GetString(metadata.GetPropertyDefinition(MetadataTokens.PropertyDefinitionHandle(row)).Name),
+                    TableIndex.Event => metadata.GetString(metadata.GetEventDefinition(MetadataTokens.EventDefinitionHandle(row)).Name),
+                    _ => null
+                };
+                regions.Add(new BinaryRegion(offset, rowSize, $"{table} row {row}{(name is null ? "" : $": {name}")} (token 0x{token:X8}, {rowSize} bytes)", IsEntity: true));
+            }
+            }
+        }
+        return regions;
+    }
+
+    private void AddHeapEntries(List<BinaryRegion> regions, HeapIndex heap, int offset, int size)
+    {
+        var bytes = image!;
+        var end = Math.Min(bytes.Length, offset + size);
+        if (heap == HeapIndex.Guid)
+        {
+            for (var position = offset; position + 16 <= end; position += 16)
+                regions.Add(new BinaryRegion(position, 16, $"#GUID {(position - offset) / 16 + 1}: {new Guid(bytes.AsSpan(position, 16))}", IsEntity: true));
+            return;
+        }
+        for (var position = offset + 1; position < end;)
+        {
+            if (heap == HeapIndex.String)
+            {
+                var terminator = Array.IndexOf(bytes, (byte)0, position, end - position);
+                if (terminator < 0) terminator = end;
+                var length = terminator - position;
+                var value = Encoding.UTF8.GetString(bytes, position, length);
+                regions.Add(new BinaryRegion(position, Math.Min(length + 1, end - position), $"#Strings 0x{position - offset:X}: \"{Preview(value)}\"", IsEntity: true));
+                position = terminator + 1;
+                continue;
+            }
+            if (!TryReadCompressedInteger(bytes, position, end, out var payloadLength, out var prefixLength)) break;
+            var totalLength = Math.Min(prefixLength + payloadLength, end - position);
+            var tooltip = heap == HeapIndex.UserString
+                ? $"#US 0x{position - offset:X}: \"{Preview(Encoding.Unicode.GetString(bytes, position + prefixLength, Math.Max(0, totalLength - prefixLength - 1) & ~1))}\""
+                : $"#Blob 0x{position - offset:X}: {payloadLength} data bytes";
+            regions.Add(new BinaryRegion(position, totalLength, tooltip, IsEntity: true));
+            position += Math.Max(1, totalLength);
+        }
+    }
+
+    private static bool TryReadCompressedInteger(byte[] bytes, int offset, int end, out int value, out int length)
+    {
+        value = 0;
+        length = 0;
+        if (offset >= end) return false;
+        var first = bytes[offset];
+        if ((first & 0x80) == 0) { value = first; length = 1; return true; }
+        if ((first & 0xC0) == 0x80 && offset + 1 < end) { value = ((first & 0x3F) << 8) | bytes[offset + 1]; length = 2; return true; }
+        if ((first & 0xE0) == 0xC0 && offset + 3 < end)
+        {
+            value = ((first & 0x1F) << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3];
+            length = 4;
+            return true;
+        }
+        return false;
+    }
+
+    private static string Preview(string value)
+    {
+        var cleaned = value.Replace('\r', ' ').Replace('\n', ' ').Replace('\0', ' ');
+        return cleaned.Length <= 80 ? cleaned : cleaned[..77] + "…";
+    }
+
+    private void AddRegion(List<BinaryRegion> regions, int offset, int length, string tooltip)
+    {
+        var imageLength = module.Reader.GetEntireImage().Length;
+        if (offset >= 0 && length > 0 && offset < imageLength)
+            regions.Add(new BinaryRegion(offset, Math.Min(length, imageLength - offset), tooltip));
     }
 
     private string Disassemble(EntityHandle handle, CancellationToken ct, bool showMetadataTokens, bool formatDeclarationTokens = true)

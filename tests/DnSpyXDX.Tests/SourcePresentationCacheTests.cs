@@ -51,6 +51,17 @@ public sealed class SourcePresentationCacheTests
         Assert.Equal(0, cache.Statistics.Batches);
     }
 
+    [Fact]
+    public async Task Keeps_a_protected_model_that_exceeds_the_cache_budget()
+    {
+        var cache = new SourcePresentationCache(NullLogger<SourcePresentationCache>.Instance) { MaximumBytes = 1 };
+
+        var model = await cache.GetModelAsync(Key(1) with { Language = "hex" }, new string('A', 100));
+
+        Assert.Equal(100, model.Text.Length);
+        Assert.Equal(1, cache.Statistics.Models);
+    }
+
     private static SourcePresentationCache Create(int maximumModels = SourcePresentationCache.DefaultMaximumModels) =>
         new(NullLogger<SourcePresentationCache>.Instance) { MaximumModels = maximumModels };
 

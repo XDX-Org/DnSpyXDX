@@ -123,6 +123,7 @@ public sealed class WorkspaceSessionService(IDecompilerBackend backend, Workspac
     {
         "il" => DecompilerLanguage.IL,
         "il-csharp" => DecompilerLanguage.ILWithCSharp,
+        "hex" => DecompilerLanguage.Hex,
         _ => DecompilerLanguage.CSharp
     };
     private sealed record SessionSnapshot(string[] AssemblyPaths, SavedDocument[] Documents, int ActiveIndex, UiSessionState? UiState = null);

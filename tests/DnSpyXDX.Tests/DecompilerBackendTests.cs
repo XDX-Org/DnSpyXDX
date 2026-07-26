@@ -99,7 +99,7 @@ public sealed class DecompilerBackendTests
     }
 
     [Fact]
-    public async Task Decompiles_csharp_il_and_sequence_point_annotated_il_independently()
+    public async Task Decompiles_csharp_il_sequence_point_annotated_il_and_hex_independently()
     {
         await using var backend = new DecompilerBackend();
         await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
@@ -109,10 +109,12 @@ public sealed class DecompilerBackendTests
         var csharp = await backend.DecompileAsync(type.Symbol, DecompilerLanguage.CSharp);
         var il = await backend.DecompileAsync(type.Symbol, DecompilerLanguage.IL);
         var combined = await backend.DecompileAsync(type.Symbol, DecompilerLanguage.ILWithCSharp);
+        var hex = await backend.DecompileAsync(type.Symbol, DecompilerLanguage.Hex);
 
         Assert.Equal("csharp", csharp.Language);
         Assert.Equal("il", il.Language);
         Assert.Equal("il-csharp", combined.Language);
+        Assert.Equal("hex", hex.Language);
         Assert.Contains("class SampleMembers", csharp.Text, StringComparison.Ordinal);
         Assert.Contains(".class", il.Text, StringComparison.Ordinal);
         Assert.Contains("IL_0000:", il.Text, StringComparison.Ordinal);
@@ -128,6 +130,26 @@ public sealed class DecompilerBackendTests
         Assert.DoesNotContain("// C#: using ", combined.Text, StringComparison.Ordinal);
         Assert.Contains("IL_0000:", combined.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("// Decompiled C# reference", combined.Text, StringComparison.Ordinal);
+        Assert.Empty(hex.Text);
+        Assert.NotNull(hex.Binary);
+        Assert.Equal([0x4D, 0x5A], hex.Binary![..2]);
+        Assert.NotNull(hex.BinarySelectionOffset);
+        Assert.True(hex.BinarySelectionLength > 0);
+        Assert.InRange(hex.BinarySelectionOffset.Value + hex.BinarySelectionLength, 1, hex.Binary.Length);
+        Assert.Contains(hex.BinaryRegions!, region => region.Tooltip == ".NET metadata");
+        Assert.Contains(hex.BinaryRegions!, region => region.Tooltip.Contains("metadata heap", StringComparison.Ordinal));
+        Assert.Contains(hex.BinaryRegions!, region => region.Tooltip.Contains("DecompilerBackendTests", StringComparison.Ordinal));
+        Assert.Contains(hex.BinaryRegions!, region => region.Tooltip.StartsWith("#Blob 0x", StringComparison.Ordinal));
+        Assert.Contains(hex.BinaryRegions!, region => region.Tooltip.Contains("TypeDef row", StringComparison.Ordinal));
+        Assert.Contains(hex.BinaryRegions!, region => region.Tooltip.Contains("AssemblyRef row", StringComparison.Ordinal));
+        Assert.True(hex.BinaryRegions!.Count(region => region.IsEntity) > 5);
+
+        var methodResult = Assert.Single(await backend.SearchAsync(nameof(SampleMembers.Later)), result => result.QualifiedName == "DnSpyXDX.Tests.SampleMembers.Later");
+        var fieldResult = Assert.Single(await backend.SearchAsync(nameof(SampleMembers.SampleField)), result => result.QualifiedName == "DnSpyXDX.Tests.SampleMembers.SampleField");
+        var methodHex = await backend.DecompileAsync(methodResult.Symbol, DecompilerLanguage.Hex);
+        var fieldHex = await backend.DecompileAsync(fieldResult.Symbol, DecompilerLanguage.Hex);
+        Assert.Contains(methodHex.BinaryRegions!, region => region.Tooltip.Contains("MethodDef row", StringComparison.Ordinal));
+        Assert.Contains(fieldHex.BinaryRegions!, region => region.Tooltip.Contains("Field row", StringComparison.Ordinal));
 
         var later = Assert.Single(await backend.SearchAsync(nameof(SampleMembers.Later)), result =>
             result.Kind == "Method" && result.QualifiedName == "DnSpyXDX.Tests.SampleMembers.Later");

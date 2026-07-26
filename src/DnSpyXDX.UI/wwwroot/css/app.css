@@ -155,7 +155,8 @@ button.source-token.code-link{text-decoration:none}
 .source-token.code-string{color:var(--theme-syntax-string)}
 .source-find-match{background:var(--theme-color-6d5f2855)}
 .source-find-match.active{background:var(--theme-color-d89614);color:var(--theme-color-111)}
-.source-preparing{height:100%;display:flex;align-items:center;justify-content:center;gap:10px;color:var(--theme-color-8996aa)}
+.source-preparing{height:100%;display:flex;align-items:center;justify-content:center;gap:10px;color:var(--theme-color-8996aa)}.source-preparing-error{color:var(--theme-color-ef8f8f);padding:24px;text-align:center}
+.hex-viewport{position:relative;width:100%;height:100%;overflow:auto;background:var(--theme-color-0d1118);color:var(--theme-color-f4f7fc);font:13px/20px 'DnSpyXDX Mono',monospace;outline:none}.hex-scroll-surface{position:relative;min-width:100%}.hex-window{position:absolute;left:0;min-width:max-content;padding:0 22px 0 12px}.hex-row{display:grid;height:20px;white-space:pre}.hex-offset{color:var(--theme-color-66738a);user-select:none}.hex-row code{font:inherit;color:var(--theme-syntax-number)}.hex-byte{display:inline-block;width:3ch}.hex-byte-group{margin-right:1ch}.hex-byte.selected{background:var(--theme-color-d89614);color:var(--theme-color-111)}.hex-byte.region-hover:not(.selected){background:var(--theme-color-264f78);color:var(--theme-color-fff)}.hex-ascii{padding-left:18px;color:var(--theme-color-c8d2e2)}
 
 /* Keep the divider outside the scroll container so restored horizontal scroll
    positions cannot move it away from the panel edge. */

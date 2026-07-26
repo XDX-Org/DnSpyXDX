@@ -159,3 +159,39 @@ window.dnSpyXdx.initSourceFind = function (source, dotNet) {
 window.dnSpyXdx.disposeSourceFind = function (source) {
   if (window.dnSpyXdx.sourceFindTarget?.source === source) window.dnSpyXdx.sourceFindTarget = null;
 };
+window.dnSpyXdx.initHexView = function (viewport, dotNet) {
+  if (!viewport) return;
+  window.dnSpyXdx.disposeHexView(viewport);
+  let scheduled = false;
+  const update = () => {
+    scheduled = false;
+    dotNet.invokeMethodAsync("HexScrolled", viewport.scrollTop, viewport.clientHeight, viewport.scrollHeight);
+  };
+  const scroll = () => {
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(update);
+  };
+  viewport._dnSpyXdxHexScroll = scroll;
+  viewport._dnSpyXdxHexResize = new ResizeObserver(entries => {
+    const width = entries[0]?.contentRect.width;
+    if (width > 0) dotNet.invokeMethodAsync("HexResized", width);
+  });
+  viewport._dnSpyXdxHexResize.observe(viewport);
+  viewport.addEventListener("scroll", scroll, { passive: true });
+  update();
+};
+window.dnSpyXdx.disposeHexView = function (viewport) {
+  if (!viewport?._dnSpyXdxHexScroll) return;
+  viewport.removeEventListener("scroll", viewport._dnSpyXdxHexScroll);
+  viewport._dnSpyXdxHexResize?.disconnect();
+  delete viewport._dnSpyXdxHexScroll;
+  delete viewport._dnSpyXdxHexResize;
+};
+window.dnSpyXdx.scrollHexToRow = function (viewport, row, totalRows, rowHeight) {
+  if (!viewport || totalRows <= 0) return;
+  const visibleRows = Math.max(1, Math.ceil(viewport.clientHeight / rowHeight));
+  const maximumRow = Math.max(0, totalRows - visibleRows);
+  const ratio = Math.min(Math.max(row, 0), maximumRow) / Math.max(1, maximumRow);
+  viewport.scrollTop = ratio * Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+};
