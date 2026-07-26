@@ -102,4 +102,5 @@ public sealed record UiSessionState(
     bool DebugLogging = false,
     DecompilerLanguage Language = DecompilerLanguage.CSharp,
     bool ShowMetadataTokens = true,
-    bool WrapLines = false);
+    bool WrapLines = false,
+    string CodeFontFamily = "");

@@ -51,7 +51,7 @@ public sealed partial class OfflineAssetsTests
     public void BundledFontsAreValidWoff2Files()
     {
         var fonts = Directory.GetFiles(Path.Combine(UiRoot, "fonts"), "*.woff2");
-        Assert.Equal(4, fonts.Length);
+        Assert.Equal(6, fonts.Length);
 
         foreach (var font in fonts)
             Assert.Equal("wOF2", System.Text.Encoding.ASCII.GetString(File.ReadAllBytes(font), 0, 4));

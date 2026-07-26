@@ -7,6 +7,26 @@ window.dnSpyXdx.applyTheme = function (theme) {
   document.documentElement.dataset.theme = selected;
   try { localStorage.setItem("dnspyxdx.theme", selected); } catch { }
 };
+window.dnSpyXdx.applyCodeFont = function (font) {
+  const selected = (font || "").trim();
+  if (!selected) {
+    document.documentElement.style.removeProperty("--app-code-font");
+    return;
+  }
+  const escaped = selected.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+  const generic = ["serif", "sans-serif", "monospace", "system-ui", "ui-monospace"].includes(selected.toLowerCase());
+  document.documentElement.style.setProperty("--app-code-font", `${generic ? selected : `"${escaped}"`}, "DejaVu Sans Mono", monospace`);
+};
+window.dnSpyXdx.getSystemFonts = async function () {
+  if (!window.queryLocalFonts) return [];
+  try {
+    const fonts = await window.queryLocalFonts();
+    return [...new Set(fonts.map(font => font.family).filter(Boolean))]
+      .sort((left, right) => left.localeCompare(right));
+  } catch {
+    return [];
+  }
+};
 window.dnSpyXdx.initExplorerResize = function (explorer, dotNet) {
   if (!explorer || explorer.dataset.resizeReady) return;
   explorer.dataset.resizeReady = "true";

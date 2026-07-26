@@ -100,6 +100,7 @@
       <header><strong id="settings-title">Settings</strong><button title="Close settings" aria-label="Close settings" @onclick="CloseSettings">×</button></header>
       <div class="settings-row"><span><strong>Theme</strong><small>Application and code colours</small></span><select class="settings-select" value="@themeId" @onchange="ThemeChangedAsync">@foreach (var theme in Themes.All) { <option value="@theme.Id">@theme.Name</option> }</select></div>
       <div class="settings-row"><span><strong>Application zoom</strong><small>Scale the entire interface</small></span><div class="application-zoom"><button aria-label="Zoom out" disabled="@(zoomPercent <= MinimumZoom)" @onclick="() => ChangeApplicationZoom(-1)">−</button><button class="zoom-percent" aria-label="Reset zoom to 100%" @onclick="ResetApplicationZoom">@zoomPercent%</button><button aria-label="Zoom in" disabled="@(zoomPercent >= MaximumZoom)" @onclick="() => ChangeApplicationZoom(1)">+</button></div></div>
+      <label class="settings-row"><span><strong>Code font</strong><small>Bundled and installed system fonts</small></span><select class="settings-select settings-font" value="@codeFontFamily" @onchange="CodeFontChangedAsync">@foreach (var font in AvailableCodeFonts) { <option value="@font">@font</option> }</select></label>
       <label class="settings-row"><span><strong>Debug logging</strong><small>Write detailed diagnostics to the console</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@debugLogging" @onchange="DebugLoggingChanged" /></label>
       <label class="settings-row"><span><strong>Metadata tokens</strong><small>Show token and RID comments in the main panel</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@showMetadataTokens" @onchange="MetadataTokensChangedAsync" /></label>
       <label class="settings-row"><span><strong>Line wrapping</strong><small>Wrap long source and resource text lines</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@wrapLines" @onchange="LineWrappingChangedAsync" /></label>
@@ -141,6 +142,13 @@
   private bool debugLogging;
   private bool showMetadataTokens = true;
   private bool wrapLines;
+  private string codeFontFamily = "DejaVu Sans Mono";
+  private string[] systemFonts = [];
+  private IEnumerable<string> AvailableCodeFonts => new[] { "DejaVu Sans Mono", "JetBrains Mono" }
+    .Concat(systemFonts)
+    .Append(codeFontFamily)
+    .Where(font => !string.IsNullOrWhiteSpace(font))
+    .Distinct(StringComparer.OrdinalIgnoreCase);
   private DecompilerLanguage language = DecompilerLanguage.CSharp;
   private AssemblyDescriptor? contextAssembly;
   private int contextMenuX;
@@ -166,6 +174,7 @@
       debugLogging = ui.DebugLogging;
       showMetadataTokens = ui.ShowMetadataTokens;
       wrapLines = ui.WrapLines;
+      codeFontFamily = string.IsNullOrWhiteSpace(ui.CodeFontFamily) ? "DejaVu Sans Mono" : ui.CodeFontFamily.Trim();
       language = ui.Language.ValidOrDefault();
       LoggingSettings.DebugEnabled = debugLogging;
       DisplaySettings.ShowMetadataTokens = showMetadataTokens;
@@ -185,9 +194,12 @@
         var restoredFromStorage = !string.IsNullOrWhiteSpace(storedTheme) && Themes.Normalize(storedTheme) != themeId;
         if (restoredFromStorage) themeId = Themes.Normalize(storedTheme);
         await JS.InvokeVoidAsync("dnSpyXdx.applyTheme", themeId);
+        await JS.InvokeVoidAsync("dnSpyXdx.applyCodeFont", codeFontFamily);
+        systemFonts = await JS.InvokeAsync<string[]>("dnSpyXdx.getSystemFonts");
         await JS.InvokeVoidAsync("dnSpyXdx.initExplorerResize", explorer, selfReference);
         await JS.InvokeVoidAsync("dnSpyXdx.initHistoryButtons", selfReference);
         await JS.InvokeVoidAsync("dnSpyXdx.initPanelHorizontalWheel");
+        StateHasChanged();
         if (restoredFromStorage) { Session.UiState = CaptureUiState(); ScheduleSave(); StateHasChanged(); }
         if (restoring && !sessionRestoreStarted) { sessionRestoreStarted = true; _ = RestoreWorkspaceAsync(); }
       }
@@ -222,7 +234,7 @@
     }
   }
   private void ScheduleSave() { saveDelay?.Cancel(); saveDelay?.Dispose(); saveDelay = new CancellationTokenSource(); var token = saveDelay.Token; _ = SaveAfterDelayAsync(token); }
-  private UiSessionState CaptureUiState() => new(explorerWidth, searchPanelHeight, searchOpen, searchKind, searchScope, zoomPercent, themeId, debugLogging, language, showMetadataTokens, wrapLines);
+  private UiSessionState CaptureUiState() => new(explorerWidth, searchPanelHeight, searchOpen, searchKind, searchScope, zoomPercent, themeId, debugLogging, language, showMetadataTokens, wrapLines, codeFontFamily);
   private async Task SaveAfterDelayAsync(CancellationToken token) { try { await Task.Delay(350, token); Session.UiState = CaptureUiState(); await Session.SaveAsync(token); } catch (OperationCanceledException) { } }
   private async Task OpenAsync() { var path = await Dialogs.OpenAssemblyAsync(); if (path is null) return; Workspace.SetBusy(true, "Opening assembly…"); try { await Backend.OpenAsync(path); Workspace.SetBusy(false, $"Opened {Path.GetFileName(path)}"); } catch (Exception ex) { Workspace.SetBusy(false, ex.Message); } }
   private void ToggleMenu() => menuOpen = !menuOpen;
@@ -495,6 +507,13 @@
   private async Task LineWrappingChangedAsync(ChangeEventArgs e)
   {
     wrapLines = e.Value is true;
+    Session.UiState = CaptureUiState();
+    await Session.SaveAsync();
+  }
+  private async Task CodeFontChangedAsync(ChangeEventArgs e)
+  {
+    codeFontFamily = e.Value?.ToString()?.Trim() ?? "";
+    await JS.InvokeVoidAsync("dnSpyXdx.applyCodeFont", codeFontFamily);
     Session.UiState = CaptureUiState();
     await Session.SaveAsync();
   }
