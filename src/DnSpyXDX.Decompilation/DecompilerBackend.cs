@@ -478,13 +478,14 @@ internal sealed class AssemblySession : IDisposable
             ct.ThrowIfCancellationRequested();
             var title = GetEntityName(handle);
             var links = language == DecompilerLanguage.CSharp ? BuildSymbolLinks(handle) : null;
+            var symbolLocations = language == DecompilerLanguage.CSharp ? BuildSymbolLocations(text, handle) : null;
             var references = language is DecompilerLanguage.IL or DecompilerLanguage.ILWithCSharp ? BuildILReferences(text) : [];
             var binary = language == DecompilerLanguage.Hex ? image ??= module.Reader.GetEntireImage().GetContent().ToArray() : null;
             var selection = language == DecompilerLanguage.Hex ? GetHexEntityRegion(handle) : null;
             var baseRegions = language == DecompilerLanguage.Hex ? binaryRegions ??= BuildHexRegions() : null;
             var regions = baseRegions;
             var result = new DecompilerDocument(symbol, title, language.Key(), text, references, [], links, TypeClassifications: BuildClassifications(handle), Binary: binary,
-                BinarySelectionOffset: selection?.Offset, BinarySelectionLength: selection?.Length ?? 0, BinaryRegions: regions);
+                BinarySelectionOffset: selection?.Offset, BinarySelectionLength: selection?.Length ?? 0, BinaryRegions: regions, SymbolLocations: symbolLocations);
             cache[key] = result;
             return result;
         }
@@ -946,6 +947,38 @@ internal sealed class AssemblySession : IDisposable
         foreach (var h in type.GetEvents()) AddMember(h, metadata.GetString(metadata.GetEventDefinition(h).Name));
         foreach (var h in type.GetMethods()) AddMember(h, metadata.GetString(metadata.GetMethodDefinition(h).Name));
         return links;
+    }
+
+    private IReadOnlyDictionary<int, int> BuildSymbolLocations(string source, EntityHandle selected)
+    {
+        var typeHandle = DeclaringTypeOf(selected);
+        if (typeHandle.IsNil) return new Dictionary<int, int>();
+        var type = metadata.GetTypeDefinition(typeHandle);
+        var declarations = new List<(EntityHandle Handle, string Name, bool Callable)>
+        {
+            (typeHandle, TypeIdentifier(type), false)
+        };
+        declarations.AddRange(type.GetFields().Select(handle => ((EntityHandle)handle, metadata.GetString(metadata.GetFieldDefinition(handle).Name), false)));
+        declarations.AddRange(type.GetProperties().Select(handle => ((EntityHandle)handle, metadata.GetString(metadata.GetPropertyDefinition(handle).Name), false)));
+        declarations.AddRange(type.GetEvents().Select(handle => ((EntityHandle)handle, metadata.GetString(metadata.GetEventDefinition(handle).Name), false)));
+        declarations.AddRange(type.GetMethods().Where(handle => !metadata.GetMethodDefinition(handle).Attributes.HasFlag(MethodAttributes.SpecialName)).Select(handle =>
+            ((EntityHandle)handle, metadata.GetString(metadata.GetMethodDefinition(handle).Name), true)));
+
+        var lines = SourceLines(source);
+        var used = new HashSet<int>();
+        var locations = new Dictionary<int, int>();
+        foreach (var declaration in declarations)
+        {
+            var candidates = Enumerable.Range(0, lines.Count)
+                .Where(index => !used.Contains(index) && IsDeclarationLine(lines[index].Text, declaration.Name, declaration.Callable))
+                .ToArray();
+            if (candidates.Length == 0) continue;
+            var declarationIndent = candidates.Min(index => LeadingWhitespace(lines[index].Text));
+            var line = candidates.First(index => LeadingWhitespace(lines[index].Text) == declarationIndent);
+            used.Add(line);
+            locations[MetadataTokens.GetToken(declaration.Handle)] = lines[line].Offset;
+        }
+        return locations;
     }
 
     private TypeDefinitionHandle DeclaringTypeOf(EntityHandle handle) => handle.Kind switch

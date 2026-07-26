@@ -85,6 +85,14 @@ public sealed class WorkspaceState
     public bool GoBack() => Navigate(tab => tab.GoBack());
     public bool GoForward() => Navigate(tab => tab.GoForward());
 
+    public bool FocusActive(SymbolId symbol)
+    {
+        if (ActiveTab is not { } tab || !tab.Focus(symbol)) return false;
+        Status = $"Navigated to token 0x{symbol.MetadataToken:X8}";
+        Changed?.Invoke();
+        return true;
+    }
+
     private bool Navigate(Func<DocumentTab, bool> move)
     {
         if (ActiveTab is not { } tab || !move(tab)) return false;
@@ -184,6 +192,15 @@ public sealed class DocumentTab(string id, DecompilerDocument document, string a
 
     internal bool GoBack() => Step(back, forward);
     internal bool GoForward() => Step(forward, back);
+
+    internal bool Focus(SymbolId symbol)
+    {
+        if (Document.FocusSymbol == symbol || IsLoading || Error is not null) return false;
+        back.Add((Document, AssemblyName));
+        forward.Clear();
+        Document = Document with { FocusSymbol = symbol };
+        return true;
+    }
 
     /// <returns><see langword="true"/> when the current document belongs to the module and the
     /// whole tab should be closed.</returns>

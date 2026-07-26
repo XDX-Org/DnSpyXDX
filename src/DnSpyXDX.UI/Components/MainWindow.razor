@@ -328,6 +328,12 @@
     selectedSymbol = declaringType;
     selectedNode = null;
     treeSelectionVersion++;
+    if (!request.NewTab && Workspace.ActiveTab is { } active && active.Document.Symbol == declaringType && active.Document.Language == language.Key())
+    {
+      Workspace.FocusActive(request.Symbol);
+      StateHasChanged();
+      return;
+    }
     await OpenSymbolAsync(declaringType, request.NewTab, IsTypeSymbol(request.Symbol) ? request.DisplayName : null, true, IsTypeSymbol(request.Symbol) ? null : request.Symbol);
     StateHasChanged();
   }

@@ -1,4 +1,4 @@
-<div class="source-line @(WrapLines ? "wrap-lines" : null) @(IsFocused ? "code-search-focus" : null)" style="@LineStyle" role="row">
+<div class="source-line @(WrapLines ? "wrap-lines" : null) @(IsFocused ? "code-search-focus" : null)" style="@LineStyle" data-source-line="@Line.Number" role="row">
   <span class="source-line-number" aria-hidden="true">@(Line.Number + 1)</span>
   <code>
     @foreach (var brace in VisibleGuides())

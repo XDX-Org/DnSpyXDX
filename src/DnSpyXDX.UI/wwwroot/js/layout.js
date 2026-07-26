@@ -127,6 +127,9 @@ window.dnSpyXdx.scrollSourceToLine = async function (source, line, lineHeight) {
     await new Promise(resolve => requestAnimationFrame(resolve));
   }
 };
+window.dnSpyXdx.scrollSourceToRenderedLine = function (source, line) {
+  source?.querySelector(`[data-source-line="${line}"]`)?.scrollIntoView({ block: "center", inline: "nearest", behavior: "auto" });
+};
 window.dnSpyXdx.scrollTreeNodeIntoView = function (row) {
   if (row) row.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "auto" });
 };

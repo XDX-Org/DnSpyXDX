@@ -93,6 +93,14 @@ public sealed class DecompilerBackendTests
 
         Assert.Contains("// Token: 0x", visible.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("// Token: 0x", hidden.Text, StringComparison.Ordinal);
+        Assert.NotNull(hidden.SymbolLocations);
+        Assert.Contains(hidden.SymbolLocations!, location => (location.Key >> 24) == 0x04);
+        Assert.Contains(hidden.SymbolLocations!, location => (location.Key >> 24) == 0x06);
+        Assert.Contains(hidden.SymbolLocations!, location => (location.Key >> 24) == 0x17);
+        var field = Assert.Single(await backend.SearchAsync(nameof(SampleMembers.SampleField)), result => result.QualifiedName == "DnSpyXDX.Tests.SampleMembers.SampleField");
+        var property = Assert.Single(await backend.SearchAsync(nameof(SampleMembers.SampleProperty)), result => result.QualifiedName == "DnSpyXDX.Tests.SampleMembers.SampleProperty");
+        Assert.StartsWith("\tpublic int SampleField", hidden.Text[hidden.SymbolLocations[field.Symbol.MetadataToken]..], StringComparison.Ordinal);
+        Assert.StartsWith("\tpublic int SampleProperty", hidden.Text[hidden.SymbolLocations[property.Symbol.MetadataToken]..], StringComparison.Ordinal);
         Assert.DoesNotMatch(@"/\*\s*[0-9A-Fa-f]{8}\s*\*/", hiddenIl.Text);
         Assert.Contains("// C#:", hiddenCombined.Text, StringComparison.Ordinal);
         Assert.DoesNotMatch(@"/\*\s*[0-9A-Fa-f]{8}\s*\*/", hiddenCombined.Text);

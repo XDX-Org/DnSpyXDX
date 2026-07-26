@@ -143,19 +143,33 @@ else
       var state = ViewStates.TryGet(TabId, model.Key, out var saved) ? saved : new SourceViewState(0, 0);
       await JS.InvokeVoidAsync("dnSpyXdx.setSourceScroll", viewport, state.ScrollTop, state.ScrollLeft);
     }
-    if (revealFocus && Document.FocusSymbol is { } focus && model.TryGetTokenLocation(focus.MetadataToken, out var position))
+    if (revealFocus && Document.FocusSymbol is { } focus && TryGetFocusPosition(focus, out var position, out var declarationOffset))
     {
       revealFocus = false;
       revealedFocus = (model.Key, focus);
-      focusedLine = Math.Min(position.Line + 1, model.LineCount - 1);
+      focusedLine = Math.Min(position.Line + declarationOffset, model.LineCount - 1);
       if (virtualizer is not null) await virtualizer.RefreshDataAsync();
-      await JS.InvokeVoidAsync("dnSpyXdx.scrollSourceToLine", viewport, focusedLine, LineHeight);
+      if (WrapLines) await JS.InvokeVoidAsync("dnSpyXdx.scrollSourceToRenderedLine", viewport, focusedLine);
+      else await JS.InvokeVoidAsync("dnSpyXdx.scrollSourceToLine", viewport, focusedLine, LineHeight);
       focusDelay?.Cancel();
       focusDelay?.Dispose();
       focusDelay = new CancellationTokenSource();
       _ = ClearFocusAsync(focusDelay.Token);
     }
     if (focusFind) { focusFind = false; await findInput.FocusAsync(); }
+  }
+
+  private bool TryGetFocusPosition(SymbolId focus, out SourcePosition position, out int declarationOffset)
+  {
+    if (Document.SymbolLocations?.TryGetValue(focus.MetadataToken, out var offset) == true)
+    {
+      position = model!.GetPosition(offset);
+      declarationOffset = 0;
+      return true;
+    }
+    if (model!.TryGetTokenLocation(focus.MetadataToken, out position)) { declarationOffset = 1; return true; }
+    declarationOffset = 0;
+    return false;
   }
 
   private async ValueTask<ItemsProviderResult<SourceTokenizedLine>> LoadLinesAsync(ItemsProviderRequest request)

@@ -40,6 +40,20 @@ public sealed class WorkspaceStateTests
     }
 
     [Fact]
+    public void Focusing_a_member_updates_the_document_without_loading_and_supports_back()
+    {
+        var workspace = new WorkspaceState();
+        workspace.Open(Document(1), "Sample");
+        var member = new SymbolId(Guid.Empty, 0x06000002);
+
+        Assert.True(workspace.FocusActive(member));
+        Assert.Equal(member, workspace.ActiveTab!.Document.FocusSymbol);
+        Assert.False(workspace.ActiveTab.IsLoading);
+        Assert.True(workspace.GoBack());
+        Assert.Null(workspace.ActiveTab.Document.FocusSymbol);
+    }
+
+    [Fact]
     public void New_tab_navigation_appends_and_activates()
     {
         var workspace = new WorkspaceState();
