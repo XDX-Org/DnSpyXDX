@@ -9,4 +9,6 @@
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio"><PrivateAssets>all</PrivateAssets></PackageReference>
   </ItemGroup>
+  <ItemGroup><EmbeddedResource Include="Fixtures/sample-resource.txt" LogicalName="DnSpyXDX.Tests.sample-resource.txt" /></ItemGroup>
+  <ItemGroup><EmbeddedResource Include="Fixtures/opaque-resource.txt" LogicalName="uSoY" /></ItemGroup>
 </Project>

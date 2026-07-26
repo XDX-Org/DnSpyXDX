@@ -50,7 +50,8 @@ public sealed record TreeNodeDescriptor(
     string? Visibility = null,
     string? TypeDisplay = null,
     string? NameClassification = null,
-    string? TypeClassification = null);
+    string? TypeClassification = null,
+    string? Tooltip = null);
 
 public sealed record ReferenceSpan(
     int StartOffset,
@@ -62,6 +63,7 @@ public sealed record ReferenceSpan(
 
 public sealed record DiagnosticMessage(string Severity, string Message);
 public sealed record BinaryRegion(int Offset, int Length, string Tooltip, bool IsEntity = false);
+public sealed record ResourceDocument(NodeId Id, SymbolId Symbol, string Name, byte[] Data, string Kind, string? Text = null, string? MimeType = null);
 
 public sealed record DecompilerDocument(
     SymbolId Symbol,
@@ -76,7 +78,8 @@ public sealed record DecompilerDocument(
     byte[]? Binary = null,
     int? BinarySelectionOffset = null,
     int BinarySelectionLength = 0,
-    IReadOnlyList<BinaryRegion>? BinaryRegions = null);
+    IReadOnlyList<BinaryRegion>? BinaryRegions = null,
+    ResourceDocument? Resource = null);
 
 public sealed record SearchResult(SymbolId Symbol, string Name, string Kind, string AssemblyName, string Namespace, SymbolId DeclaringType, string? QualifiedName = null);
 

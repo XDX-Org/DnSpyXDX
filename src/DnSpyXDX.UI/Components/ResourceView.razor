@@ -1,0 +1,28 @@
+<section class="resource-view">
+  <header><strong>@Resource.Name</strong><span>@Resource.Kind</span><small>@FormatSize(Resource.Data.Length)</small></header>
+  <div class="resource-content">
+    @if (Resource.MimeType is { } mime)
+    {
+      <img src="@($"data:{mime};base64,{Convert.ToBase64String(Resource.Data)}")" alt="@Resource.Name" />
+    }
+    else if (Resource.Text is { } text)
+    {
+      <pre>@text</pre>
+    }
+    else
+    {
+      <HexView Data="Resource.Data" />
+    }
+  </div>
+</section>
+
+@code {
+  [Parameter, EditorRequired] public ResourceDocument Resource { get; set; } = null!;
+
+  private static string FormatSize(int bytes) => bytes switch
+  {
+    >= 1024 * 1024 => $"{bytes / 1024d / 1024d:N1} MB",
+    >= 1024 => $"{bytes / 1024d:N1} KB",
+    _ => $"{bytes} bytes"
+  };
+}

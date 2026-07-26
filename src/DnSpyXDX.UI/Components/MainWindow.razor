@@ -49,7 +49,7 @@
             </button>
           </div>
         </header>
-        <VirtualizedTree Assemblies="Backend.Assemblies" EmptyMessage="@(restoring ? "Restoring assembly tree…" : "Open a managed .dll or .exe to begin.")" OnOpen="OpenTreeSymbolAsync" OnOpenReference="OpenReferenceAsync" OnContextMenu="OpenTreeContextMenu" ExpandedPath="revealedPath" SelectedSymbol="selectedSymbol" SelectedNode="selectedNode" SelectionVersion="treeSelectionVersion" CollapseVersion="treeCollapseVersion" />
+        <VirtualizedTree Assemblies="Backend.Assemblies" EmptyMessage="@(restoring ? "Restoring assembly tree…" : "Open a managed .dll or .exe to begin.")" OnOpen="OpenTreeSymbolAsync" OnOpenReference="OpenReferenceAsync" OnOpenResource="OpenResourceAsync" OnContextMenu="OpenTreeContextMenu" ExpandedPath="revealedPath" SelectedSymbol="selectedSymbol" SelectedNode="selectedNode" SelectionVersion="treeSelectionVersion" CollapseVersion="treeCollapseVersion" />
       </aside>
       <div class="explorer-resizer" title="Drag to resize assembly tree"></div>
     </div>
@@ -61,6 +61,7 @@
         @if (restoring && Workspace.ActiveTab is null) { <div class="decompiling-panel"><span class="decompiling-spinner"></span><strong>Restoring session…</strong><small>Loading assemblies and rebuilding the assembly tree.</small></div> }
         else if (Workspace.ActiveTab is { IsLoading: true } loading) { <div class="decompiling-panel"><span class="decompiling-spinner"></span><strong>Decompiling @loading.Title…</strong><small>Restoring saved source after the assembly tree has loaded.</small></div> }
         else if (Workspace.ActiveTab is { Error: not null } failed) { <div class="decompiling-panel error"><strong>Decompilation failed</strong><small>@failed.Error</small></div> }
+        else if (Workspace.ActiveTab is { Document.Resource: { } resource }) { <ResourceView Resource="resource" /> }
         else if (Workspace.ActiveTab is { Document.Language: "hex", Document.Binary: { } binary } hex) { <HexView Data="binary" SelectionOffset="hex.Document.BinarySelectionOffset" SelectionLength="hex.Document.BinarySelectionLength" Regions="hex.Document.BinaryRegions ?? []" /> }
         else if (Workspace.ActiveTab is { } active) { <SourceView TabId="active.Id" Document="active.Document" OnNavigate="NavigateFromSourceAsync" /> }
       </div>
@@ -293,6 +294,21 @@
   }
   private Task OpenTreeSymbolAsync(NavigationRequest request) => OpenSymbolAsync(request.Symbol, request.NewTab || Workspace.Tabs.Count == 0, request.DisplayName, request.Kind == TreeNodeKind.Type);
   private async Task OpenReferenceAsync(NodeId reference) { Workspace.SetBusy(true, "Loading reference…"); try { var assembly = await Backend.OpenReferenceAsync(reference); revealedPath = new HashSet<NodeId> { assembly.RootNode }; selectedSymbol = null; selectedNode = assembly.RootNode; treeSelectionVersion++; Workspace.SetBusy(false, $"Opened {assembly.Name}"); StateHasChanged(); } catch (Exception ex) { Workspace.SetBusy(false, ex.Message); } }
+  private async Task OpenResourceAsync((NodeId Resource, bool NewTab) request)
+  {
+    Workspace.SetBusy(true, "Reading resource…");
+    try
+    {
+      var resource = await Backend.GetResourceAsync(request.Resource);
+      var assemblyName = Backend.Assemblies.FirstOrDefault(assembly => assembly.SessionId == request.Resource.SessionId)?.Name ?? "Assembly";
+      var document = new DecompilerDocument(resource.Symbol, resource.Name, "resource", resource.Text ?? "", [], [], Resource: resource);
+      Workspace.Open(document, assemblyName, request.NewTab || Workspace.Tabs.Count == 0);
+      selectedNode = request.Resource;
+      selectedSymbol = null;
+      Workspace.SetBusy(false, $"Opened {resource.Name}");
+    }
+    catch (Exception ex) { Workspace.SetBusy(false, ex.Message); }
+  }
   private async Task OpenSearchResultAsync(SearchResult result, bool newTab)
   {
     revealedPath = (await Backend.GetPathAsync(result.DeclaringType)).ToHashSet();
@@ -352,15 +368,21 @@
     Session.UiState = CaptureUiState();
     ScheduleSave();
     if (Workspace.ActiveTab is not { } tab) return;
+    if (tab.Document.Resource is not null) return;
     await RefreshTabLanguageAsync(tab);
   }
   private async Task ActivateTabAsync(string id)
   {
     Workspace.Activate(id);
-    if (Workspace.ActiveTab is { } tab && tab.Document.Language != language.Key()) await RefreshTabLanguageAsync(tab);
+    if (Workspace.ActiveTab is not { } tab) return;
+    if (tab.Document.Resource is { } resource) { selectedNode = resource.Id; selectedSymbol = null; return; }
+    selectedNode = null;
+    selectedSymbol = tab.Document.Symbol;
+    if (tab.Document.Language != language.Key()) await RefreshTabLanguageAsync(tab);
   }
   private Task RefreshTabLanguageAsync(DocumentTab tab)
   {
+    if (tab.Document.Resource is not null) return Task.CompletedTask;
     CancelDecompilation(tab.Id);
     Session.CancelDocumentRestore(tab.Id);
     Workspace.RefreshLoading(tab.Id, language);
@@ -389,6 +411,14 @@
   {
     if (!(forward ? Workspace.GoForward() : Workspace.GoBack())) return;
     if (Workspace.ActiveTab is not { } tab) return;
+    if (tab.Document.Resource is { } resource)
+    {
+      selectedNode = resource.Id;
+      selectedSymbol = null;
+      StateHasChanged();
+      return;
+    }
+    selectedNode = null;
     selectedSymbol = tab.Document.Symbol;
     revealedPath = (await Backend.GetPathAsync(tab.Document.Symbol)).ToHashSet();
     if (tab.Document.Language != language.Key()) await RefreshTabLanguageAsync(tab);
@@ -451,7 +481,7 @@
     DisplaySettings.ShowMetadataTokens = showMetadataTokens;
     Session.UiState = CaptureUiState();
     await Session.SaveAsync();
-    foreach (var tab in Workspace.Tabs.ToArray()) await RefreshTabLanguageAsync(tab);
+    foreach (var tab in Workspace.Tabs.Where(tab => tab.Document.Resource is null).ToArray()) await RefreshTabLanguageAsync(tab);
   }
   private async Task ThemeChangedAsync(ChangeEventArgs e)
   {

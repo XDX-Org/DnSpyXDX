@@ -104,10 +104,11 @@ public sealed class WorkspaceSessionService(IDecompilerBackend backend, Workspac
         await gate.WaitAsync(cancellationToken);
         try
         {
+            var savedTabs = workspace.Tabs.Where(t => !t.IsLoading && t.Error is null && t.Document.Resource is null).ToArray();
             var snapshot = new SessionSnapshot(
                 backend.Assemblies.Select(a => a.Path).ToArray(),
-                workspace.Tabs.Where(t => !t.IsLoading && t.Error is null).Select(t => new SavedDocument(t.Document.Symbol, t.Title, t.AssemblyName, ParseLanguage(t.Document.Language))).ToArray(),
-                workspace.Tabs.ToList().FindIndex(t => t.Id == workspace.ActiveTabId),
+                savedTabs.Select(t => new SavedDocument(t.Document.Symbol, t.Title, t.AssemblyName, ParseLanguage(t.Document.Language))).ToArray(),
+                Array.FindIndex(savedTabs, tab => tab.Id == workspace.ActiveTabId),
                 UiState);
             var directory = Path.GetDirectoryName(SessionPath)!;
             Directory.CreateDirectory(directory);

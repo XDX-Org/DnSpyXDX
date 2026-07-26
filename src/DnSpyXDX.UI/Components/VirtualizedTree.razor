@@ -9,7 +9,7 @@
   else
   {
     <Virtualize Items="visible" Context="item" ItemSize="RowHeight" OverscanCount="12">
-      <button @key="item.Node.Id" class="tree-row @(IsSelected(item.Node) ? "selected" : null)" style="--depth:@item.Depth" title="@(item.Tooltip ?? item.Node.Detail)" @onclick="e => SelectAsync(item.Node, e)" @oncontextmenu="e => OpenContextMenuAsync(item.Node, e)" @oncontextmenu:preventDefault="@(item.Node.Kind == TreeNodeKind.Assembly)" @oncontextmenu:stopPropagation="@(item.Node.Kind == TreeNodeKind.Assembly)">
+      <button @key="item.Node.Id" class="tree-row @(IsSelected(item.Node) ? "selected" : null)" style="--depth:@item.Depth" title="@(item.Tooltip ?? item.Node.Tooltip ?? item.Node.Detail)" @onclick="e => SelectAsync(item.Node, e)" @oncontextmenu="e => OpenContextMenuAsync(item.Node, e)" @oncontextmenu:preventDefault="@(item.Node.Kind == TreeNodeKind.Assembly)" @oncontextmenu:stopPropagation="@(item.Node.Kind == TreeNodeKind.Assembly)">
         <span class="chevron" @onclick="() => ToggleAsync(item.Node)" @onclick:stopPropagation="true">@(item.Node.HasChildren ? (expanded.Contains(item.Node.Id) ? "▾" : "▸") : "")</span>@if (ShowIcon(item.Node.Kind)) { <span class="node-icon @item.Node.Kind.ToString().ToLowerInvariant()">@Icon(item.Node.Kind)</span> }@if (item.Node.Visibility is not null && item.Node.Kind != TreeNodeKind.Type) { <span class="meta-visibility">@item.Node.Visibility</span> }@if (item.Node.TypeDisplay is not null) { <span class="meta-type meta-type-@item.Node.TypeClassification">@item.Node.TypeDisplay</span> }<span class="meta-name meta-@item.Node.NameClassification">@{ var name = SplitGenericName(item.Node.Name); }@name.Base@foreach (var part in name.Generic) { <span class="@(part.IsParameter ? "meta-typeparam" : "meta-generic-punctuation")">@part.Text</span> }</span>@if (item.Node.Detail is not null) { <small>@item.Node.Detail</small> }
       </button>
     </Virtualize>
@@ -22,6 +22,7 @@
   [Parameter] public string EmptyMessage { get; set; } = "Open a managed .dll or .exe to begin.";
   [Parameter] public EventCallback<NavigationRequest> OnOpen { get; set; }
   [Parameter] public EventCallback<NodeId> OnOpenReference { get; set; }
+  [Parameter] public EventCallback<(NodeId Resource, bool NewTab)> OnOpenResource { get; set; }
   [Parameter] public EventCallback<(MouseEventArgs Event, NodeId Node)> OnContextMenu { get; set; }
   [Parameter] public IReadOnlySet<NodeId>? ExpandedPath { get; set; }
   [Parameter] public SymbolId? SelectedSymbol { get; set; }
@@ -119,6 +120,7 @@
   {
     if (node.Symbol is { } symbol) await OnOpen.InvokeAsync(new NavigationRequest(symbol, e.CtrlKey, node.Kind, node.Name));
     else if (node.Kind == TreeNodeKind.Reference) await OnOpenReference.InvokeAsync(node.Id);
+    else if (node.Kind == TreeNodeKind.Resource) await OnOpenResource.InvokeAsync((node.Id, e.CtrlKey || e.MetaKey));
     else await ToggleAsync(node);
   }
 

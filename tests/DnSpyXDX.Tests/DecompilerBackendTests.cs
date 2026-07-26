@@ -59,6 +59,24 @@ public sealed class DecompilerBackendTests
     }
 
     [Fact]
+    public async Task Opens_embedded_text_resources()
+    {
+        await using var backend = new DecompilerBackend();
+        var assembly = await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
+        var resources = Assert.Single(await backend.GetChildrenAsync(assembly.RootNode), node => node.Name == "Resources");
+        var resourceNodes = await backend.GetChildrenAsync(resources.Id);
+        var resource = Assert.Single(resourceNodes, node => node.Name == "DnSpyXDX.Tests.sample-resource.txt");
+        var suspicious = Assert.Single(resourceNodes, node => node.Name == "uSoY");
+
+        var document = await backend.GetResourceAsync(resource.Id);
+
+        Assert.Equal("Text", document.Kind);
+        Assert.Equal("DnSpyXDX embedded resource test\n", document.Text);
+        Assert.NotEmpty(document.Data);
+        Assert.Contains("obfuscator", suspicious.Tooltip, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task Metadata_token_setting_updates_decompiled_output()
     {
         var displaySettings = new RuntimeDisplaySettings();
