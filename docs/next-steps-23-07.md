@@ -16,14 +16,14 @@ The assembly tree intentionally stops at types. Members remain discoverable thro
 2. **Bounded document caching — complete**
    - Model and token-batch LRU caches enforce entry and approximate-memory limits.
    - Unchanged documents and visible ranges remain warm across navigation.
-3. **Decompilation performance — next**
+3. **Decompilation performance — deferred**
    - Benchmark cold and warm decompilation for small, large, generic-heavy, and pathological types against dnSpy on the same machine.
    - Trace assembly resolution, ILSpy transforms, source generation, symbol-link construction, document indexing, tokenization, and first-viewport rendering separately.
    - Confirm that navigation and session restoration do not repeat metadata scans, resolver setup, or decompilation for unchanged documents.
    - Review ILSpy settings and transforms for expensive work that dnSpy disables or performs lazily.
    - Add structured timing counters behind the debug-logging switch and regression benchmarks for representative fixtures.
    - Set budgets for time to source text and time to first interactive viewport; optimize the measured bottleneck before changing architecture.
-4. **Language modes**
+4. **Language modes — complete**
    - Add C#, IL, and IL with C# modes.
    - Key cache entries by symbol, language, settings, and decompiler version.
    - Refresh the active document in place while preserving navigation and selection.

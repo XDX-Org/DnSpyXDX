@@ -38,7 +38,7 @@ Updated on 2026-07-23. The visualisation milestone is complete and accepted. Lin
 - Rainbow brace token coloring was removed at user request.
 - ILSpy's `IndentSwitchBody` formatting option is enabled. Case labels are indented inside `switch` braces while their statements retain normal case-body indentation.
 - Whole-document copy has not been added; the need for it remains a phase 4 follow-up decision rather than a blocker for phase 5.
-- Current automated result: 53 tests passing. Linux publish previously passed; repeat publish and platform smoke tests belong to phase 6.
+- Current automated result: 64 tests passing. Both RID publishes passed during rollout; Windows GUI runtime validation remains deferred external testing.
 
 ## Why this design
 
@@ -347,7 +347,7 @@ Exit: DOM size remains proportional to viewport height rather than document leng
 
 Exit: the old source viewer can be removed without losing supported workflows.
 
-### 5. Add view state and bounded caches — implemented, awaiting verification
+### 5. Add view state and bounded caches — complete
 
 - Capture and restore per-tab/document scroll state.
 - Add model and token-batch LRU limits.
@@ -356,7 +356,7 @@ Exit: the old source viewer can be removed without losing supported workflows.
 
 Exit: repeated navigation stays warm while memory plateaus at configured limits.
 
-### 6. Verify and roll out — pending
+### 6. Verify and roll out — complete
 
 - Remove superseded full-document highlighting, find, and SVG guide code.
 - Run unit, component, publish, and manual GUI tests.

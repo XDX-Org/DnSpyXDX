@@ -4,13 +4,13 @@
 
 The estimates below assume one experienced C# developer working mostly full-time. They are planning ranges, not commitments.
 
-Status was audited against the repository on 2026-07-23 through commit `6621710`. **Partial** means useful parts exist, but the stated exit condition has not been demonstrated.
+Status was audited against the repository on 2026-07-26 through commit `9900e3b`. **Partial** means useful parts exist, but the stated exit condition has not been demonstrated.
 
 | Phase | Status | Deliverable | Estimate | Exit condition |
 | --- | --- | --- | ---: | --- |
 | 0. Feasibility spike | Partial | Photino + Blazor + .NET 10 shell; ILSpy package loads a test DLL on both OSes | 2–4 days | Shell and decompilation exist; launch/decompile smoke tests on both Windows and Linux are not recorded |
 | 1. Application skeleton | Partial | Project split, DI, logging, settings, native dialogs, CI builds | 3–5 days | Split projects, DI, filtered logging, session/window state, and dialogs exist; CI and verified dual-RID artifacts do not |
-| 2. Assembly workspace | Partial | Open/close sessions, type-bounded lazy tree, metadata/error views | 1–2 weeks | The tree intentionally stops at types; tree virtualization and dedicated metadata/error views remain incomplete |
+| 2. Assembly workspace | Complete | Open/close sessions, type-bounded lazy tree, metadata/error views | 1–2 weeks | The type-bounded tree is lazy and virtualized; resources, metadata-aware hex inspection, and decompilation error views are implemented |
 | 3. Decompiled documents | Complete | Read-only type/member decompilation, tabs, bounded caching, cancellation, and large-document virtualization | 1–2 weeks | The pure-Blazor viewer virtualizes fixed-height lines, caches models/token batches within LRU limits, and restores per-tab scroll state |
 | 4. Navigation and search | Partial | Symbol IDs, history, semantic spans, Ctrl+click, indexed name search | 1–2 weeks | History, symbol IDs, source links, and workspace search exist; links are name-based heuristics and search scans metadata rather than using an index |
 | 5. Project and `.slnx` export | Partial | Whole-project adapter, staging, multi-project mapping, reports, optional build | 1–2 weeks | Export, staging, `.slnx`, progress, reports, and optional validation exist; open-assembly references are not remapped to project references |
