@@ -61,9 +61,9 @@
         @if (restoring && Workspace.ActiveTab is null) { <div class="decompiling-panel"><span class="decompiling-spinner"></span><strong>Restoring session…</strong><small>Loading assemblies and rebuilding the assembly tree.</small></div> }
         else if (Workspace.ActiveTab is { IsLoading: true } loading) { <div class="decompiling-panel"><span class="decompiling-spinner"></span><strong>Decompiling @loading.Title…</strong><small>Restoring saved source after the assembly tree has loaded.</small></div> }
         else if (Workspace.ActiveTab is { Error: not null } failed) { <div class="decompiling-panel error"><strong>Decompilation failed</strong><small>@failed.Error</small></div> }
-        else if (Workspace.ActiveTab is { Document.Resource: { } resource }) { <ResourceView Resource="resource" /> }
+        else if (Workspace.ActiveTab is { Document.Resource: { } resource }) { <ResourceView Resource="resource" WrapLines="wrapLines" /> }
         else if (Workspace.ActiveTab is { Document.Language: "hex", Document.Binary: { } binary } hex) { <HexView Data="binary" SelectionOffset="hex.Document.BinarySelectionOffset" SelectionLength="hex.Document.BinarySelectionLength" Regions="hex.Document.BinaryRegions ?? []" /> }
-        else if (Workspace.ActiveTab is { } active) { <SourceView TabId="active.Id" Document="active.Document" OnNavigate="NavigateFromSourceAsync" /> }
+        else if (Workspace.ActiveTab is { } active) { <SourceView TabId="active.Id" Document="active.Document" WrapLines="wrapLines" OnNavigate="NavigateFromSourceAsync" /> }
       </div>
       @if (searchOpen) {
         <section class="search-panel" @ref="searchPanel" style="height:@($"{searchPanelHeight}px")">
@@ -102,6 +102,7 @@
       <div class="settings-row"><span><strong>Application zoom</strong><small>Scale the entire interface</small></span><div class="application-zoom"><button aria-label="Zoom out" disabled="@(zoomPercent <= MinimumZoom)" @onclick="() => ChangeApplicationZoom(-1)">−</button><button class="zoom-percent" aria-label="Reset zoom to 100%" @onclick="ResetApplicationZoom">@zoomPercent%</button><button aria-label="Zoom in" disabled="@(zoomPercent >= MaximumZoom)" @onclick="() => ChangeApplicationZoom(1)">+</button></div></div>
       <label class="settings-row"><span><strong>Debug logging</strong><small>Write detailed diagnostics to the console</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@debugLogging" @onchange="DebugLoggingChanged" /></label>
       <label class="settings-row"><span><strong>Metadata tokens</strong><small>Show token and RID comments in the main panel</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@showMetadataTokens" @onchange="MetadataTokensChangedAsync" /></label>
+      <label class="settings-row"><span><strong>Line wrapping</strong><small>Wrap long source and resource text lines</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@wrapLines" @onchange="LineWrappingChangedAsync" /></label>
     </section>
   }
 </div>
@@ -139,6 +140,7 @@
   private string themeId = Themes.DefaultId;
   private bool debugLogging;
   private bool showMetadataTokens = true;
+  private bool wrapLines;
   private DecompilerLanguage language = DecompilerLanguage.CSharp;
   private AssemblyDescriptor? contextAssembly;
   private int contextMenuX;
@@ -163,6 +165,7 @@
       themeId = Themes.Normalize(ui.ThemeId);
       debugLogging = ui.DebugLogging;
       showMetadataTokens = ui.ShowMetadataTokens;
+      wrapLines = ui.WrapLines;
       language = ui.Language.ValidOrDefault();
       LoggingSettings.DebugEnabled = debugLogging;
       DisplaySettings.ShowMetadataTokens = showMetadataTokens;
@@ -219,7 +222,7 @@
     }
   }
   private void ScheduleSave() { saveDelay?.Cancel(); saveDelay?.Dispose(); saveDelay = new CancellationTokenSource(); var token = saveDelay.Token; _ = SaveAfterDelayAsync(token); }
-  private UiSessionState CaptureUiState() => new(explorerWidth, searchPanelHeight, searchOpen, searchKind, searchScope, zoomPercent, themeId, debugLogging, language, showMetadataTokens);
+  private UiSessionState CaptureUiState() => new(explorerWidth, searchPanelHeight, searchOpen, searchKind, searchScope, zoomPercent, themeId, debugLogging, language, showMetadataTokens, wrapLines);
   private async Task SaveAfterDelayAsync(CancellationToken token) { try { await Task.Delay(350, token); Session.UiState = CaptureUiState(); await Session.SaveAsync(token); } catch (OperationCanceledException) { } }
   private async Task OpenAsync() { var path = await Dialogs.OpenAssemblyAsync(); if (path is null) return; Workspace.SetBusy(true, "Opening assembly…"); try { await Backend.OpenAsync(path); Workspace.SetBusy(false, $"Opened {Path.GetFileName(path)}"); } catch (Exception ex) { Workspace.SetBusy(false, ex.Message); } }
   private void ToggleMenu() => menuOpen = !menuOpen;
@@ -482,6 +485,12 @@
     Session.UiState = CaptureUiState();
     await Session.SaveAsync();
     foreach (var tab in Workspace.Tabs.Where(tab => tab.Document.Resource is null).ToArray()) await RefreshTabLanguageAsync(tab);
+  }
+  private async Task LineWrappingChangedAsync(ChangeEventArgs e)
+  {
+    wrapLines = e.Value is true;
+    Session.UiState = CaptureUiState();
+    await Session.SaveAsync();
   }
   private async Task ThemeChangedAsync(ChangeEventArgs e)
   {

@@ -156,6 +156,7 @@ internal sealed class AssemblySession : IDisposable
         var resolver = new UniversalAssemblyResolver(path, false, module.DetectTargetFrameworkId());
         resolver.AddSearchDirectory(Path.GetDirectoryName(path)!);
         var settings = new DecompilerSettings { ThrowOnAssemblyResolveErrors = false };
+        settings.CSharpFormattingOptions.IndentationString = "\t";
         settings.CSharpFormattingOptions.IndentSwitchBody = true;
         var decompiler = new CSharpDecompiler(module, resolver, settings);
         var sessionId = Guid.NewGuid();

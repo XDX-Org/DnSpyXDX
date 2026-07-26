@@ -134,6 +134,7 @@ public sealed class DecompilerBackendTests
         Assert.Equal("il-csharp", combined.Language);
         Assert.Equal("hex", hex.Language);
         Assert.Contains("class SampleMembers", csharp.Text, StringComparison.Ordinal);
+        Assert.Contains("\tpublic int SampleField", csharp.Text, StringComparison.Ordinal);
         Assert.Contains(".class", il.Text, StringComparison.Ordinal);
         Assert.Contains("IL_0000:", il.Text, StringComparison.Ordinal);
         Assert.Matches(@"// Token: 0x040[0-9A-F]{5} RID: \d+\n\s*\.field public", il.Text);

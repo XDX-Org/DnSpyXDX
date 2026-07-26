@@ -1,4 +1,4 @@
-<div class="source-line @(IsFocused ? "code-search-focus" : null)" style="height:@($"{LineHeight}px")" role="row">
+<div class="source-line @(WrapLines ? "wrap-lines" : null) @(IsFocused ? "code-search-focus" : null)" style="@LineStyle" role="row">
   <span class="source-line-number" aria-hidden="true">@(Line.Number + 1)</span>
   <code>
     @foreach (var brace in VisibleGuides())
@@ -37,10 +37,24 @@
   [Parameter] public string? HoveredSymbol { get; set; }
   [Parameter] public EventCallback<string?> OnHoverSymbol { get; set; }
   [Parameter] public int LineHeight { get; set; } = 20;
+  [Parameter] public bool WrapLines { get; set; }
 
   private bool IsFocused => FocusedLine == Line.Number;
+  private string LineStyle => WrapLines ? $"--continuation-indent:{LeadingColumns() + SourceDocumentModel.TabWidth}ch" : $"height:{LineHeight}px";
   private bool IsHovered(SourceToken token) => token.SymbolName is not null && token.SymbolName == HoveredSymbol;
   private Task HoverAsync(string? symbol) => OnHoverSymbol.InvokeAsync(symbol);
+
+  private int LeadingColumns()
+  {
+    var columns = 0;
+    foreach (var character in Line.Text)
+    {
+      if (character == '\t') columns += SourceDocumentModel.TabWidth - columns % SourceDocumentModel.TabWidth;
+      else if (character == ' ') columns++;
+      else break;
+    }
+    return columns;
+  }
 
   private Task NavigateAsync(SymbolId target, MouseEventArgs e) =>
     e.AltKey || e.ShiftKey ? Task.CompletedTask : OnNavigate.InvokeAsync(new NavigationRequest(target, e.CtrlKey || e.MetaKey));

@@ -100,4 +100,5 @@ public sealed record UiSessionState(
     string ThemeId = "default",
     bool DebugLogging = false,
     DecompilerLanguage Language = DecompilerLanguage.CSharp,
-    bool ShowMetadataTokens = true);
+    bool ShowMetadataTokens = true,
+    bool WrapLines = false);
