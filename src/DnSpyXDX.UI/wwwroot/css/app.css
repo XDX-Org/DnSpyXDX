@@ -189,7 +189,7 @@ button.source-token.code-link{text-decoration:none}
 .explorer-tree{min-height:0;overflow-y:scroll;padding-bottom:20px}
 
 .settings-row+.settings-row{border-top:1px solid var(--theme-color-30394a)}
-.settings-checkbox{width:17px;height:17px;accent-color:var(--theme-color-7968ff)}
+.settings-checkbox{appearance:none;flex:0 0 auto;width:38px;height:20px;margin:0;border:1px solid var(--theme-color-536078);border-radius:10px;background:var(--theme-color-252d3c);cursor:pointer;transition:background .15s,border-color .15s;position:relative}.settings-checkbox::before{content:"";position:absolute;width:14px;height:14px;left:2px;top:2px;border-radius:50%;background:var(--theme-color-aeb8c7);box-shadow:0 1px 2px var(--theme-color-000b);transition:transform .15s,background .15s}.settings-checkbox:checked{border-color:var(--theme-color-7968ff);background:var(--theme-color-7968ff)}.settings-checkbox:checked::before{transform:translateX(18px);background:var(--theme-color-fff)}.settings-checkbox:focus-visible{outline:2px solid var(--theme-color-4e87c0);outline-offset:2px}
 .settings-select{min-width:130px}
 .language-selector{display:flex;align-items:center;gap:7px;margin-left:auto;color:var(--theme-color-8491a6);font-size:11px}.language-selector select{min-width:108px}
 

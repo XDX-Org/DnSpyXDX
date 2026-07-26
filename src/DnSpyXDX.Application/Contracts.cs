@@ -56,3 +56,13 @@ public sealed class RuntimeLoggingSettings
         set => Volatile.Write(ref debugEnabled, value ? 1 : 0);
     }
 }
+
+public sealed class RuntimeDisplaySettings
+{
+    private int showMetadataTokens = 1;
+    public bool ShowMetadataTokens
+    {
+        get => Volatile.Read(ref showMetadataTokens) != 0;
+        set => Volatile.Write(ref showMetadataTokens, value ? 1 : 0);
+    }
+}

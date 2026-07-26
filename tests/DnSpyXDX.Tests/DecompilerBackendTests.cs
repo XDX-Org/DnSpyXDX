@@ -59,6 +59,28 @@ public sealed class DecompilerBackendTests
     }
 
     [Fact]
+    public async Task Metadata_token_setting_updates_decompiled_output()
+    {
+        var displaySettings = new RuntimeDisplaySettings();
+        await using var backend = new DecompilerBackend(displaySettings);
+        await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
+        var type = Assert.Single(await backend.SearchAsync(nameof(SampleMembers)), result =>
+            result.Kind == "Type" && result.QualifiedName == "DnSpyXDX.Tests.SampleMembers");
+
+        var visible = await backend.DecompileAsync(type.Symbol, DecompilerLanguage.CSharp);
+        displaySettings.ShowMetadataTokens = false;
+        var hidden = await backend.DecompileAsync(type.Symbol, DecompilerLanguage.CSharp);
+        var hiddenIl = await backend.DecompileAsync(type.Symbol, DecompilerLanguage.IL);
+        var hiddenCombined = await backend.DecompileAsync(type.Symbol, DecompilerLanguage.ILWithCSharp);
+
+        Assert.Contains("// Token: 0x", visible.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("// Token: 0x", hidden.Text, StringComparison.Ordinal);
+        Assert.DoesNotMatch(@"/\*\s*[0-9A-Fa-f]{8}\s*\*/", hiddenIl.Text);
+        Assert.Contains("// C#:", hiddenCombined.Text, StringComparison.Ordinal);
+        Assert.DoesNotMatch(@"/\*\s*[0-9A-Fa-f]{8}\s*\*/", hiddenCombined.Text);
+    }
+
+    [Fact]
     public async Task Decompiled_documents_carry_links_for_types_in_the_same_assembly()
     {
         await using var backend = new DecompilerBackend();

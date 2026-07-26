@@ -24,6 +24,7 @@ internal static class Program
                 (level >= LogLevel.Information || loggingSettings.DebugEnabled));
         });
         builder.Services.AddSingleton(loggingSettings);
+        builder.Services.AddSingleton<RuntimeDisplaySettings>();
         builder.Services.AddSingleton<IDecompilerBackend, DecompilerBackend>();
         builder.Services.AddSingleton<IProjectExportService, ProjectExportService>();
         builder.Services.AddSingleton<WorkspaceState>();

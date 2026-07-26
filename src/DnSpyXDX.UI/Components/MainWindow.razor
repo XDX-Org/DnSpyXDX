@@ -10,6 +10,7 @@
 @inject SourceViewStateStore SourceViewStates
 @inject SourcePresentationCache SourceCache
 @inject RuntimeLoggingSettings LoggingSettings
+@inject RuntimeDisplaySettings DisplaySettings
 
 <div class="app-shell">
   <header class="toolbar">
@@ -97,7 +98,8 @@
       <header><strong id="settings-title">Settings</strong><button title="Close settings" aria-label="Close settings" @onclick="CloseSettings">×</button></header>
       <div class="settings-row"><span><strong>Theme</strong><small>Application and code colours</small></span><select class="settings-select" value="@themeId" @onchange="ThemeChangedAsync">@foreach (var theme in Themes.All) { <option value="@theme.Id">@theme.Name</option> }</select></div>
       <div class="settings-row"><span><strong>Application zoom</strong><small>Scale the entire interface</small></span><div class="application-zoom"><button aria-label="Zoom out" disabled="@(zoomPercent <= MinimumZoom)" @onclick="() => ChangeApplicationZoom(-1)">−</button><button class="zoom-percent" aria-label="Reset zoom to 100%" @onclick="ResetApplicationZoom">@zoomPercent%</button><button aria-label="Zoom in" disabled="@(zoomPercent >= MaximumZoom)" @onclick="() => ChangeApplicationZoom(1)">+</button></div></div>
-      <label class="settings-row"><span><strong>Debug logging</strong><small>Write detailed diagnostics to the console</small></span><input class="settings-checkbox" type="checkbox" checked="@debugLogging" @onchange="DebugLoggingChanged" /></label>
+      <label class="settings-row"><span><strong>Debug logging</strong><small>Write detailed diagnostics to the console</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@debugLogging" @onchange="DebugLoggingChanged" /></label>
+      <label class="settings-row"><span><strong>Metadata tokens</strong><small>Show token and RID comments in the main panel</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@showMetadataTokens" @onchange="MetadataTokensChangedAsync" /></label>
     </section>
   }
 </div>
@@ -134,6 +136,7 @@
   private int zoomPercent = 100;
   private string themeId = Themes.DefaultId;
   private bool debugLogging;
+  private bool showMetadataTokens = true;
   private DecompilerLanguage language = DecompilerLanguage.CSharp;
   private AssemblyDescriptor? contextAssembly;
   private int contextMenuX;
@@ -157,8 +160,10 @@
       zoomPercent = ui.ZoomPercent <= 0 ? 100 : Math.Clamp(ui.ZoomPercent, MinimumZoom, MaximumZoom);
       themeId = Themes.Normalize(ui.ThemeId);
       debugLogging = ui.DebugLogging;
+      showMetadataTokens = ui.ShowMetadataTokens;
       language = ui.Language.ValidOrDefault();
       LoggingSettings.DebugEnabled = debugLogging;
+      DisplaySettings.ShowMetadataTokens = showMetadataTokens;
       Zoom.SetZoom(zoomPercent);
     }
     catch (Exception ex) { restoring = false; Workspace.SetBusy(false, $"Session restore failed: {ex.Message}"); }
@@ -212,7 +217,7 @@
     }
   }
   private void ScheduleSave() { saveDelay?.Cancel(); saveDelay?.Dispose(); saveDelay = new CancellationTokenSource(); var token = saveDelay.Token; _ = SaveAfterDelayAsync(token); }
-  private UiSessionState CaptureUiState() => new(explorerWidth, searchPanelHeight, searchOpen, searchKind, searchScope, zoomPercent, themeId, debugLogging, language);
+  private UiSessionState CaptureUiState() => new(explorerWidth, searchPanelHeight, searchOpen, searchKind, searchScope, zoomPercent, themeId, debugLogging, language, showMetadataTokens);
   private async Task SaveAfterDelayAsync(CancellationToken token) { try { await Task.Delay(350, token); Session.UiState = CaptureUiState(); await Session.SaveAsync(token); } catch (OperationCanceledException) { } }
   private async Task OpenAsync() { var path = await Dialogs.OpenAssemblyAsync(); if (path is null) return; Workspace.SetBusy(true, "Opening assembly…"); try { await Backend.OpenAsync(path); Workspace.SetBusy(false, $"Opened {Path.GetFileName(path)}"); } catch (Exception ex) { Workspace.SetBusy(false, ex.Message); } }
   private void ToggleMenu() => menuOpen = !menuOpen;
@@ -433,6 +438,14 @@
     LoggingSettings.DebugEnabled = debugLogging;
     Session.UiState = CaptureUiState();
     await Session.SaveAsync();
+  }
+  private async Task MetadataTokensChangedAsync(ChangeEventArgs e)
+  {
+    showMetadataTokens = e.Value is true;
+    DisplaySettings.ShowMetadataTokens = showMetadataTokens;
+    Session.UiState = CaptureUiState();
+    await Session.SaveAsync();
+    foreach (var tab in Workspace.Tabs.ToArray()) await RefreshTabLanguageAsync(tab);
   }
   private async Task ThemeChangedAsync(ChangeEventArgs e)
   {

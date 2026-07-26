@@ -18,6 +18,10 @@ namespace DnSpyXDX.Decompilation;
 public sealed class DecompilerBackend : IDecompilerBackend
 {
     private readonly ConcurrentDictionary<Guid, AssemblySession> sessions = new();
+    private readonly RuntimeDisplaySettings displaySettings;
+
+    public DecompilerBackend() : this(new RuntimeDisplaySettings()) { }
+    public DecompilerBackend(RuntimeDisplaySettings displaySettings) => this.displaySettings = displaySettings;
     public IReadOnlyList<AssemblyDescriptor> Assemblies => sessions.Values.Select(s => s.Descriptor).OrderBy(s => s.Name).ToArray();
 
     public Task<AssemblyDescriptor> OpenAsync(string path, CancellationToken cancellationToken = default)
@@ -27,7 +31,7 @@ public sealed class DecompilerBackend : IDecompilerBackend
             cancellationToken.ThrowIfCancellationRequested();
             var fullPath = Path.GetFullPath(path);
             if (!File.Exists(fullPath)) throw new FileNotFoundException("Assembly not found.", fullPath);
-            var session = AssemblySession.Open(fullPath);
+            var session = AssemblySession.Open(fullPath, displaySettings);
             if (!sessions.TryAdd(session.Descriptor.SessionId, session)) { session.Dispose(); throw new InvalidOperationException("Could not add assembly session."); }
             return session.Descriptor;
         }, cancellationToken);
@@ -113,22 +117,24 @@ internal sealed class AssemblySession : IDisposable
     private readonly DecompilerSettings settings;
     private readonly MetadataTypeNameProvider typeNames;
     private readonly SemaphoreSlim gate = new(1, 1);
-    private readonly Dictionary<(int Token, DecompilerLanguage Language), DecompilerDocument> cache = [];
+    private readonly RuntimeDisplaySettings displaySettings;
+    private readonly Dictionary<(int Token, DecompilerLanguage Language, bool ShowMetadataTokens), DecompilerDocument> cache = [];
     private IReadOnlyDictionary<string, SymbolId>? typeLinks;
     private IReadOnlyDictionary<string, string>? typeClassifications;
     public AssemblyDescriptor Descriptor { get; }
 
-    private AssemblySession(PEFile module, CSharpDecompiler decompiler, DecompilerSettings settings, AssemblyDescriptor descriptor)
+    private AssemblySession(PEFile module, CSharpDecompiler decompiler, DecompilerSettings settings, AssemblyDescriptor descriptor, RuntimeDisplaySettings displaySettings)
     {
         this.module = module;
         metadata = module.Metadata;
         this.decompiler = decompiler;
         this.settings = settings;
+        this.displaySettings = displaySettings;
         typeNames = new MetadataTypeNameProvider(metadata);
         Descriptor = descriptor;
     }
 
-    public static AssemblySession Open(string path)
+    public static AssemblySession Open(string path, RuntimeDisplaySettings displaySettings)
     {
         PEFile module;
         try { module = new PEFile(path, PEStreamOptions.PrefetchEntireImage); }
@@ -145,7 +151,7 @@ internal sealed class AssemblySession : IDisposable
         var decompiler = new CSharpDecompiler(module, resolver, settings);
         var sessionId = Guid.NewGuid();
         var descriptor = new AssemblyDescriptor(sessionId, mvid, name, path, module.DetectTargetFrameworkId() ?? "Unknown", module.Reader.PEHeaders.CoffHeader.Machine.ToString(), new NodeId(sessionId, "root"));
-        return new AssemblySession(module, decompiler, settings, descriptor);
+        return new AssemblySession(module, decompiler, settings, descriptor, displaySettings);
     }
 
     public IReadOnlyList<TreeNodeDescriptor> GetChildren(NodeId parent, CancellationToken ct)
@@ -340,7 +346,8 @@ internal sealed class AssemblySession : IDisposable
     public async Task<DecompilerDocument> DecompileAsync(SymbolId symbol, DecompilerLanguage language, CancellationToken ct)
     {
         if (!Enum.IsDefined(language)) throw new ArgumentOutOfRangeException(nameof(language));
-        var key = (symbol.MetadataToken, language);
+        var showMetadataTokens = displaySettings.ShowMetadataTokens;
+        var key = (symbol.MetadataToken, language, showMetadataTokens);
         if (cache.TryGetValue(key, out var cached)) return cached;
         await gate.WaitAsync(ct);
         try
@@ -350,9 +357,9 @@ internal sealed class AssemblySession : IDisposable
             decompiler.CancellationToken = ct;
             var text = await Task.Run(() => language switch
             {
-                DecompilerLanguage.CSharp => DecompileCSharp(handle),
-                DecompilerLanguage.IL => Disassemble(handle, ct),
-                DecompilerLanguage.ILWithCSharp => DisassembleWithCSharp(handle, ct),
+                DecompilerLanguage.CSharp => DecompileCSharp(handle, showMetadataTokens),
+                DecompilerLanguage.IL => Disassemble(handle, ct, showMetadataTokens),
+                DecompilerLanguage.ILWithCSharp => DisassembleWithCSharp(handle, ct, showMetadataTokens),
                 _ => throw new ArgumentOutOfRangeException(nameof(language))
             }, ct);
             ct.ThrowIfCancellationRequested();
@@ -366,16 +373,17 @@ internal sealed class AssemblySession : IDisposable
         finally { decompiler.CancellationToken = default; gate.Release(); }
     }
 
-    private string DecompileCSharp(EntityHandle handle)
+    private string DecompileCSharp(EntityHandle handle, bool showMetadataTokens)
     {
         var source = decompiler.DecompileAsString([handle]);
-        return AddTokenComments(AddNamespaceDeclaration(source, DeclaringTypeOf(handle)), handle);
+        source = AddNamespaceDeclaration(source, DeclaringTypeOf(handle));
+        return showMetadataTokens ? AddTokenComments(source, handle) : source;
     }
 
-    private string Disassemble(EntityHandle handle, CancellationToken ct, bool formatDeclarationTokens = true)
+    private string Disassemble(EntityHandle handle, CancellationToken ct, bool showMetadataTokens, bool formatDeclarationTokens = true)
     {
         var output = new PlainTextOutput();
-        var disassembler = new ReflectionDisassembler(output, ct) { DetectControlStructure = true, ShowMetadataTokens = true };
+        var disassembler = new ReflectionDisassembler(output, ct) { DetectControlStructure = true, ShowMetadataTokens = showMetadataTokens };
         switch (handle.Kind)
         {
             case HandleKind.TypeDefinition: disassembler.DisassembleType(module, (TypeDefinitionHandle)handle); break;
@@ -386,10 +394,10 @@ internal sealed class AssemblySession : IDisposable
             default: throw new NotSupportedException($"Cannot disassemble metadata handle {handle.Kind}.");
         }
         var text = output.ToString();
-        return formatDeclarationTokens ? FormatMetadataTokens(text) : text;
+        return showMetadataTokens && formatDeclarationTokens ? FormatMetadataTokens(text) : text;
     }
 
-    private string DisassembleWithCSharp(EntityHandle handle, CancellationToken ct)
+    private string DisassembleWithCSharp(EntityHandle handle, CancellationToken ct, bool showMetadataTokens)
     {
         var syntaxTree = decompiler.Decompile([handle]);
         using var writer = new StringWriter();
@@ -402,7 +410,9 @@ internal sealed class AssemblySession : IDisposable
             .ToDictionary(
                 group => group.Key,
                 group => group.SelectMany(pair => pair.Value).Where(point => !point.IsHidden).OrderBy(point => point.Offset).ToArray());
-        var il = Disassemble(handle, ct, formatDeclarationTokens: false);
+        // Method tokens are required to associate sequence points with IL methods even when
+        // their presentation is disabled.
+        var il = Disassemble(handle, ct, showMetadataTokens: true, formatDeclarationTokens: false);
         var sourceLines = csharp.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
         var output = new StringBuilder(il.Length + csharp.Length / 3);
         IReadOnlyList<ICSharpCode.Decompiler.DebugInfo.SequencePoint> points = [];
@@ -432,7 +442,8 @@ internal sealed class AssemblySession : IDisposable
             }
             output.AppendLine(line);
         }
-        return FormatMetadataTokens(output.ToString());
+        var text = output.ToString();
+        return showMetadataTokens ? FormatMetadataTokens(text) : InlineMetadataToken.Replace(text, "");
     }
 
     private static string FormatMetadataTokens(string text) => MetadataTokenLine.Replace(text, match =>

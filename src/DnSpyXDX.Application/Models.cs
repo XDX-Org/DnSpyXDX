@@ -89,4 +89,5 @@ public sealed record UiSessionState(
     int ZoomPercent = 100,
     string ThemeId = "default",
     bool DebugLogging = false,
-    DecompilerLanguage Language = DecompilerLanguage.CSharp);
+    DecompilerLanguage Language = DecompilerLanguage.CSharp,
+    bool ShowMetadataTokens = true);
