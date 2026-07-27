@@ -9,6 +9,7 @@ Start with centrally managed packages in `Directory.Packages.props`.
 | Window + Blazor host | `Photino.Blazor` | Start with stable 4.0.13; prove .NET 10 on both OSes in Phase 0 |
 | Decompiler | `ICSharpCode.Decompiler` | Start with stable 10.1.1.8388; do not take an 11 preview for the MVP |
 | Logging | `Microsoft.Extensions.Logging` | Match .NET 10 |
+| CoreCLR debugger | `NetCoreDbg` | Pin one tested MIT-licensed release per RID; package as a separate native debugger payload |
 | Options/DI | `Microsoft.Extensions.*` | Match .NET 10 |
 | Source viewer | Monaco Editor | Pin and vendor/build the required browser assets |
 | Unit tests | xUnit or NUnit | Use the team's preference |
@@ -49,6 +50,19 @@ dotnet publish src/DnSpyXDX.Host -c Release -r linux-x64 \
 ```
 
 Do not enable trimming, Native AOT, or single-file publishing initially. Decompiler code, Blazor assets, and Photino's native library loading all deserve dedicated tests before those optimizations.
+
+`eng/NetCoreDbg.targets` pins release `3.2.0-1092`. Host builds and publishes:
+
+1. select `win-x64` or `linux-x64` from `RuntimeIdentifier`, falling back to SDK host RID;
+2. download matching official archive into project `obj` cache when absent;
+3. verify pinned SHA-256 before extraction;
+4. copy complete adapter payload into `debuggers/netcoredbg/<RID>`;
+5. copy NetCoreDbg MIT license beside RID payloads.
+
+No debugger binary is downloaded at application runtime. First clean build requires GitHub access.
+Subsequent builds use cached verified archive. `BundleNetCoreDbg=false` disables acquisition for
+offline or externally packaged builds. Unsupported RIDs fail with an actionable build error while
+bundling is enabled.
 
 ### Native UI dependencies
 

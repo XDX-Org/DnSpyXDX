@@ -1,0 +1,81 @@
+<Project>
+  <PropertyGroup>
+    <BundleNetCoreDbg Condition="'$(BundleNetCoreDbg)' == ''">true</BundleNetCoreDbg>
+    <NetCoreDbgVersion Condition="'$(NetCoreDbgVersion)' == ''">3.2.0-1092</NetCoreDbgVersion>
+    <_NetCoreDbgRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</_NetCoreDbgRid>
+    <_NetCoreDbgRid Condition="'$(_NetCoreDbgRid)' == ''">$(NETCoreSdkRuntimeIdentifier)</_NetCoreDbgRid>
+    <_NetCoreDbgPlatform Condition="'$(_NetCoreDbgRid)' == 'win-x64'">win64</_NetCoreDbgPlatform>
+    <_NetCoreDbgPlatform Condition="'$(_NetCoreDbgRid)' == 'linux-x64'">linux-amd64</_NetCoreDbgPlatform>
+    <_NetCoreDbgArchiveName Condition="'$(_NetCoreDbgRid)' == 'win-x64'">netcoredbg-win64.zip</_NetCoreDbgArchiveName>
+    <_NetCoreDbgArchiveName Condition="'$(_NetCoreDbgRid)' == 'linux-x64'">netcoredbg-linux-amd64.tar.gz</_NetCoreDbgArchiveName>
+    <_NetCoreDbgArchiveHash Condition="'$(_NetCoreDbgRid)' == 'win-x64'">3C410A45FA502415203A94FCB88654AF65BF8E3DAC158A5527A722E7A6B9274A</_NetCoreDbgArchiveHash>
+    <_NetCoreDbgArchiveHash Condition="'$(_NetCoreDbgRid)' == 'linux-x64'">080EB3B2D2152465F599D3B33D1EE6E747794E11CC0A3773EC689F5E5F2C5AFA</_NetCoreDbgArchiveHash>
+    <_NetCoreDbgCacheDir>$(BaseIntermediateOutputPath)netcoredbg/$(NetCoreDbgVersion)/$(_NetCoreDbgRid)/</_NetCoreDbgCacheDir>
+    <_NetCoreDbgArchive>$(_NetCoreDbgCacheDir)$(_NetCoreDbgArchiveName)</_NetCoreDbgArchive>
+    <_NetCoreDbgExtractDir>$(_NetCoreDbgCacheDir)extracted/</_NetCoreDbgExtractDir>
+    <_NetCoreDbgExecutable Condition="'$(_NetCoreDbgRid)' == 'win-x64'">$(_NetCoreDbgExtractDir)netcoredbg/netcoredbg.exe</_NetCoreDbgExecutable>
+    <_NetCoreDbgExecutable Condition="'$(_NetCoreDbgRid)' == 'linux-x64'">$(_NetCoreDbgExtractDir)netcoredbg/netcoredbg</_NetCoreDbgExecutable>
+    <_NetCoreDbgDownloadUrl>https://github.com/Samsung/netcoredbg/releases/download/$(NetCoreDbgVersion)/$(_NetCoreDbgArchiveName)</_NetCoreDbgDownloadUrl>
+    <_NetCoreDbgLicense>$(MSBuildThisFileDirectory)../licenses/NetCoreDbg-LICENSE.txt</_NetCoreDbgLicense>
+  </PropertyGroup>
+
+  <Target Name="AcquireNetCoreDbg"
+          Condition="'$(BundleNetCoreDbg)' == 'true'"
+          BeforeTargets="Build;Publish">
+    <Error Condition="'$(_NetCoreDbgPlatform)' == ''"
+           Text="Bundled NetCoreDbg supports win-x64 and linux-x64. Set BundleNetCoreDbg=false for unsupported RID '$(_NetCoreDbgRid)'." />
+    <MakeDir Directories="$(_NetCoreDbgCacheDir);$(_NetCoreDbgExtractDir)" />
+    <Message Condition="!Exists('$(_NetCoreDbgArchive)')"
+             Importance="High"
+             Text="Downloading pinned NetCoreDbg $(NetCoreDbgVersion) for $(_NetCoreDbgRid)..." />
+    <DownloadFile Condition="!Exists('$(_NetCoreDbgArchive)')"
+                  SourceUrl="$(_NetCoreDbgDownloadUrl)"
+                  DestinationFolder="$(_NetCoreDbgCacheDir)"
+                  DestinationFileName="$(_NetCoreDbgArchiveName)"
+                  Retries="3"
+                  RetryDelayMilliseconds="1000"
+                  SkipUnchangedFiles="true" />
+    <VerifyFileHash File="$(_NetCoreDbgArchive)"
+                    Hash="$(_NetCoreDbgArchiveHash)"
+                    Algorithm="SHA256" />
+    <Unzip Condition="'$(_NetCoreDbgRid)' == 'win-x64' and !Exists('$(_NetCoreDbgExecutable)')"
+           SourceFiles="$(_NetCoreDbgArchive)"
+           DestinationFolder="$(_NetCoreDbgExtractDir)"
+           OverwriteReadOnlyFiles="true" />
+    <Exec Condition="'$(_NetCoreDbgRid)' == 'linux-x64' and !Exists('$(_NetCoreDbgExecutable)')"
+          Command="tar -xzf &quot;$(_NetCoreDbgArchive)&quot; -C &quot;$(_NetCoreDbgExtractDir)&quot;"
+          StandardOutputImportance="Low" />
+    <Error Condition="!Exists('$(_NetCoreDbgExecutable)')"
+           Text="NetCoreDbg archive did not contain expected executable '$(_NetCoreDbgExecutable)'." />
+  </Target>
+
+  <Target Name="CopyNetCoreDbgToOutput"
+          Condition="'$(BundleNetCoreDbg)' == 'true'"
+          DependsOnTargets="AcquireNetCoreDbg"
+          AfterTargets="Build">
+    <ItemGroup>
+      <_NetCoreDbgFiles Include="$(_NetCoreDbgExtractDir)netcoredbg/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_NetCoreDbgFiles)"
+          DestinationFiles="@(_NetCoreDbgFiles->'$(OutDir)debuggers/netcoredbg/$(_NetCoreDbgRid)/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(_NetCoreDbgLicense)"
+          DestinationFiles="$(OutDir)debuggers/netcoredbg/NetCoreDbg-LICENSE.txt"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="CopyNetCoreDbgToPublish"
+          Condition="'$(BundleNetCoreDbg)' == 'true'"
+          DependsOnTargets="AcquireNetCoreDbg"
+          AfterTargets="Publish">
+    <ItemGroup>
+      <_NetCoreDbgPublishFiles Include="$(_NetCoreDbgExtractDir)netcoredbg/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_NetCoreDbgPublishFiles)"
+          DestinationFiles="@(_NetCoreDbgPublishFiles->'$(PublishDir)debuggers/netcoredbg/$(_NetCoreDbgRid)/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(_NetCoreDbgLicense)"
+          DestinationFiles="$(PublishDir)debuggers/netcoredbg/NetCoreDbg-LICENSE.txt"
+          SkipUnchangedFiles="true" />
+  </Target>
+</Project>

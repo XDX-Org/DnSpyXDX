@@ -2,11 +2,13 @@
   <Folder Name="/src/">
     <Project Path="src/DnSpyXDX.Application/DnSpyXDX.Application.csproj" />
     <Project Path="src/DnSpyXDX.Decompilation/DnSpyXDX.Decompilation.csproj" />
+    <Project Path="src/DnSpyXDX.Debugging/DnSpyXDX.Debugging.csproj" />
     <Project Path="src/DnSpyXDX.Export/DnSpyXDX.Export.csproj" />
     <Project Path="src/DnSpyXDX.UI/DnSpyXDX.UI.csproj" />
     <Project Path="src/DnSpyXDX.Host/DnSpyXDX.Host.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/DnSpyXDX.Debugger.TestWorker/DnSpyXDX.Debugger.TestWorker.csproj" />
     <Project Path="tests/DnSpyXDX.Tests/DnSpyXDX.Tests.csproj" />
   </Folder>
 </Solution>

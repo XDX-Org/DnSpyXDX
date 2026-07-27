@@ -86,7 +86,8 @@ public sealed record DecompilerDocument(
     IReadOnlyList<BinaryRegion>? BinaryRegions = null,
     ResourceDocument? Resource = null,
     IReadOnlyDictionary<int, int>? SymbolLocations = null,
-    IReadOnlyList<ClassifiedSpan>? SemanticSpans = null);
+    IReadOnlyList<ClassifiedSpan>? SemanticSpans = null,
+    DebugDocumentMap? DebugMap = null);
 
 public sealed record SearchResult(SymbolId Symbol, string Name, string Kind, string AssemblyName, string Namespace, SymbolId DeclaringType, string? QualifiedName = null);
 

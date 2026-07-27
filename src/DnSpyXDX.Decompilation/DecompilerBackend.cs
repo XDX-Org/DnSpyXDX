@@ -11,6 +11,7 @@ using System.Resources;
 using ICSharpCode.Decompiler;
 using ICSharpCode.Decompiler.CSharp;
 using ICSharpCode.Decompiler.CSharp.OutputVisitor;
+using ICSharpCode.Decompiler.CSharp.Syntax;
 using ICSharpCode.Decompiler.Disassembler;
 using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.Decompiler.TypeSystem;
@@ -561,19 +562,31 @@ internal sealed class AssemblySession : IDisposable
 
     private static string MemberVisibility(MethodAttributes attributes) => (attributes & MethodAttributes.MemberAccessMask) switch
     {
-        MethodAttributes.Public => "public", MethodAttributes.Family => "protected", MethodAttributes.Assembly => "internal",
-        MethodAttributes.FamORAssem => "protected internal", MethodAttributes.FamANDAssem => "private protected", _ => "private"
+        MethodAttributes.Public => "public",
+        MethodAttributes.Family => "protected",
+        MethodAttributes.Assembly => "internal",
+        MethodAttributes.FamORAssem => "protected internal",
+        MethodAttributes.FamANDAssem => "private protected",
+        _ => "private"
     };
     private static string MemberVisibility(FieldAttributes attributes) => (attributes & FieldAttributes.FieldAccessMask) switch
     {
-        FieldAttributes.Public => "public", FieldAttributes.Family => "protected", FieldAttributes.Assembly => "internal",
-        FieldAttributes.FamORAssem => "protected internal", FieldAttributes.FamANDAssem => "private protected", _ => "private"
+        FieldAttributes.Public => "public",
+        FieldAttributes.Family => "protected",
+        FieldAttributes.Assembly => "internal",
+        FieldAttributes.FamORAssem => "protected internal",
+        FieldAttributes.FamANDAssem => "private protected",
+        _ => "private"
     };
     private static string TypeVisibility(TypeAttributes attributes) => (attributes & TypeAttributes.VisibilityMask) switch
     {
-        TypeAttributes.Public or TypeAttributes.NestedPublic => "public", TypeAttributes.NestedFamily => "protected",
-        TypeAttributes.NestedAssembly => "internal", TypeAttributes.NestedFamORAssem => "protected internal",
-        TypeAttributes.NestedFamANDAssem => "private protected", TypeAttributes.NestedPrivate => "private", _ => "internal"
+        TypeAttributes.Public or TypeAttributes.NestedPublic => "public",
+        TypeAttributes.NestedFamily => "protected",
+        TypeAttributes.NestedAssembly => "internal",
+        TypeAttributes.NestedFamORAssem => "protected internal",
+        TypeAttributes.NestedFamANDAssem => "private protected",
+        TypeAttributes.NestedPrivate => "private",
+        _ => "internal"
     };
 
     // Fire-and-forget JIT warm-up. The first heavy decompile in the process is several times slower than
@@ -659,13 +672,30 @@ internal sealed class AssemblySession : IDisposable
             string text;
             IReadOnlyList<ClassifiedSpan>? semanticSpans = null;
             IReadOnlyList<ReferenceSpan> csharpReferences = [];
+            DebugDocumentMap? debugMap = null;
             if (language == DecompilerLanguage.CSharp)
-                (text, semanticSpans, csharpReferences) = await Task.Run(() => DecompileCSharp(handle, showMetadataTokens), ct);
+                (text, semanticSpans, csharpReferences, debugMap) = await Task.Run(
+                    () => DecompileCSharp(symbol, handle, showMetadataTokens),
+                    ct);
+            else if (language == DecompilerLanguage.IL)
+                (text, debugMap) = await Task.Run(
+                    () => DisassembleWithDebugMap(
+                        symbol,
+                        handle,
+                        ct,
+                        showMetadataTokens),
+                    ct);
+            else if (language == DecompilerLanguage.ILWithCSharp)
+                (text, debugMap) = await Task.Run(
+                    () => DisassembleWithCSharp(
+                        symbol,
+                        handle,
+                        ct,
+                        showMetadataTokens),
+                    ct);
             else
                 text = await Task.Run(() => language switch
                 {
-                    DecompilerLanguage.IL => Disassemble(handle, ct, showMetadataTokens),
-                    DecompilerLanguage.ILWithCSharp => DisassembleWithCSharp(handle, ct, showMetadataTokens),
                     DecompilerLanguage.Hex => "",
                     _ => throw new ArgumentOutOfRangeException(nameof(language))
                 }, ct);
@@ -682,7 +712,8 @@ internal sealed class AssemblySession : IDisposable
             // referenced assembly) is only built for the IL view that still relies on lexical classification.
             var classifications = language == DecompilerLanguage.CSharp ? null : BuildClassifications(handle);
             var result = new DecompilerDocument(symbol, title, language.Key(), text, references, [], links, TypeClassifications: classifications, Binary: binary,
-                BinarySelectionOffset: selection?.Offset, BinarySelectionLength: selection?.Length ?? 0, BinaryRegions: regions, SymbolLocations: symbolLocations, SemanticSpans: semanticSpans);
+                BinarySelectionOffset: selection?.Offset, BinarySelectionLength: selection?.Length ?? 0, BinaryRegions: regions, SymbolLocations: symbolLocations,
+                SemanticSpans: semanticSpans, DebugMap: debugMap);
             cache[key] = result;
             // Persist off the gate so writing the entry never delays returning the document to the UI.
             if (cacheable) _ = Task.Run(() => documentCache!.Save(assemblyId!, result, language, showMetadataTokens));
@@ -691,7 +722,14 @@ internal sealed class AssemblySession : IDisposable
         finally { decompiler.CancellationToken = default; gate.Release(); }
     }
 
-    private (string Text, IReadOnlyList<ClassifiedSpan> Spans, IReadOnlyList<ReferenceSpan> References) DecompileCSharp(EntityHandle handle, bool showMetadataTokens)
+    private (
+        string Text,
+        IReadOnlyList<ClassifiedSpan> Spans,
+        IReadOnlyList<ReferenceSpan> References,
+        DebugDocumentMap DebugMap) DecompileCSharp(
+            SymbolId symbol,
+            EntityHandle handle,
+            bool showMetadataTokens)
     {
         // Decompile to a syntax tree and paint each token from its bound symbol (dnSpy's approach) rather
         // than lexically. The namespace header and dnSpy-style token comments are then folded back in while
@@ -701,12 +739,15 @@ internal sealed class AssemblySession : IDisposable
         var lines = SplitIntoClassifiedLines(text, spans, references);
         InsertNamespaceLine(lines, DeclaringTypeOf(handle));
         if (showMetadataTokens) InsertTokenCommentLines(lines, handle);
-        return FlattenClassifiedLines(lines);
+        var debugMap = BuildDebugDocumentMap(symbol, tree, lines);
+        var flattened = FlattenClassifiedLines(lines);
+        return (flattened.Text, flattened.Spans, flattened.References, debugMap);
     }
 
-    private sealed class ClassifiedLine(string text)
+    private sealed class ClassifiedLine(string text, int? originalLine = null)
     {
         public string Text { get; } = text;
+        public int? OriginalLine { get; } = originalLine;
         // Spans and references are stored relative to the start of the line so inserting whole lines never
         // disturbs them; they are rebased to absolute offsets when the lines are flattened back to text.
         public List<ClassifiedSpan> Spans { get; } = [];
@@ -722,7 +763,7 @@ internal sealed class AssemblySession : IDisposable
         {
             var start = starts[line];
             var end = line + 1 < starts.Count ? starts[line + 1] - 1 : text.Length;
-            lines.Add(new ClassifiedLine(text[start..end]));
+            lines.Add(new ClassifiedLine(text[start..end], line));
         }
         foreach (var span in spans)
         {
@@ -772,6 +813,59 @@ internal sealed class AssemblySession : IDisposable
             if (index + 1 < lines.Count) builder.Append('\n');
         }
         return (builder.ToString(), spans, references);
+    }
+
+    private DebugDocumentMap BuildDebugDocumentMap(
+        SymbolId document,
+        SyntaxTree tree,
+        IReadOnlyList<ClassifiedLine> lines)
+    {
+        var originalLines = new Dictionary<int, (int Offset, int Length)>();
+        var documentOffset = 0;
+        for (var index = 0; index < lines.Count; index++)
+        {
+            var line = lines[index];
+            if (line.OriginalLine is { } originalLine)
+                originalLines[originalLine] = (documentOffset, line.Text.Length);
+            documentOffset += line.Text.Length;
+            if (index + 1 < lines.Count) documentOffset++;
+        }
+
+        var points = new List<DebugDocumentSequencePoint>();
+        foreach (var method in decompiler.CreateSequencePoints(tree))
+        {
+            var methodHandle = method.Key.Method?.MetadataToken;
+            if (methodHandle is null || methodHandle.Value.Kind != HandleKind.MethodDefinition)
+                continue;
+            var methodId = new DebugMethodId(
+                Descriptor.ModuleMvid,
+                MetadataTokens.GetToken(methodHandle.Value));
+            foreach (var point in method.Value)
+            {
+                if (point.IsHidden ||
+                    !originalLines.TryGetValue(point.StartLine - 1, out var startLine) ||
+                    !originalLines.TryGetValue(point.EndLine - 1, out var endLine))
+                    continue;
+                var start = startLine.Offset +
+                    Math.Clamp(point.StartColumn - 1, 0, startLine.Length);
+                var end = endLine.Offset +
+                    Math.Clamp(point.EndColumn - 1, 0, endLine.Length);
+                if (end <= start) continue;
+                points.Add(new DebugDocumentSequencePoint(
+                    start,
+                    end - start,
+                    new DebugCodeLocation(methodId, point.Offset),
+                    point.EndOffset));
+            }
+        }
+
+        return new DebugDocumentMap(
+            document,
+            points.OrderBy(point => point.StartOffset)
+                .ThenBy(point => point.Length)
+                .ThenBy(point => point.Location.Method.MetadataToken)
+                .ThenBy(point => point.Location.ILOffset)
+                .ToArray());
     }
 
     private void InsertNamespaceLine(List<ClassifiedLine> lines, TypeDefinitionHandle typeHandle)
@@ -898,24 +992,24 @@ internal sealed class AssemblySession : IDisposable
             if (firstTableOffset > 0) AddRegion(regions, metadataOffset, firstTableOffset, ".NET metadata root, stream headers, and tables header");
             foreach (var table in Enum.GetValues<TableIndex>())
             {
-            var rows = metadata.GetTableRowCount(table);
-            var rowSize = metadata.GetTableRowSize(table);
-            if (rows == 0 || rowSize == 0) continue;
-            for (var row = 1; row <= rows; row++)
-            {
-                var offset = metadataOffset + metadata.GetTableMetadataOffset(table) + (row - 1) * rowSize;
-                var token = ((int)table << 24) | row;
-                var name = table switch
+                var rows = metadata.GetTableRowCount(table);
+                var rowSize = metadata.GetTableRowSize(table);
+                if (rows == 0 || rowSize == 0) continue;
+                for (var row = 1; row <= rows; row++)
                 {
-                    TableIndex.TypeDef => metadata.GetString(metadata.GetTypeDefinition(MetadataTokens.TypeDefinitionHandle(row)).Name),
-                    TableIndex.MethodDef => metadata.GetString(metadata.GetMethodDefinition(MetadataTokens.MethodDefinitionHandle(row)).Name),
-                    TableIndex.Field => metadata.GetString(metadata.GetFieldDefinition(MetadataTokens.FieldDefinitionHandle(row)).Name),
-                    TableIndex.Property => metadata.GetString(metadata.GetPropertyDefinition(MetadataTokens.PropertyDefinitionHandle(row)).Name),
-                    TableIndex.Event => metadata.GetString(metadata.GetEventDefinition(MetadataTokens.EventDefinitionHandle(row)).Name),
-                    _ => null
-                };
-                regions.Add(new BinaryRegion(offset, rowSize, $"{table} row {row}{(name is null ? "" : $": {name}")} (token 0x{token:X8}, {rowSize} bytes)", IsEntity: true));
-            }
+                    var offset = metadataOffset + metadata.GetTableMetadataOffset(table) + (row - 1) * rowSize;
+                    var token = ((int)table << 24) | row;
+                    var name = table switch
+                    {
+                        TableIndex.TypeDef => metadata.GetString(metadata.GetTypeDefinition(MetadataTokens.TypeDefinitionHandle(row)).Name),
+                        TableIndex.MethodDef => metadata.GetString(metadata.GetMethodDefinition(MetadataTokens.MethodDefinitionHandle(row)).Name),
+                        TableIndex.Field => metadata.GetString(metadata.GetFieldDefinition(MetadataTokens.FieldDefinitionHandle(row)).Name),
+                        TableIndex.Property => metadata.GetString(metadata.GetPropertyDefinition(MetadataTokens.PropertyDefinitionHandle(row)).Name),
+                        TableIndex.Event => metadata.GetString(metadata.GetEventDefinition(MetadataTokens.EventDefinitionHandle(row)).Name),
+                        _ => null
+                    };
+                    regions.Add(new BinaryRegion(offset, rowSize, $"{table} row {row}{(name is null ? "" : $": {name}")} (token 0x{token:X8}, {rowSize} bytes)", IsEntity: true));
+                }
             }
         }
         return regions;
@@ -1000,7 +1094,55 @@ internal sealed class AssemblySession : IDisposable
         return showMetadataTokens && formatDeclarationTokens ? FormatMetadataTokens(text) : text;
     }
 
-    private string DisassembleWithCSharp(EntityHandle handle, CancellationToken ct, bool showMetadataTokens)
+    private (string Text, DebugDocumentMap DebugMap) DisassembleWithDebugMap(
+        SymbolId document,
+        EntityHandle handle,
+        CancellationToken ct,
+        bool showMetadataTokens)
+    {
+        var raw = Disassemble(
+            handle,
+            ct,
+            showMetadataTokens: true,
+            formatDeclarationTokens: false);
+        var output = new StringBuilder(raw.Length);
+        var points = new List<ILDocumentPoint>();
+        int? methodToken = null;
+        foreach (var rawLine in raw.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
+        {
+            ct.ThrowIfCancellationRequested();
+            var method = MethodToken.Match(rawLine);
+            if (method.Success)
+                methodToken = Convert.ToInt32(method.Groups[1].Value, 16);
+            var line = showMetadataTokens
+                ? FormatMetadataTokens(rawLine)
+                : InlineMetadataToken.Replace(rawLine, "");
+            var instruction = InstructionOffset.Match(rawLine);
+            if (instruction.Success && methodToken is { } token)
+            {
+                var renderedInstruction = InstructionOffset.Match(line);
+                points.Add(new ILDocumentPoint(
+                    output.Length + (renderedInstruction.Success
+                        ? renderedInstruction.Index
+                        : 0),
+                    Math.Max(
+                        1,
+                        line.Length - (renderedInstruction.Success
+                            ? renderedInstruction.Index
+                            : 0)),
+                    token,
+                    Convert.ToInt32(instruction.Groups[1].Value, 16)));
+            }
+            output.AppendLine(line);
+        }
+        return (output.ToString(), BuildILDebugMap(document, points));
+    }
+
+    private (string Text, DebugDocumentMap DebugMap) DisassembleWithCSharp(
+        SymbolId document,
+        EntityHandle handle,
+        CancellationToken ct,
+        bool showMetadataTokens)
     {
         var syntaxTree = decompiler.Decompile([handle]);
         using var writer = new StringWriter();
@@ -1018,7 +1160,9 @@ internal sealed class AssemblySession : IDisposable
         var il = Disassemble(handle, ct, showMetadataTokens: true, formatDeclarationTokens: false);
         var sourceLines = csharp.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
         var output = new StringBuilder(il.Length + csharp.Length / 3);
+        var debugPoints = new List<ILDocumentPoint>();
         IReadOnlyList<ICSharpCode.Decompiler.DebugInfo.SequencePoint> points = [];
+        int? methodToken = null;
         string? previousAnnotation = null;
         foreach (var line in il.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
         {
@@ -1026,7 +1170,8 @@ internal sealed class AssemblySession : IDisposable
             var method = MethodToken.Match(line);
             if (method.Success)
             {
-                points = sequencePoints.GetValueOrDefault(Convert.ToInt32(method.Groups[1].Value, 16)) ?? [];
+                methodToken = Convert.ToInt32(method.Groups[1].Value, 16);
+                points = sequencePoints.GetValueOrDefault(methodToken.Value) ?? [];
                 previousAnnotation = null;
             }
             var instruction = InstructionOffset.Match(line);
@@ -1043,11 +1188,62 @@ internal sealed class AssemblySession : IDisposable
                 }
                 else previousAnnotation = null;
             }
-            output.AppendLine(line);
+            var renderedLine = showMetadataTokens
+                ? FormatMetadataTokens(line)
+                : InlineMetadataToken.Replace(line, "");
+            if (instruction.Success && methodToken is { } token)
+            {
+                var renderedInstruction = InstructionOffset.Match(renderedLine);
+                debugPoints.Add(new ILDocumentPoint(
+                    output.Length + (renderedInstruction.Success
+                        ? renderedInstruction.Index
+                        : 0),
+                    Math.Max(
+                        1,
+                        renderedLine.Length - (renderedInstruction.Success
+                            ? renderedInstruction.Index
+                            : 0)),
+                    token,
+                    Convert.ToInt32(instruction.Groups[1].Value, 16)));
+            }
+            output.AppendLine(renderedLine);
         }
-        var text = output.ToString();
-        return showMetadataTokens ? FormatMetadataTokens(text) : InlineMetadataToken.Replace(text, "");
+        return (output.ToString(), BuildILDebugMap(document, debugPoints));
     }
+
+    private DebugDocumentMap BuildILDebugMap(
+        SymbolId document,
+        IReadOnlyList<ILDocumentPoint> points)
+    {
+        var mapped = new List<DebugDocumentSequencePoint>(points.Count);
+        foreach (var method in points.GroupBy(point => point.MethodToken))
+        {
+            var ordered = method.OrderBy(point => point.ILOffset).ToArray();
+            for (var index = 0; index < ordered.Length; index++)
+            {
+                var point = ordered[index];
+                var endOffset = index + 1 < ordered.Length
+                    ? ordered[index + 1].ILOffset
+                    : point.ILOffset + 1;
+                mapped.Add(new DebugDocumentSequencePoint(
+                    point.StartOffset,
+                    point.Length,
+                    new DebugCodeLocation(
+                        new DebugMethodId(Descriptor.ModuleMvid, point.MethodToken),
+                        point.ILOffset),
+                    Math.Max(point.ILOffset + 1, endOffset)));
+            }
+        }
+        return new DebugDocumentMap(
+            document,
+            mapped.OrderBy(point => point.StartOffset).ToArray());
+    }
+
+    private readonly record struct ILDocumentPoint(
+        int StartOffset,
+        int Length,
+        int MethodToken,
+        int ILOffset);
 
     private static string FormatMetadataTokens(string text) => MetadataTokenLine.Replace(text, match =>
     {

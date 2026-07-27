@@ -10,6 +10,7 @@
   <ItemGroup>
     <ProjectReference Include="../DnSpyXDX.Application/DnSpyXDX.Application.csproj" />
     <ProjectReference Include="../DnSpyXDX.Decompilation/DnSpyXDX.Decompilation.csproj" />
+    <ProjectReference Include="../DnSpyXDX.Debugging/DnSpyXDX.Debugging.csproj" />
     <ProjectReference Include="../DnSpyXDX.Export/DnSpyXDX.Export.csproj" />
     <ProjectReference Include="../DnSpyXDX.UI/DnSpyXDX.UI.csproj" />
     <PackageReference Include="Photino.Blazor" />
@@ -23,4 +24,5 @@
       CopyToPublishDirectory="PreserveNewest"
     />
   </ItemGroup>
+  <Import Project="../../eng/NetCoreDbg.targets" />
 </Project>

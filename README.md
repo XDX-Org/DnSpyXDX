@@ -4,7 +4,7 @@
   <img src="src/DnSpyXDX.UI/wwwroot/images/xdding.webp" width="400" alt="DnSpyXDX animation">
 </p>
 
-DnSpyXDX is a focused, read-only assembly browser for Windows and Linux. It combines a native Photino window, a Blazor interface, and the ILSpy decompiler engine to provide a compact desktop workflow for understanding compiled C# applications and libraries.
+DnSpyXDX is a cross-platform assembly browser and debugger for Windows and Linux. It combines a native Photino window, a Blazor interface, and the ILSpy decompiler engine to provide a compact desktop workflow for understanding compiled C# applications and libraries. Debugger foundation now includes CoreCLR launch/attach, execution control, stack/locals/output panels, and decompiled-source breakpoint UI. Real IL-native binding still requires the planned NetCoreDbg fork.
 
 ## Highlights
 
@@ -52,6 +52,11 @@ dotnet build DnSpyXDX.slnx
 dotnet test DnSpyXDX.slnx
 ```
 
+Host build downloads pinned NetCoreDbg `3.2.0-1092` once, verifies its SHA-256 checksum, caches it
+under `src/DnSpyXDX.Host/obj/netcoredbg`, and copies the current RID payload into
+`debuggers/netcoredbg/<RID>` beside the application. Set `-p:BundleNetCoreDbg=false` only when
+building offline with an externally managed adapter.
+
 ## Publish
 
 ```bash
@@ -60,6 +65,7 @@ dotnet publish src/DnSpyXDX.Host -c Release -r win-x64 --self-contained true -p:
 ```
 
 Trimming, Native AOT, and single-file publishing are intentionally disabled for the initial release.
+Both publish commands include matching NetCoreDbg payload and MIT license automatically.
 
 ## Project structure
 
@@ -67,6 +73,7 @@ Trimming, Native AOT, and single-file publishing are intentionally disabled for 
 - `DnSpyXDX.UI` — Blazor desktop interface and source presentation
 - `DnSpyXDX.Application` — application contracts and workspace state
 - `DnSpyXDX.Decompilation` — metadata browsing, analysis, persistent caching, and ILSpy decompilation backend
+- `DnSpyXDX.Debugging` — runtime-neutral debugger lifecycle and engine boundary
 - `DnSpyXDX.Export` — project export, reports, and `.slnx` generation
 - `DnSpyXDX.Tests` — metadata, decompilation, analysis, MCP, export, cache, and presentation tests
 
@@ -74,7 +81,7 @@ The project and namespace names consistently use the DnSpyXDX product identity w
 
 ## Scope
 
-DnSpyXDX currently focuses on read-only inspection and best-effort source export. Debugging, assembly editing, recompilation, IL patching, and metadata rewriting are outside the current scope.
+DnSpyXDX currently ships read-only inspection and best-effort source export. Cross-platform CoreCLR, Mono, and Unity Mono debugging is under active development. Assembly editing, recompilation, IL patching, and metadata rewriting remain outside current scope.
 
 ## Documentation
 

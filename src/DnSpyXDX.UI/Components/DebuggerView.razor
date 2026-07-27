@@ -1,0 +1,83 @@
+@implements IDisposable
+@inject DebuggerWorkspace Debugger
+
+<div class="debugger-view">
+  <section class="debugger-section debugger-callstack">
+    <header><strong>Call Stack</strong><small>@Debugger.Snapshot.Status</small></header>
+    <div class="debugger-list">
+      @if (Debugger.Frames.Count == 0)
+      {
+        <div class="debugger-empty">@(Debugger.Snapshot.Status == DebugSessionStatus.Paused ? "No managed frames." : "Pause target to inspect frames.")</div>
+      }
+      else
+      {
+        @foreach (var frame in Debugger.Frames)
+        {
+          <button class="debugger-row @(Debugger.SelectedFrame == frame.Id ? "selected" : null)" @onclick="() => Debugger.SelectFrameAsync(frame)">
+            <strong>@frame.Name</strong>
+            <small>@(frame.SourcePath is null ? frame.ModuleName : $"{Path.GetFileName(frame.SourcePath)}:{frame.SourceLine}")</small>
+          </button>
+        }
+      }
+    </div>
+  </section>
+  <section class="debugger-section debugger-locals">
+    <header><strong>Locals</strong><small>@Debugger.Variables.Count</small></header>
+    <div class="debugger-table">
+      @if (Debugger.Variables.Count == 0)
+      {
+        <div class="debugger-empty">No variables.</div>
+      }
+      else
+      {
+        @foreach (var variable in Debugger.Variables)
+        {
+          <div class="debugger-variable"><span>@variable.Name</span><code>@variable.Value</code><small>@variable.Type</small></div>
+        }
+      }
+    </div>
+  </section>
+  <section class="debugger-section debugger-breakpoints">
+    <header><strong>Breakpoints</strong><small>@Debugger.Breakpoints.Count</small></header>
+    <div class="debugger-list">
+      @if (Debugger.Breakpoints.Count == 0)
+      {
+        <div class="debugger-empty">Click source gutter to add breakpoint.</div>
+      }
+      else
+      {
+        @foreach (var breakpoint in Debugger.Breakpoints)
+        {
+          var binding = Debugger.BindingFor(breakpoint.Id);
+          <button class="debugger-row" title="@binding?.Message" @onclick="() => Debugger.ToggleBreakpointAsync(breakpoint.Location)">
+            <span class="debugger-breakpoint-state @(binding?.IsVerified == true ? "verified" : null)"></span>
+            <code>0x@breakpoint.Location.Method.MetadataToken.ToString("X8") + @breakpoint.Location.ILOffset.ToString("X")</code>
+            <small>@(binding?.IsVerified == true ? "Bound" : binding?.Message ?? "Pending")</small>
+          </button>
+        }
+      }
+    </div>
+  </section>
+  <section class="debugger-section debugger-output">
+    <header><strong>Debug Output</strong><button @onclick="Debugger.ClearOutput">Clear</button></header>
+    <div class="debugger-console">
+      @if (Debugger.Output.Count == 0)
+      {
+        <div class="debugger-empty">No debugger output.</div>
+      }
+      else
+      {
+        @foreach (var message in Debugger.Output)
+        {
+          <div><small>@message.Category</small><span>@message.Message</span></div>
+        }
+      }
+    </div>
+  </section>
+</div>
+
+@code {
+  protected override void OnInitialized() => Debugger.Changed += Refresh;
+  private void Refresh() => _ = InvokeAsync(StateHasChanged);
+  public void Dispose() => Debugger.Changed -= Refresh;
+}

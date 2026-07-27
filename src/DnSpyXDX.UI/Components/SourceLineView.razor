@@ -1,4 +1,10 @@
 <div class="source-line @(WrapLines ? "wrap-lines" : null) @(IsFocused ? "code-search-focus" : null)" style="@LineStyle" data-source-line="@Line.Number" role="row">
+  <button type="button"
+          class="source-breakpoint-gutter @(Breakpoint is null ? null : "set") @(Binding?.IsVerified == true ? "verified" : null) @(IsCurrentStatement ? "current" : null)"
+          title="@BreakpointTitle"
+          aria-label="@BreakpointTitle"
+          disabled="@(DebugPoint is null)"
+          @onclick="ToggleBreakpointAsync"></button>
   <span class="source-line-number" aria-hidden="true">@(Line.Number + 1)</span>
   <code>
     @foreach (var brace in VisibleGuides())
@@ -37,9 +43,22 @@
   [Parameter] public int FocusedLine { get; set; } = -1;
   [Parameter] public int LineHeight { get; set; } = 20;
   [Parameter] public bool WrapLines { get; set; }
+  [Parameter] public DebugDocumentSequencePoint? DebugPoint { get; set; }
+  [Parameter] public DebugBreakpoint? Breakpoint { get; set; }
+  [Parameter] public DebugBreakpointBinding? Binding { get; set; }
+  [Parameter] public bool IsCurrentStatement { get; set; }
+  [Parameter] public EventCallback<DebugCodeLocation> OnToggleBreakpoint { get; set; }
 
   private bool IsFocused => FocusedLine == Line.Number;
+  private string BreakpointTitle => DebugPoint is null
+    ? "No executable statement on this line"
+    : Breakpoint is null
+      ? "Add breakpoint"
+      : Binding?.Message ?? (Binding?.IsVerified == true ? "Bound breakpoint" : "Remove breakpoint");
   private string LineStyle => WrapLines ? $"--continuation-indent:{LeadingColumns() + SourceDocumentModel.TabWidth}ch" : $"height:{LineHeight}px";
+  private Task ToggleBreakpointAsync() => DebugPoint is { } point
+    ? OnToggleBreakpoint.InvokeAsync(point.Location)
+    : Task.CompletedTask;
 
   private int LeadingColumns()
   {

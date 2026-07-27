@@ -3,9 +3,11 @@
   <ItemGroup>
     <ProjectReference Include="../../src/DnSpyXDX.Application/DnSpyXDX.Application.csproj" />
     <ProjectReference Include="../../src/DnSpyXDX.Decompilation/DnSpyXDX.Decompilation.csproj" />
+    <ProjectReference Include="../../src/DnSpyXDX.Debugging/DnSpyXDX.Debugging.csproj" />
     <ProjectReference Include="../../src/DnSpyXDX.Export/DnSpyXDX.Export.csproj" />
     <ProjectReference Include="../../src/DnSpyXDX.UI/DnSpyXDX.UI.csproj" />
     <ProjectReference Include="../../src/DnSpyXDX.Host/DnSpyXDX.Host.csproj" />
+    <ProjectReference Include="../DnSpyXDX.Debugger.TestWorker/DnSpyXDX.Debugger.TestWorker.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio"><PrivateAssets>all</PrivateAssets></PackageReference>

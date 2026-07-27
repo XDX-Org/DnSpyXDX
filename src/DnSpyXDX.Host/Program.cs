@@ -1,5 +1,6 @@
 using DnSpyXDX.Application;
 using DnSpyXDX.Decompilation;
+using DnSpyXDX.Debugging;
 using DnSpyXDX.Export;
 using DnSpyXDX.Host;
 using DnSpyXDX.Host.Mcp;
@@ -30,6 +31,13 @@ internal static class Program
         // re-running ILSpy. Injected into DecompilerBackend's two-argument constructor.
         builder.Services.AddSingleton(PersistentDecompileCache.Default());
         builder.Services.AddSingleton<IDecompilerBackend, DecompilerBackend>();
+        builder.Services.AddSingleton(new CoreClrDebuggerOptions());
+        builder.Services.AddSingleton<IDebuggerEngineProvider, NetCoreDbgEngineProvider>();
+        builder.Services.AddSingleton<IDebuggerEngineRegistry>(services =>
+            new DebuggerEngineRegistry(
+                services.GetServices<IDebuggerEngineProvider>()));
+        builder.Services.AddSingleton<IDebuggerService, DebuggerService>();
+        builder.Services.AddSingleton<DebuggerWorkspace>();
         builder.Services.AddSingleton<IProjectExportService, ProjectExportService>();
         builder.Services.AddSingleton<WorkspaceState>();
         builder.Services.AddSingleton<SourceViewStateStore>();
