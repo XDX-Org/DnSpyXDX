@@ -150,16 +150,22 @@
     <section class="settings-dialog debug-dialog" role="dialog" aria-modal="true" aria-labelledby="debug-dialog-title">
       <header><strong id="debug-dialog-title">Start Debugging</strong><button title="Close debugger dialog" aria-label="Close debugger dialog" @onclick="CloseDebugDialog">×</button></header>
       <div class="debug-dialog-body">
-        <label><span>Mode</span><select @bind="debugStartMode"><option value="launch">Launch CoreCLR</option><option value="attach">Attach CoreCLR</option></select></label>
+        <label><span>Mode</span><select @bind="debugStartMode"><option value="launch">Launch CoreCLR</option><option value="attach">Attach CoreCLR</option><option value="mono">Attach Mono</option></select></label>
         @if (debugStartMode == "launch")
         {
           <label><span>Managed executable or DLL</span><input @bind="debugLaunchPath" placeholder="path/to/application.dll" /></label>
           <label><span>Arguments <small>one per line</small></span><textarea @bind="debugArguments" rows="3"></textarea></label>
           <label class="debug-check"><input type="checkbox" @bind="debugStopAtEntry" /><span>Stop at entry</span></label>
         }
-        else
+        else if (debugStartMode == "attach")
         {
           <label><span>Process ID</span><input @bind="debugProcessId" inputmode="numeric" placeholder="1234" /></label>
+        }
+        else
+        {
+          <label><span>Host</span><input @bind="debugMonoHost" placeholder="127.0.0.1" /></label>
+          <label><span>Debugger agent port</span><input @bind="debugMonoPort" inputmode="numeric" placeholder="55555" /></label>
+          <small>Start Mono with <code>--debug --debugger-agent=transport=dt_socket,server=y,address=127.0.0.1:55555</code></small>
         }
         @if (!string.IsNullOrWhiteSpace(Debugger.Error)) { <div class="debug-dialog-error">@Debugger.Error</div> }
       </div>
@@ -193,6 +199,8 @@
   private string debugLaunchPath = "";
   private string debugArguments = "";
   private string debugProcessId = "";
+  private string debugMonoHost = "127.0.0.1";
+  private string debugMonoPort = "55555";
   private bool debugStopAtEntry = true;
   private bool focusSearch;
   private bool uiInitializationFailed;
@@ -386,6 +394,17 @@
         return;
       }
       await Debugger.AttachAsync(processId);
+    }
+    else if (debugStartMode == "mono")
+    {
+      if (string.IsNullOrWhiteSpace(debugMonoHost) ||
+          !int.TryParse(debugMonoPort, out var port) ||
+          port is <= 0 or > 65535)
+      {
+        Workspace.SetBusy(false, "Mono attach requires a host and port from 1 through 65535.");
+        return;
+      }
+      await Debugger.AttachMonoAsync(debugMonoHost.Trim(), port);
     }
     else
     {

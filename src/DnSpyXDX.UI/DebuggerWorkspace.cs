@@ -81,6 +81,23 @@ public sealed class DebuggerWorkspace : IDisposable
                 token);
         }, cancellationToken, requireActiveSession: false);
 
+    public Task AttachMonoAsync(
+        string host,
+        int port,
+        CancellationToken cancellationToken = default) =>
+        RunAsync(async token =>
+        {
+            await debugger.StartAsync(
+                new DebugAttachRequest(
+                    DebugRuntimeKind.Mono,
+                    Host: host,
+                    Port: port)
+                {
+                    InitialBreakpoints = breakpoints
+                },
+                token);
+        }, cancellationToken, requireActiveSession: false);
+
     public Task ContinueAsync(CancellationToken cancellationToken = default) =>
         RunAsync(debugger.ContinueAsync, cancellationToken);
 

@@ -10,6 +10,7 @@ Start with centrally managed packages in `Directory.Packages.props`.
 | Decompiler | `ICSharpCode.Decompiler` | Start with stable 10.1.1.8388; do not take an 11 preview for the MVP |
 | Logging | `Microsoft.Extensions.Logging` | Match .NET 10 |
 | CoreCLR debugger | `NetCoreDbg` | Pin one tested MIT-licensed release per RID; package as a separate native debugger payload |
+| Mono debugger | `mono/debugger-libs` | Pin a tested Git submodule commit; build `Mono.Debugger.Soft` for `net6.0` |
 | Options/DI | `Microsoft.Extensions.*` | Match .NET 10 |
 | Source viewer | Monaco Editor | Pin and vendor/build the required browser assets |
 | Unit tests | xUnit or NUnit | Use the team's preference |
@@ -63,6 +64,21 @@ No debugger binary is downloaded at application runtime. First clean build requi
 Subsequent builds use cached verified archive. `BundleNetCoreDbg=false` disables acquisition for
 offline or externally packaged builds. Unsupported RIDs fail with an actionable build error while
 bundling is enabled.
+
+### Mono soft-debugger dependency
+
+`third_party/debugger-libs` pins the maintained `mono/debugger-libs` repository as a Git
+submodule. Clone with submodules or run:
+
+```bash
+git submodule update --init --recursive
+```
+
+The build targets only `Mono.Debugger.Soft` at `net6.0` and explicitly carries its
+`Mono.Cecil` runtime dependency; `NuGet.config` includes the official
+`dotnet-tools` feed required by its `Microsoft.SymbolStore` and `Microsoft.FileFormats`
+dependencies. The upstream MIT license is copied into build and publish outputs. No Mono runtime
+is bundled: the target application supplies the Mono runtime and starts its debugger agent.
 
 ### Native UI dependencies
 

@@ -51,6 +51,27 @@ public sealed class DebuggerServiceTests
     }
 
     [Fact]
+    public async Task Stop_event_during_startup_is_not_overwritten_by_start_result()
+    {
+        var engine = new FakeEngine
+        {
+            EventDuringStart = new DebugEngineStopped(new(
+                DebugStopReason.Entry,
+                new DebugThreadId(3)))
+        };
+        await using var debugger = CreateDebugger(DebugRuntimeKind.Mono, engine);
+
+        await debugger.StartAsync(new DebugAttachRequest(
+            DebugRuntimeKind.Mono,
+            Host: "localhost",
+            Port: 55555));
+
+        Assert.Equal(DebugSessionStatus.Paused, debugger.Snapshot.Status);
+        Assert.Equal(DebugStopReason.Entry, debugger.Snapshot.Stop?.Reason);
+        Assert.Equal(1234, debugger.Snapshot.ProcessId);
+    }
+
+    [Fact]
     public async Task Stack_and_variables_require_paused_session()
     {
         var engine = new FakeEngine();
@@ -174,12 +195,15 @@ public sealed class DebuggerServiceTests
         public DebugStartRequest? StartRequest { get; private set; }
         public int ContinueCount { get; private set; }
         public bool IsDisposed { get; private set; }
+        public DebugEngineEvent? EventDuringStart { get; init; }
 
         public Task<DebugEngineStartResult> StartAsync(
             DebugStartRequest request,
             CancellationToken cancellationToken)
         {
             StartRequest = request;
+            if (EventDuringStart is { } value)
+                Publish(value);
             return Task.FromResult(new DebugEngineStartResult(1234, Capabilities));
         }
 

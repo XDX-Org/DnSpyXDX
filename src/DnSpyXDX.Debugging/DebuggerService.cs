@@ -70,14 +70,21 @@ public sealed class DebuggerService(IDebuggerEngineRegistry engines) : IDebugger
 
                 var result = await nextEngine.StartAsync(request, cancellationToken)
                     .ConfigureAwait(false);
-                SetSnapshot(Snapshot with
+                var currentSnapshot = Snapshot;
+                var eventArrivedDuringStartup =
+                    currentSnapshot.Status != DebugSessionStatus.Starting;
+                SetSnapshot(currentSnapshot with
                 {
                     ProcessId = result.ProcessId,
                     Capabilities = result.Capabilities,
-                    Status = result.IsPaused
-                        ? DebugSessionStatus.Paused
-                        : DebugSessionStatus.Running,
-                    Stop = result.InitialStop
+                    Status = eventArrivedDuringStartup
+                        ? currentSnapshot.Status
+                        : result.IsPaused
+                            ? DebugSessionStatus.Paused
+                            : DebugSessionStatus.Running,
+                    Stop = eventArrivedDuringStartup
+                        ? currentSnapshot.Stop
+                        : result.InitialStop
                 });
             }
             catch (Exception exception)

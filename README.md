@@ -4,7 +4,7 @@
   <img src="src/DnSpyXDX.UI/wwwroot/images/xdding.webp" width="400" alt="DnSpyXDX animation">
 </p>
 
-DnSpyXDX is a cross-platform assembly browser and debugger for Windows and Linux. It combines a native Photino window, a Blazor interface, and the ILSpy decompiler engine to provide a compact desktop workflow for understanding compiled C# applications and libraries. Debugger foundation now includes CoreCLR launch/attach, execution control, stack/locals/output panels, and decompiled-source breakpoints backed by the bundled XDX NetCoreDbg fork.
+DnSpyXDX is a cross-platform assembly browser and debugger for Windows and Linux. It combines a native Photino window, a Blazor interface, and the ILSpy decompiler engine to provide a compact desktop workflow for understanding compiled C# applications and libraries. Debugger foundation now includes CoreCLR launch/attach, direct Mono attach, execution control, stack/locals/output panels, and decompiled-source breakpoints.
 
 ## Highlights
 
@@ -21,6 +21,7 @@ DnSpyXDX is a cross-platform assembly browser and debugger for Windows and Linux
 - Navigate large trees and source documents with persistent, themed scrollbars
 - Read decompiler-derived semantic source highlighting and metadata tokens
 - Expose the live workspace to local MCP hosts through an optional authenticated loopback endpoint
+- Debug CoreCLR or attach to a Mono soft-debugger agent with IL-native decompiled-code breakpoints
 
 ## Safety model
 
@@ -41,6 +42,7 @@ Linux package names vary between distributions.
 ## Run from source
 
 ```bash
+git submodule update --init --recursive
 dotnet restore DnSpyXDX.slnx
 dotnet run --project src/DnSpyXDX.Host
 ```
@@ -58,6 +60,17 @@ Host build downloads XDX NetCoreDbg release `xdx-3.2.0-1092.1`, pinned to backen
 `debuggers/netcoredbg/<RID>` beside the application. Set `-p:BundleNetCoreDbg=false` only when
 building offline with an externally managed adapter.
 
+Direct Mono attach uses the pinned `Mono.Debugger.Soft` source under
+`third_party/debugger-libs`. Start a Mono target with a debugger agent, then select
+**Attach Mono** in the debugger dialog:
+
+```bash
+mono --debug --debugger-agent=transport=dt_socket,server=y,address=127.0.0.1:55555 app.exe
+```
+
+Keep the endpoint on loopback unless the network is trusted; the soft-debugger transport is not
+an authenticated remote-access boundary.
+
 ## Publish
 
 ```bash
@@ -66,7 +79,8 @@ dotnet publish src/DnSpyXDX.Host -c Release -r win-x64 --self-contained true -p:
 ```
 
 Trimming, Native AOT, and single-file publishing are intentionally disabled for the initial release.
-Both publish commands include matching NetCoreDbg payload and MIT license automatically.
+Both publish commands include the matching NetCoreDbg payload, Mono soft-debugger assemblies,
+and their licenses automatically.
 
 ## Project structure
 
@@ -82,7 +96,10 @@ The project and namespace names consistently use the DnSpyXDX product identity w
 
 ## Scope
 
-DnSpyXDX currently ships read-only inspection and best-effort source export. Cross-platform CoreCLR, Mono, and Unity Mono debugging is under active development. Assembly editing, recompilation, IL patching, and metadata rewriting remain outside current scope.
+DnSpyXDX currently ships read-only inspection, best-effort source export, cross-platform CoreCLR
+debugging, and direct Mono soft-debugger attach. Unity Mono discovery and compatibility work is
+under active development. Assembly editing, recompilation, IL patching, and metadata rewriting
+remain outside current scope.
 
 ## Documentation
 

@@ -11,4 +11,7 @@
     <Project Path="tests/DnSpyXDX.Debugger.TestWorker/DnSpyXDX.Debugger.TestWorker.csproj" />
     <Project Path="tests/DnSpyXDX.Tests/DnSpyXDX.Tests.csproj" />
   </Folder>
+  <Folder Name="/third_party/">
+    <Project Path="third_party/debugger-libs/Mono.Debugger.Soft/Mono.Debugger.Soft.csproj" />
+  </Folder>
 </Solution>

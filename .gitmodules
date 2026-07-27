@@ -1,0 +1,3 @@
+[submodule "third_party/debugger-libs"]
+	path = third_party/debugger-libs
+	url = https://github.com/mono/debugger-libs.git

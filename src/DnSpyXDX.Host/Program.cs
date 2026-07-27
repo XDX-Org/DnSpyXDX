@@ -33,6 +33,8 @@ internal static class Program
         builder.Services.AddSingleton<IDecompilerBackend, DecompilerBackend>();
         builder.Services.AddSingleton(new CoreClrDebuggerOptions());
         builder.Services.AddSingleton<IDebuggerEngineProvider, NetCoreDbgEngineProvider>();
+        builder.Services.AddSingleton(new MonoSoftDebuggerOptions());
+        builder.Services.AddSingleton<IDebuggerEngineProvider, MonoSoftDebuggerEngineProvider>();
         builder.Services.AddSingleton<IDebuggerEngineRegistry>(services =>
             new DebuggerEngineRegistry(
                 services.GetServices<IDebuggerEngineProvider>()));

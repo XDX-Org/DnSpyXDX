@@ -23,6 +23,12 @@
       CopyToOutputDirectory="PreserveNewest"
       CopyToPublishDirectory="PreserveNewest"
     />
+    <Content
+      Include="../../licenses/Mono-Debugger-Libs-LICENSE.txt"
+      Link="licenses/Mono-Debugger-Libs-LICENSE.txt"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
   </ItemGroup>
   <Import Project="../../eng/NetCoreDbg.targets" />
 </Project>

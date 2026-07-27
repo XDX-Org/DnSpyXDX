@@ -58,12 +58,32 @@ public sealed class DebuggerWorkspaceTests
         await Task.CompletedTask;
     }
 
+    [Fact]
+    public async Task Mono_attach_uses_host_port_and_preserves_breakpoints()
+    {
+        var debugger = new FakeDebuggerService();
+        using var workspace = new DebuggerWorkspace(debugger);
+        var location = new DebugCodeLocation(
+            new DebugMethodId(Guid.NewGuid(), 0x06000001),
+            8);
+        await workspace.ToggleBreakpointAsync(location);
+
+        await workspace.AttachMonoAsync("127.0.0.1", 55555);
+
+        var request = Assert.IsType<DebugAttachRequest>(debugger.LastStartRequest);
+        Assert.Equal(DebugRuntimeKind.Mono, request.Runtime);
+        Assert.Equal("127.0.0.1", request.Host);
+        Assert.Equal(55555, request.Port);
+        Assert.Equal(location, Assert.Single(request.InitialBreakpoints!).Location);
+    }
+
     private sealed class FakeDebuggerService : IDebuggerService
     {
         public DebugSessionSnapshot Snapshot { get; private set; } =
             DebugSessionSnapshot.Initial;
         public IReadOnlyList<DebugBreakpointBinding> Breakpoints { get; private set; } = [];
         public IReadOnlyList<DebugBreakpoint> LastBreakpoints { get; private set; } = [];
+        public DebugStartRequest? LastStartRequest { get; private set; }
 
         public event Action<DebugSessionSnapshot>? StateChanged;
         public event Action<IReadOnlyList<DebugBreakpointBinding>>? BreakpointsChanged;
@@ -77,6 +97,7 @@ public sealed class DebuggerWorkspaceTests
             DebugStartRequest request,
             CancellationToken cancellationToken = default)
         {
+            LastStartRequest = request;
             Snapshot = new DebugSessionSnapshot(
                 Guid.NewGuid(),
                 request.Runtime,

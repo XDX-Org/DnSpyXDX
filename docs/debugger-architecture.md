@@ -2,8 +2,8 @@
 
 > Status: architecture, shared lifecycle, decompiled C# sequence maps, correlated DAP connection,
 > worker supervision, NetCoreDbg CoreCLR engine, native IL-breakpoint binding, source gutter,
-> first debugger UI slice, and pinned dual-platform adapter packaging are implemented. Mono/Unity
-> engines, persistence, and full debugger UI remain.
+> first debugger UI slice, pinned dual-platform adapter packaging, and direct Mono TCP attach are
+> implemented. Unity discovery, persistence, and full debugger UI remain.
 
 ## Goals
 
@@ -71,8 +71,10 @@ Projects split when the first worker is added, avoiding empty architecture-only 
 
 ## Process model
 
-Each debug session gets one worker process. Photino and the Blazor UI never load `dbgshim`,
-`mscordbi`, Mono debugger libraries, or target-specific runtime components.
+The CoreCLR adapter runs as a supervised worker process. The first direct-Mono milestone loads the
+managed `Mono.Debugger.Soft` client in the host process; moving it behind the same worker boundary
+remains hardening work before broad Unity support. Target runtime components are never loaded into
+the UI process.
 
 Benefits:
 
@@ -165,9 +167,20 @@ reads `xdxLocation` from stopped events and stack frames. Initial breakpoints bi
 
 ## Mono and Unity engine
 
-Use Mono's soft-debugger protocol through `Mono.Debugger.Soft`. The engine connects to a Mono
-debugger agent over TCP and translates `MethodMirror` locations into MVID, metadata token, and IL
-offset.
+The direct-attach engine uses Mono's soft-debugger protocol through a pinned
+`Mono.Debugger.Soft` source dependency. It connects to a Mono debugger agent over TCP and
+translates `MethodMirror` locations into MVID, metadata token, and IL offset.
+
+Implemented direct-Mono features:
+
+- host/port attach with DNS, cancellation, and a bounded connection timeout;
+- continue, pause, IL-level step into/over/out, threads, frames, arguments, locals, and arrays;
+- pending and rebound MVID/MethodDef/IL-offset breakpoints across assembly load/unload;
+- stop, exit, crash, disconnect, output, and breakpoint-binding events;
+- a desktop attach form with loopback defaults and debugger-agent command guidance.
+
+Expression evaluation, object-field expansion, process launch, multi-AppDomain module enumeration,
+and Unity-specific compatibility are not implemented yet.
 
 Two connection modes are needed:
 
@@ -321,7 +334,8 @@ Release matrix:
    integration tests.
 5. **Complete:** client protocol, test adapter, UI binding, and native
    `ICorDebugFunctionBreakpoint` backend in the pinned NetCoreDbg fork.
-6. Add Mono soft-debugger direct attach.
+6. **Complete:** add Mono soft-debugger direct attach, IL breakpoints, execution control, and first
+   stack/variable projection.
 7. Add Unity discovery, capability negotiation, and supported-version fixtures.
 8. **Partial:** first debugger panels and XDX-adapter packaging exist; add watches, exceptions,
    modules, persistence, and dual-platform runtime integration CI.
