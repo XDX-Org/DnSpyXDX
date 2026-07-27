@@ -400,7 +400,7 @@ internal sealed class AssemblySession : IDisposable
                 : null;
             return new TreeNodeDescriptor(new NodeId(Descriptor.SessionId, $"res:{MetadataTokens.GetToken(h)}"), name, TreeNodeKind.Resource, false, Tooltip: tooltip);
         }).OrderBy(x => x.Name).ToArray();
-        if (parent.Value == "namespaces") return metadata.TypeDefinitions.Select(h => metadata.GetString(metadata.GetTypeDefinition(h).Namespace)).Distinct().OrderBy(x => x).Select(ns => new TreeNodeDescriptor(new NodeId(Descriptor.SessionId, $"ns:{Uri.EscapeDataString(ns)}"), string.IsNullOrEmpty(ns) ? "<global>" : ns, TreeNodeKind.Namespace, true)).ToArray();
+        if (parent.Value == "namespaces") return metadata.TypeDefinitions.Select(h => metadata.GetString(metadata.GetTypeDefinition(h).Namespace)).Distinct().OrderBy(x => x).Select(ns => new TreeNodeDescriptor(new NodeId(Descriptor.SessionId, $"ns:{Uri.EscapeDataString(ns)}"), string.IsNullOrEmpty(ns) ? "-" : ns, TreeNodeKind.Namespace, true)).ToArray();
         if (parent.Value.StartsWith("ns:", StringComparison.Ordinal))
         {
             var ns = Uri.UnescapeDataString(parent.Value[3..]);
@@ -1682,7 +1682,10 @@ internal sealed class AssemblySession : IDisposable
         {
             ct.ThrowIfCancellationRequested();
             var t = metadata.GetTypeDefinition(h); var metadataName = metadata.GetString(t.Name); var typeName = TypeDisplayName(t);
-            var typeResult = Result(h, typeName, "Type");
+            // Show the type's C# keyword (class/struct/interface/enum/delegate) in the search list, like the
+            // assembly explorer, rather than a generic "Type". Kind stays "Type" for filtering and navigation.
+            var keyword = Classify(t);
+            var typeResult = Result(h, typeName, "Type", keyword == "staticclass" ? "class" : keyword);
             if (Matches(typeResult, metadataName, query)) yield return typeResult;
             foreach (var m in t.GetMethods()) { var name = metadata.GetString(metadata.GetMethodDefinition(m).Name); var result = Result(m, name, "Method"); if (Matches(result, name, query)) yield return result; }
             foreach (var f in t.GetFields()) { var name = metadata.GetString(metadata.GetFieldDefinition(f).Name); var result = Result(f, name, "Field"); if (Matches(result, name, query)) yield return result; }
@@ -1723,7 +1726,7 @@ internal sealed class AssemblySession : IDisposable
     private TypeDefinitionHandle FindPropertyDeclaringType(PropertyDefinitionHandle target) => metadata.TypeDefinitions.FirstOrDefault(t => metadata.GetTypeDefinition(t).GetProperties().Contains(target));
     private TypeDefinitionHandle FindEventDeclaringType(EventDefinitionHandle target) => metadata.TypeDefinitions.FirstOrDefault(t => metadata.GetTypeDefinition(t).GetEvents().Contains(target));
 
-    private SearchResult Result(EntityHandle h, string name, string kind)
+    private SearchResult Result(EntityHandle h, string name, string kind, string? display = null)
     {
         var symbol = new SymbolId(Descriptor.ModuleMvid, MetadataTokens.GetToken(h));
         var declaringType = DeclaringTypeOf(h);
@@ -1732,7 +1735,7 @@ internal sealed class AssemblySession : IDisposable
         var outer = declaringType;
         while (!metadata.GetTypeDefinition(outer).GetDeclaringType().IsNil) outer = metadata.GetTypeDefinition(outer).GetDeclaringType();
         var ns = metadata.GetString(metadata.GetTypeDefinition(outer).Namespace);
-        return new(symbol, name, kind, Descriptor.Name, ns, new SymbolId(Descriptor.ModuleMvid, MetadataTokens.GetToken(declaringType)), qualifiedName);
+        return new(symbol, name, kind, Descriptor.Name, ns, new SymbolId(Descriptor.ModuleMvid, MetadataTokens.GetToken(declaringType)), qualifiedName, display);
     }
 
     private string QualifiedTypeName(TypeDefinitionHandle handle)

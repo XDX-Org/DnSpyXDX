@@ -86,7 +86,7 @@
               @if (results.Count == 0) { <div class="no-results">@(string.IsNullOrWhiteSpace(query) ? "Type a name to search across open assemblies." : "No matching types or members.")</div> }
               else { <Virtualize Items="results" Context="result" ItemSize="28" OverscanCount="10">
                 <button @key="result.Symbol" class="search-result" @onclick="e => OpenSearchResultAsync(result, e.CtrlKey)" @oncontextmenu="e => OpenSearchResultAnalyzeMenu(result, e)" @oncontextmenu:preventDefault>
-                  <span class="result-kind result-@result.Kind.ToLowerInvariant()">@result.Kind</span><span class="result-name">@(result.QualifiedName ?? result.Name)</span><span class="result-assembly">@result.AssemblyName</span>
+                  <span class="result-kind result-@result.Kind.ToLowerInvariant()">@(result.Display ?? result.Kind)</span><span class="result-name">@(result.QualifiedName ?? result.Name)</span><span class="result-assembly">@result.AssemblyName</span>
                 </button>
               </Virtualize> }
             </div>

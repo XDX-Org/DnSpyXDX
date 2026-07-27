@@ -153,7 +153,11 @@ public sealed record DecompilerDocument(
     IReadOnlyDictionary<int, int>? SymbolLocations = null,
     IReadOnlyList<ClassifiedSpan>? SemanticSpans = null);
 
-public sealed record SearchResult(SymbolId Symbol, string Name, string Kind, string AssemblyName, string Namespace, SymbolId DeclaringType, string? QualifiedName = null);
+/// <summary><paramref name="Display"/> is the label shown for the result's kind. It defaults to
+/// <paramref name="Kind"/>, but a type carries its C# keyword (class/struct/interface/enum/delegate) so the
+/// search list reads like the assembly explorer instead of a generic "Type". <paramref name="Kind"/> stays the
+/// semantic category used for filtering, ranking and navigation.</summary>
+public sealed record SearchResult(SymbolId Symbol, string Name, string Kind, string AssemblyName, string Namespace, SymbolId DeclaringType, string? QualifiedName = null, string? Display = null);
 
 /// <summary>A dnSpy-style analysis relation. <see cref="UsedBy"/> and <see cref="Uses"/> are the
 /// callers/callees pair behind the Analyzer's Used By / Uses nodes; the rest mirror dnSpy's other
