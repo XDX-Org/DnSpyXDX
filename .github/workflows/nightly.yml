@@ -71,13 +71,17 @@ jobs:
         with:
           global-json-file: global.json
 
-      - name: Publish self-contained (${{ matrix.rid }})
+      - name: Publish self-contained single-file (${{ matrix.rid }})
+        # Single-file bundles the managed assemblies into one executable. The Photino native
+        # library and the wwwroot/ assets deliberately stay external (IncludeNativeLibraries...
+        # =false), which is the reliable combination for Photino's WebView bootstrap.
         run: >
           dotnet publish src/DnSpyXDX.Host
           -c Release
           -r ${{ matrix.rid }}
           --self-contained true
-          -p:PublishSingleFile=false
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=false
           -o publish/${{ matrix.rid }}
 
       - name: Upload artifact
@@ -101,6 +105,12 @@ jobs:
         with:
           path: artifacts
 
+      - name: Compute build metadata
+        id: meta
+        run: |
+          echo "stamp=$(date -u '+%Y-%m-%d %H:%M UTC')" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
       - name: Package per-RID archives
         run: |
           set -euo pipefail
@@ -116,9 +126,13 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: nightly
-          name: Nightly build
+          name: Nightly build ${{ steps.meta.outputs.stamp }} (${{ steps.meta.outputs.short_sha }})
           prerelease: true
           body: |
-            Automated nightly build from `${{ github.sha }}`.
-            Self-contained binaries for Windows x64 and Linux x64. Not a stable release.
+            **Nightly build — rolling prerelease.** This `nightly` release is overwritten on every run.
+
+            - **Built:** ${{ steps.meta.outputs.stamp }}
+            - **Commit:** `${{ github.sha }}`
+
+            Self-contained single-file binaries for Windows x64 and Linux x64. Not a stable release.
           files: dist/*.zip
