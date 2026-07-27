@@ -85,7 +85,7 @@
             <div class="search-results">
               @if (results.Count == 0) { <div class="no-results">@(string.IsNullOrWhiteSpace(query) ? "Type a name to search across open assemblies." : "No matching types or members.")</div> }
               else { <Virtualize Items="results" Context="result" ItemSize="28" OverscanCount="10">
-                <button @key="result.Symbol" class="search-result" @onclick="e => OpenSearchResultAsync(result, e.CtrlKey)">
+                <button @key="result.Symbol" class="search-result" @onclick="e => OpenSearchResultAsync(result, e.CtrlKey)" @oncontextmenu="e => OpenSearchResultAnalyzeMenu(result, e)" @oncontextmenu:preventDefault>
                   <span class="result-kind result-@result.Kind.ToLowerInvariant()">@result.Kind</span><span class="result-name">@(result.QualifiedName ?? result.Name)</span><span class="result-assembly">@result.AssemblyName</span>
                 </button>
               </Virtualize> }
@@ -403,6 +403,20 @@
   private static bool CanAnalyze(TreeNodeKind kind) => kind is TreeNodeKind.Type or TreeNodeKind.Method or TreeNodeKind.Constructor or TreeNodeKind.Field or TreeNodeKind.Property or TreeNodeKind.Event;
   private void CloseAssemblyContextMenu() => contextAssembly = null;
   private void CloseSymbolContextMenu() => contextSymbol = null;
+  // Right-clicking a search result offers Analyze, the same as the tree and source view. Search reports its
+  // kind as a string ("Type", "Method", …) which maps straight onto TreeNodeKind.
+  private void OpenSearchResultAnalyzeMenu(SearchResult result, MouseEventArgs e)
+  {
+    if (!Enum.TryParse<TreeNodeKind>(result.Kind, out var kind) || !CanAnalyze(kind)) return;
+    menuOpen = false;
+    contextAssembly = null;
+    emptyMenuOpen = false;
+    contextSymbol = result.Symbol;
+    contextSymbolName = result.QualifiedName ?? result.Name;
+    contextSymbolKind = kind;
+    contextMenuX = (int)Math.Round(e.ClientX);
+    contextMenuY = (int)Math.Round(e.ClientY);
+  }
   private void OpenSourceAnalyzeMenu(AnalyzeRequest request)
   {
     if (!CanAnalyze(request.Kind)) return;
