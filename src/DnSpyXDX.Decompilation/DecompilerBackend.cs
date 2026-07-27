@@ -12,8 +12,10 @@ using System.Resources;
 using ICSharpCode.Decompiler;
 using ICSharpCode.Decompiler.CSharp;
 using ICSharpCode.Decompiler.CSharp.OutputVisitor;
+using ICSharpCode.Decompiler.CSharp.Syntax;
 using ICSharpCode.Decompiler.Disassembler;
 using ICSharpCode.Decompiler.Metadata;
+using ICSharpCode.Decompiler.Semantics;
 using ICSharpCode.Decompiler.TypeSystem;
 using DnSpyXDX.Application;
 
@@ -326,7 +328,7 @@ internal sealed class AssemblySession : IDisposable
     // A content hash of this assembly, so a patched or rebuilt file never reads another build's cached source.
     // Computed once, lazily, the first time a cacheable document is decompiled (under the decompile gate).
     private string? assemblyId;
-    private readonly Dictionary<(int Token, DecompilerLanguage Language, bool ShowMetadataTokens), DecompilerDocument> cache = [];
+    private readonly Dictionary<(int Token, DecompilerLanguage Language, bool ShowMetadataTokens, MemberOrder MemberOrder, string GroupOrder), DecompilerDocument> cache = [];
     private byte[]? image;
     private IReadOnlyList<BinaryRegion>? binaryRegions;
     private IReadOnlyDictionary<string, SymbolId>? typeLinks;
@@ -769,7 +771,14 @@ internal sealed class AssemblySession : IDisposable
     {
         if (!Enum.IsDefined(language)) throw new ArgumentOutOfRangeException(nameof(language));
         var showMetadataTokens = displaySettings.ShowMetadataTokens;
-        var key = (symbol.MetadataToken, language, showMetadataTokens);
+        // Member order only reshapes the C# view; every other view keeps ILSpy's order so those cache
+        // entries stay shared across the setting instead of duplicating per option.
+        var memberOrder = language == DecompilerLanguage.CSharp ? displaySettings.MemberOrder.ValidOrDefault() : MemberOrder.Ilspy;
+        // The dnSpy layout also depends on the chosen group order; other cases don't, so their signature is
+        // empty and their cache entries stay shared regardless of the group setting.
+        var groupOrder = memberOrder == MemberOrder.DnSpy ? MemberGroups.Normalize(displaySettings.MemberGroupOrder) : MemberGroups.DefaultOrder;
+        var groupSignature = memberOrder == MemberOrder.DnSpy ? MemberGroups.Signature(groupOrder) : "";
+        var key = (symbol.MetadataToken, language, showMetadataTokens, memberOrder, groupSignature);
         if (cache.TryGetValue(key, out var cached)) return cached;
         await gate.WaitAsync(ct);
         try
@@ -782,7 +791,7 @@ internal sealed class AssemblySession : IDisposable
             if (cacheable)
             {
                 cacheAssemblyId = AssemblyId();
-                var stored = await Task.Run(() => documentCache!.TryLoad(cacheAssemblyId, symbol.MetadataToken, language, showMetadataTokens), ct);
+                var stored = await Task.Run(() => documentCache!.TryLoad(cacheAssemblyId, symbol.MetadataToken, language, showMetadataTokens, memberOrder, groupSignature), ct);
                 if (stored is not null) return cache[key] = stored;
             }
             var handle = MetadataTokens.EntityHandle(symbol.MetadataToken);
@@ -791,7 +800,7 @@ internal sealed class AssemblySession : IDisposable
             IReadOnlyList<ClassifiedSpan>? semanticSpans = null;
             IReadOnlyList<ReferenceSpan> csharpReferences = [];
             if (language == DecompilerLanguage.CSharp)
-                (text, semanticSpans, csharpReferences) = await Task.Run(() => DecompileCSharp(handle, showMetadataTokens), ct);
+                (text, semanticSpans, csharpReferences) = await Task.Run(() => DecompileCSharp(handle, showMetadataTokens, memberOrder, groupOrder), ct);
             else
                 text = await Task.Run(() => language switch
                 {
@@ -816,24 +825,80 @@ internal sealed class AssemblySession : IDisposable
                 BinarySelectionOffset: selection?.Offset, BinarySelectionLength: selection?.Length ?? 0, BinaryRegions: regions, SymbolLocations: symbolLocations, SemanticSpans: semanticSpans);
             cache[key] = result;
             // Persist off the gate so writing the entry never delays returning the document to the UI.
-            if (cacheable) _ = Task.Run(() => documentCache!.Save(AssemblyId(), result, language, showMetadataTokens));
+            if (cacheable) _ = Task.Run(() => documentCache!.Save(AssemblyId(), result, language, showMetadataTokens, memberOrder, groupSignature));
             return result;
         }
         finally { decompiler.CancellationToken = default; gate.Release(); }
     }
 
-    private (string Text, IReadOnlyList<ClassifiedSpan> Spans, IReadOnlyList<ReferenceSpan> References) DecompileCSharp(EntityHandle handle, bool showMetadataTokens)
+    private (string Text, IReadOnlyList<ClassifiedSpan> Spans, IReadOnlyList<ReferenceSpan> References) DecompileCSharp(EntityHandle handle, bool showMetadataTokens, MemberOrder memberOrder, IReadOnlyList<MemberGroup> groupOrder)
     {
         // Decompile to a syntax tree and paint each token from its bound symbol (dnSpy's approach) rather
         // than lexically. The namespace header and dnSpy-style token comments are then folded back in while
         // keeping the classification spans and navigable references aligned to the text.
+        // dnSpy mode favours explicit bodies over C#-6 sugar: a getter-only property that returns a value is
+        // emitted as `get { return x; }` rather than `=> x`. The setting is flipped per call, which is safe
+        // because DecompileAsync serialises every decompile on this session through its gate.
+        settings.UseExpressionBodyForCalculatedGetterOnlyProperties = memberOrder != MemberOrder.DnSpy;
         var tree = decompiler.Decompile([handle]);
+        if (memberOrder == MemberOrder.DnSpy) ReorderMembersDnSpyStyle(tree, groupOrder);
         var (text, spans, references) = SemanticHighlighter.Highlight(tree, settings.CSharpFormattingOptions);
         var lines = SplitIntoClassifiedLines(text, spans, references);
         InsertNamespaceLine(lines, DeclaringTypeOf(handle));
         if (showMetadataTokens) InsertTokenCommentLines(lines, handle);
         return FlattenClassifiedLines(lines);
     }
+
+    // dnSpy lists a type's members in source-code order, not ILSpy's kind-grouped order (which clusters all
+    // properties, then all events, then all methods). ILSpy only reconstructs source order for COM interop via
+    // GetMembersWithNativeOrdering; we apply the same idea to every type so, e.g., an event declared between two
+    // properties stays between them instead of being pulled out into an events group.
+    //
+    // dnSpy's layout groups a type's members by kind — methods, properties, events, fields and nested types —
+    // and renders those groups as contiguous blocks in a user-chosen order (its "Decompilation order" setting).
+    // Within a block, members keep declaration order (properties/events keyed on their first accessor token,
+    // which lives in the MethodDef table in declaration order; methods/fields/nested types on their own token).
+    // The sort key is (group rank in the chosen order, declaration token). OrderBy is stable, so members that
+    // share a key keep their existing relative order.
+    private static void ReorderMembersDnSpyStyle(SyntaxTree tree, IReadOnlyList<MemberGroup> groupOrder)
+    {
+        var rank = new int[5];
+        for (var i = 0; i < groupOrder.Count; i++) rank[(int)groupOrder[i]] = i;
+        foreach (var type in tree.Descendants.OfType<TypeDeclaration>().ToList())
+        {
+            var sorted = type.Members.OrderBy(member => GetDeclarationOrderKey(member, rank)).ToList();
+            type.Members.Clear();
+            foreach (var member in sorted) type.Members.Add(member);
+        }
+    }
+
+    private static (int GroupRank, int Token) GetDeclarationOrderKey(EntityDeclaration member, int[] rank)
+    {
+        // Declarations are annotated with a resolve result, not the entity directly: members carry a
+        // MemberResolveResult (its Member is the IMethod/IProperty/IEvent/IField) and nested types a
+        // TypeResolveResult. Anything unresolvable (rare) sorts last so it never displaces real members.
+        if (member is TypeDeclaration)
+        {
+            var typeDefinition = member.Annotation<TypeResolveResult>()?.Type.GetDefinition();
+            return (rank[(int)MemberGroup.NestedTypes], typeDefinition is null ? int.MaxValue : TokenValue(typeDefinition.MetadataToken));
+        }
+        if (member.Annotation<MemberResolveResult>()?.Member is not { } entity) return (int.MaxValue, int.MaxValue);
+        var (group, handle) = entity switch
+        {
+            IField => (MemberGroup.Fields, entity.MetadataToken),
+            IProperty { Getter: { } getter } => (MemberGroup.Properties, getter.MetadataToken),
+            IProperty { Setter: { } setter } => (MemberGroup.Properties, setter.MetadataToken),
+            IProperty => (MemberGroup.Properties, entity.MetadataToken),
+            IEvent { AddAccessor: { } add } => (MemberGroup.Events, add.MetadataToken),
+            IEvent { RemoveAccessor: { } remove } => (MemberGroup.Events, remove.MetadataToken),
+            IEvent { InvokeAccessor: { } invoke } => (MemberGroup.Events, invoke.MetadataToken),
+            IEvent => (MemberGroup.Events, entity.MetadataToken),
+            _ => (MemberGroup.Methods, entity.MetadataToken) // IMethod: plain methods, constructors, operators
+        };
+        return (rank[(int)group], TokenValue(handle));
+    }
+
+    private static int TokenValue(EntityHandle handle) => handle.IsNil ? int.MaxValue : MetadataTokens.GetToken(handle);
 
     private sealed class ClassifiedLine(string text)
     {

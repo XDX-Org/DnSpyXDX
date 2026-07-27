@@ -202,6 +202,13 @@ button.source-token.code-link{text-decoration:none}
 .settings-checkbox{appearance:none;flex:0 0 auto;width:38px;height:20px;margin:0;border:1px solid var(--theme-color-536078);border-radius:10px;background:var(--theme-color-252d3c);cursor:pointer;transition:background .15s,border-color .15s;position:relative}.settings-checkbox::before{content:"";position:absolute;width:14px;height:14px;left:2px;top:2px;border-radius:50%;background:var(--theme-color-aeb8c7);box-shadow:0 1px 2px var(--theme-color-000b);transition:transform .15s,background .15s}.settings-checkbox:checked{border-color:var(--theme-color-7968ff);background:var(--theme-color-7968ff)}.settings-checkbox:checked::before{transform:translateX(18px);background:var(--theme-color-fff)}.settings-checkbox:focus-visible{outline:2px solid var(--theme-color-4e87c0);outline-offset:2px}
 .settings-select{min-width:130px}
 .settings-font{width:155px}
+.member-order-row{flex-direction:column;align-items:stretch;gap:8px}
+.member-order-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.member-order-item{display:flex;align-items:center;justify-content:space-between;padding:5px 9px;border:1px solid var(--theme-color-3b465b);border-radius:4px;background:var(--theme-color-222b3a);color:var(--theme-color-dce5f5);font-size:12px}
+.member-order-buttons{display:flex;gap:4px}
+.member-order-buttons button{width:24px;height:22px;border:1px solid var(--theme-color-3b465b);border-radius:3px;background:var(--theme-color-2a3446);color:var(--theme-color-dce5f5);cursor:pointer;line-height:1;padding:0}
+.member-order-buttons button:hover:not(:disabled){background:var(--theme-color-303b50)}
+.member-order-buttons button:disabled{opacity:.4;cursor:default}
 .language-selector{display:flex;align-items:center;gap:7px;margin-left:auto;color:var(--theme-color-8491a6);font-size:11px}.language-selector select{min-width:108px}
 
 /* Semantic syntax palette. The default theme mirrors dnSpy's stock dark colors (class teal,

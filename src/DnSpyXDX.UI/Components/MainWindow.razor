@@ -148,6 +148,25 @@
       <div class="settings-row"><span><strong>Application zoom</strong><small>Scale the entire interface</small></span><div class="application-zoom"><button aria-label="Zoom out" disabled="@(zoomPercent <= MinimumZoom)" @onclick="() => ChangeApplicationZoom(-1)">−</button><button class="zoom-percent" aria-label="Reset zoom to 100%" @onclick="ResetApplicationZoom">@zoomPercent%</button><button aria-label="Zoom in" disabled="@(zoomPercent >= MaximumZoom)" @onclick="() => ChangeApplicationZoom(1)">+</button></div></div>
       <label class="settings-row"><span><strong>Debug logging</strong><small>Write detailed diagnostics to the console</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@debugLogging" @onchange="DebugLoggingChanged" /></label>
       <label class="settings-row"><span><strong>Metadata tokens</strong><small>Show token and RID comments in the main panel</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@showMetadataTokens" @onchange="MetadataTokensChangedAsync" /></label>
+      <div class="settings-row"><span><strong>Decompiler</strong><small>C# output style — both use the ILSpy engine</small></span><select class="settings-select" value="@memberOrder" @onchange="MemberOrderChangedAsync"><option value="@MemberOrder.Ilspy">ILSpy (default)</option><option value="@MemberOrder.DnSpy">dnSpy</option></select></div>
+      @if (memberOrder == MemberOrder.DnSpy)
+      {
+        <div class="settings-row member-order-row"><span><strong>Decompilation order</strong><small>Order of member groups in the dnSpy layout</small></span>
+          <ol class="member-order-list">
+            @for (var i = 0; i < memberGroupOrder.Count; i++)
+            {
+              var index = i;
+              <li class="member-order-item">
+                <span>@MemberGroups.Label(memberGroupOrder[index])</span>
+                <span class="member-order-buttons">
+                  <button type="button" title="Move up" aria-label="Move up" disabled="@(index == 0)" @onclick="() => MoveMemberGroupAsync(index, -1)">▲</button>
+                  <button type="button" title="Move down" aria-label="Move down" disabled="@(index == memberGroupOrder.Count - 1)" @onclick="() => MoveMemberGroupAsync(index, 1)">▼</button>
+                </span>
+              </li>
+            }
+          </ol>
+        </div>
+      }
       <label class="settings-row"><span><strong>Line wrapping</strong><small>Wrap long source and resource text lines</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@wrapLines" @onchange="LineWrappingChangedAsync" /></label>
       <label class="settings-row mcp-roots-setting"><span><strong>MCP allowed roots</strong><small>One absolute directory per line</small></span><textarea value="@mcpAllowedRoots" @onchange="McpRootsChangedAsync" placeholder="/path/to/assemblies"></textarea></label>
     </section>
@@ -188,6 +207,8 @@
   private string themeId = Themes.DefaultId;
   private bool debugLogging;
   private bool showMetadataTokens;
+  private MemberOrder memberOrder;
+  private List<MemberGroup> memberGroupOrder = MemberGroups.DefaultOrder.ToList();
   private bool wrapLines;
   private string codeFontFamily = "DejaVu Sans Mono";
   private string[] systemFonts = [];
@@ -239,11 +260,15 @@
       themeId = Themes.Normalize(ui.ThemeId);
       debugLogging = ui.DebugLogging;
       showMetadataTokens = ui.ShowMetadataTokens;
+      memberOrder = ui.MemberOrder.ValidOrDefault();
+      memberGroupOrder = MemberGroups.Normalize(ui.MemberGroupOrder).ToList();
       wrapLines = ui.WrapLines;
       codeFontFamily = string.IsNullOrWhiteSpace(ui.CodeFontFamily) ? "DejaVu Sans Mono" : ui.CodeFontFamily.Trim();
       language = ui.Language.ValidOrDefault();
       LoggingSettings.DebugEnabled = debugLogging;
       DisplaySettings.ShowMetadataTokens = showMetadataTokens;
+      DisplaySettings.MemberOrder = memberOrder;
+      DisplaySettings.MemberGroupOrder = memberGroupOrder.ToArray();
       Zoom.SetZoom(zoomPercent);
     }
     catch (Exception ex) { restoring = false; Workspace.SetBusy(false, $"Session restore failed: {ex.Message}"); }
@@ -307,7 +332,7 @@
     }
   }
   private void ScheduleSave() { saveDelay?.Cancel(); saveDelay?.Dispose(); saveDelay = new CancellationTokenSource(); var token = saveDelay.Token; _ = SaveAfterDelayAsync(token); }
-  private UiSessionState CaptureUiState() => new(explorerWidth, searchPanelHeight, bottomOpen, searchKind, searchScope, zoomPercent, themeId, debugLogging, language, showMetadataTokens, wrapLines, codeFontFamily, bottomTab, analyzerRoots, McpSettings.Enabled, McpSettings.AllowedRoots.ToArray(), lastOpenDirectory);
+  private UiSessionState CaptureUiState() => new(explorerWidth, searchPanelHeight, bottomOpen, searchKind, searchScope, zoomPercent, themeId, debugLogging, language, showMetadataTokens, wrapLines, codeFontFamily, bottomTab, analyzerRoots, McpSettings.Enabled, McpSettings.AllowedRoots.ToArray(), lastOpenDirectory, memberOrder, memberGroupOrder.ToArray());
   private void AnalyzerRootsChanged(IReadOnlyList<AnalyzerRootState> updated) { analyzerRoots = updated.ToList(); ScheduleSave(); }
   private async Task SaveAfterDelayAsync(CancellationToken token) { try { await Task.Delay(350, token); Session.UiState = CaptureUiState(); await Session.SaveAsync(token); } catch (OperationCanceledException) { } }
   private async Task OpenAsync() { var path = await Dialogs.OpenAssemblyAsync(lastOpenDirectory); if (path is null) return; lastOpenDirectory = Path.GetDirectoryName(path) ?? ""; ScheduleSave(); Workspace.SetBusy(true, "Opening assembly…"); try { await Assemblies.OpenAsync(path, "desktop"); } catch (Exception ex) { Workspace.SetBusy(false, ex.Message); } }
@@ -693,6 +718,25 @@
     Session.UiState = CaptureUiState();
     await Session.SaveAsync();
     foreach (var tab in Workspace.Tabs.Where(tab => tab.Document.Resource is null).ToArray()) await RefreshTabLanguageAsync(tab);
+  }
+  private async Task MemberOrderChangedAsync(ChangeEventArgs e)
+  {
+    memberOrder = Enum.TryParse<MemberOrder>(e.Value?.ToString(), out var parsed) ? parsed.ValidOrDefault() : MemberOrder.Ilspy;
+    DisplaySettings.MemberOrder = memberOrder;
+    Session.UiState = CaptureUiState();
+    await Session.SaveAsync();
+    // Only the C# view reorders; leave IL/hex tabs untouched so they don't needlessly re-decompile.
+    foreach (var tab in Workspace.Tabs.Where(tab => tab.Document.Resource is null && tab.Document.Language == DecompilerLanguage.CSharp.Key()).ToArray()) await RefreshTabLanguageAsync(tab);
+  }
+  private async Task MoveMemberGroupAsync(int index, int delta)
+  {
+    var target = index + delta;
+    if (target < 0 || target >= memberGroupOrder.Count) return;
+    (memberGroupOrder[index], memberGroupOrder[target]) = (memberGroupOrder[target], memberGroupOrder[index]);
+    DisplaySettings.MemberGroupOrder = memberGroupOrder.ToArray();
+    Session.UiState = CaptureUiState();
+    await Session.SaveAsync();
+    foreach (var tab in Workspace.Tabs.Where(tab => tab.Document.Resource is null && tab.Document.Language == DecompilerLanguage.CSharp.Key()).ToArray()) await RefreshTabLanguageAsync(tab);
   }
   private async Task LineWrappingChangedAsync(ChangeEventArgs e)
   {

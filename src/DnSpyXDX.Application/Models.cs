@@ -23,6 +23,71 @@ public static class DecompilerLanguages
         Enum.IsDefined(language) ? language : DecompilerLanguage.CSharp;
 }
 
+/// <summary>Order in which members are listed inside a decompiled type (C# view only).</summary>
+public enum MemberOrder
+{
+    /// <summary>ILSpy's native emission order — the order the decompiler produces. The default.</summary>
+    Ilspy = 0,
+    /// <summary>dnSpy's layout: members grouped by kind, the groups ordered by <see cref="MemberGroup"/>.</summary>
+    DnSpy = 1
+}
+
+public static class MemberOrders
+{
+    public static MemberOrder ValidOrDefault(this MemberOrder order) =>
+        Enum.IsDefined(order) ? order : MemberOrder.Ilspy;
+}
+
+/// <summary>A kind-of-member group in the dnSpy layout. The five groups are rendered as contiguous blocks in
+/// a user-chosen order (dnSpy's "Decompilation order" setting); within a block members keep declaration order.</summary>
+public enum MemberGroup
+{
+    Methods = 0,
+    Properties = 1,
+    Events = 2,
+    Fields = 3,
+    NestedTypes = 4
+}
+
+public static class MemberGroups
+{
+    /// <summary>dnSpy's default group order: Methods, Properties, Events, Fields, Nested Types.</summary>
+    public static readonly IReadOnlyList<MemberGroup> DefaultOrder =
+        [MemberGroup.Methods, MemberGroup.Properties, MemberGroup.Events, MemberGroup.Fields, MemberGroup.NestedTypes];
+
+    /// <summary>Coerce any stored/partial list into a full permutation of the five groups: drop unknowns and
+    /// duplicates, then append whatever is missing in the default order. A null or empty list becomes the default.</summary>
+    public static IReadOnlyList<MemberGroup> Normalize(IReadOnlyList<MemberGroup>? order)
+    {
+        if (order is null || order.Count == 0) return DefaultOrder;
+        var result = new List<MemberGroup>(5);
+        foreach (var group in order) if (Enum.IsDefined(group) && !result.Contains(group)) result.Add(group);
+        foreach (var group in DefaultOrder) if (!result.Contains(group)) result.Add(group);
+        return result;
+    }
+
+    /// <summary>A short signature (one letter per group) used to key cached documents by the chosen order.</summary>
+    public static string Signature(IReadOnlyList<MemberGroup> order) => string.Concat(order.Select(group => group switch
+    {
+        MemberGroup.Methods => 'M',
+        MemberGroup.Properties => 'P',
+        MemberGroup.Events => 'E',
+        MemberGroup.Fields => 'F',
+        MemberGroup.NestedTypes => 'N',
+        _ => '?'
+    }));
+
+    public static string Label(MemberGroup group) => group switch
+    {
+        MemberGroup.Methods => "Methods",
+        MemberGroup.Properties => "Properties",
+        MemberGroup.Events => "Events",
+        MemberGroup.Fields => "Fields",
+        MemberGroup.NestedTypes => "Nested Types",
+        _ => group.ToString()
+    };
+}
+
 public readonly record struct SymbolId(Guid ModuleMvid, int MetadataToken);
 public readonly record struct NodeId(Guid SessionId, string Value);
 
@@ -147,4 +212,6 @@ public sealed record UiSessionState(
     IReadOnlyList<AnalyzerRootState>? AnalyzerRoots = null,
     bool McpEnabled = false,
     IReadOnlyList<string>? McpAllowedRoots = null,
-    string LastOpenDirectory = "");
+    string LastOpenDirectory = "",
+    MemberOrder MemberOrder = MemberOrder.Ilspy,
+    IReadOnlyList<MemberGroup>? MemberGroupOrder = null);

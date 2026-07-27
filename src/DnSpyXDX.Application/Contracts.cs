@@ -90,4 +90,20 @@ public sealed class RuntimeDisplaySettings
         get => Volatile.Read(ref showMetadataTokens) != 0;
         set => Volatile.Write(ref showMetadataTokens, value ? 1 : 0);
     }
+
+    private int memberOrder;
+    public MemberOrder MemberOrder
+    {
+        get => (MemberOrder)Volatile.Read(ref memberOrder);
+        set => Volatile.Write(ref memberOrder, (int)value);
+    }
+
+    // Group order for the dnSpy layout. Stored as an immutable, already-normalised list swapped atomically, so
+    // a decompile thread always reads a complete permutation of the five groups.
+    private IReadOnlyList<MemberGroup> memberGroupOrder = MemberGroups.DefaultOrder;
+    public IReadOnlyList<MemberGroup> MemberGroupOrder
+    {
+        get => Volatile.Read(ref memberGroupOrder);
+        set => Volatile.Write(ref memberGroupOrder, MemberGroups.Normalize(value));
+    }
 }

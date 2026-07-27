@@ -65,9 +65,9 @@ public sealed class PersistentDecompileCache
     public static string ComputeAssemblyId(ReadOnlySpan<byte> content) =>
         Convert.ToHexString(SHA256.HashData(content).AsSpan(0, 16)).ToLowerInvariant();
 
-    public DecompilerDocument? TryLoad(string assemblyId, int metadataToken, DecompilerLanguage language, bool showMetadataTokens)
+    public DecompilerDocument? TryLoad(string assemblyId, int metadataToken, DecompilerLanguage language, bool showMetadataTokens, MemberOrder memberOrder = MemberOrder.Ilspy, string groupSignature = "")
     {
-        var path = PathFor(assemblyId, metadataToken, language, showMetadataTokens);
+        var path = PathFor(assemblyId, metadataToken, language, showMetadataTokens, memberOrder, groupSignature);
         if (!File.Exists(path)) return null;
         try
         {
@@ -83,9 +83,9 @@ public sealed class PersistentDecompileCache
         }
     }
 
-    public void Save(string assemblyId, DecompilerDocument document, DecompilerLanguage language, bool showMetadataTokens)
+    public void Save(string assemblyId, DecompilerDocument document, DecompilerLanguage language, bool showMetadataTokens, MemberOrder memberOrder = MemberOrder.Ilspy, string groupSignature = "")
     {
-        var path = PathFor(assemblyId, document.Symbol.MetadataToken, language, showMetadataTokens);
+        var path = PathFor(assemblyId, document.Symbol.MetadataToken, language, showMetadataTokens, memberOrder, groupSignature);
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -113,6 +113,9 @@ public sealed class PersistentDecompileCache
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
     }
 
-    private string PathFor(string assemblyId, int metadataToken, DecompilerLanguage language, bool showMetadataTokens) =>
-        Path.Combine(root, assemblyId, $"{metadataToken:X8}-{language.Key()}-{(showMetadataTokens ? 1 : 0)}.json.gz");
+    // The default (ILSpy) order keeps the historical filename so entries written before member ordering
+    // existed still resolve; the dnSpy layout carries a suffix that includes its group-order signature so a
+    // reordering produces a distinct entry.
+    private string PathFor(string assemblyId, int metadataToken, DecompilerLanguage language, bool showMetadataTokens, MemberOrder memberOrder = MemberOrder.Ilspy, string groupSignature = "") =>
+        Path.Combine(root, assemblyId, $"{metadataToken:X8}-{language.Key()}-{(showMetadataTokens ? 1 : 0)}{(memberOrder == MemberOrder.Ilspy ? "" : $"-dnspy{groupSignature}")}.json.gz");
 }
