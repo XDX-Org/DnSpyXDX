@@ -122,6 +122,17 @@ jobs:
           done
           ls -l dist
 
+      - name: Move nightly tag to current commit
+        # action-gh-release won't relocate an existing tag, so force-update the ref
+        # (or create it the first time) to keep 'nightly' pointing at this build.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api -X PATCH "repos/${{ github.repository }}/git/refs/tags/nightly" \
+            -f sha="${{ github.sha }}" -F force=true \
+          || gh api -X POST "repos/${{ github.repository }}/git/refs" \
+            -f ref="refs/tags/nightly" -f sha="${{ github.sha }}"
+
       - name: Publish rolling 'nightly' release
         uses: softprops/action-gh-release@v3
         with:
