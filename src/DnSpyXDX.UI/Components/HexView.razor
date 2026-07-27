@@ -3,7 +3,7 @@
 
 <div class="hex-viewport" @ref="viewport" tabindex="0" role="region" aria-label="Assembly hex data">
   <div class="hex-scroll-surface" style="height:@($"{ScrollHeight}px")">
-    <div class="hex-window" style="top:@($"{windowTop}px")">
+    <div class="hex-window" style="top:@(windowTop.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))px">
       @foreach (var row in VisibleRows)
       {
         var offset = row * bytesPerRow;

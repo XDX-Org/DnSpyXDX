@@ -42,7 +42,7 @@
     <label class="language-selector"><span>Language</span><select value="@language" @onchange="LanguageChangedAsync"><option value="@DecompilerLanguage.CSharp">C#</option><option value="@DecompilerLanguage.IL">IL</option><option value="@DecompilerLanguage.ILWithCSharp">IL with C#</option><option value="@DecompilerLanguage.Hex">Hex</option></select></label>
   </header>
   <main>
-    <div class="explorer-pane" @ref="explorer" style="width:@($"{explorerWidth}px")">
+    <div class="explorer-pane" @ref="explorer" style="width:@(explorerWidth.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))px">
       <aside class="explorer">
         <header class="explorer-header">
           <div class="panel-title">ASSEMBLIES</div>
@@ -69,7 +69,7 @@
         else if (Workspace.ActiveTab is { } active) { <SourceView TabId="active.Id" Document="active.Document" WrapLines="wrapLines" OnNavigate="NavigateFromSourceAsync" OnAnalyze="OpenSourceAnalyzeMenu" /> }
       </div>
       @if (bottomOpen) {
-        <section class="bottom-panel" @ref="searchPanel" style="height:@($"{searchPanelHeight}px")">
+        <section class="bottom-panel" @ref="searchPanel" style="height:@(searchPanelHeight.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))px">
           <div class="search-resizer" title="Drag to resize the panel"></div>
           <div class="bottom-tabs" role="tablist">
             <button class="bottom-tab @(bottomTab == "search" ? "active" : null)" role="tab" aria-selected="@(bottomTab == "search")" disabled="@(Backend.Assemblies.Count == 0)" @onclick='() => SwitchBottomTab("search")'>Search</button>
