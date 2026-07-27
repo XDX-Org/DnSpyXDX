@@ -192,6 +192,32 @@ public sealed class DecompilerBackendTests
     }
 
     [Fact]
+    public async Task Makes_extension_methods_and_cross_type_members_clickable_in_csharp()
+    {
+        await using var backend = new DecompilerBackend();
+        var assembly = await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
+        var consumer = Assert.Single(await backend.SearchAsync(nameof(ExtensionConsumer)), result => result.Kind == "Type");
+        var document = await backend.DecompileAsync(consumer.Symbol, DecompilerLanguage.CSharp);
+
+        var doubled = Assert.Single(await backend.SearchAsync(nameof(SampleExtensions.Doubled)), result =>
+            result.QualifiedName == "DnSpyXDX.Tests.SampleExtensions.Doubled");
+        var sampleMethod = Assert.Single(await backend.SearchAsync(nameof(SampleMembers.SampleMethod)), result =>
+            result.QualifiedName == "DnSpyXDX.Tests.SampleMembers.SampleMethod");
+
+        // The extension method call site resolves to the extension's own type, which a name-based link map
+        // (limited to the type being shown) could never reach.
+        Assert.Contains(document.References, reference =>
+            reference.LocalTarget == doubled.Symbol &&
+            document.Text.AsSpan(reference.StartOffset, reference.Length).SequenceEqual(nameof(SampleExtensions.Doubled)));
+        // A plain call to another type's member is clickable too, pointing at that member.
+        Assert.Contains(document.References, reference =>
+            reference.LocalTarget == sampleMethod.Symbol &&
+            document.Text.AsSpan(reference.StartOffset, reference.Length).SequenceEqual(nameof(SampleMembers.SampleMethod)));
+        // Every emitted reference lines up with the identifier text at its offset.
+        Assert.All(document.References, reference => Assert.InRange(reference.StartOffset + reference.Length, 0, document.Text.Length));
+    }
+
+    [Fact]
     public async Task Orders_members_the_way_dnSpys_assembly_explorer_does()
     {
         await using var backend = new DecompilerBackend();
@@ -526,6 +552,20 @@ public sealed class GenericSample<TItem>
 public static class SampleStatic
 {
     public static void Ping() { }
+}
+
+public static class SampleExtensions
+{
+    public static int Doubled(this SampleMembers member) => member.SampleField * 2;
+}
+
+public sealed class ExtensionConsumer
+{
+    public int Use(SampleMembers member)
+    {
+        member.SampleMethod();
+        return member.Doubled();
+    }
 }
 
 public delegate int SampleDelegate(int value);

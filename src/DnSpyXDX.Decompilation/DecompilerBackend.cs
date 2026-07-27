@@ -470,8 +470,9 @@ internal sealed class AssemblySession : IDisposable
             decompiler.CancellationToken = ct;
             string text;
             IReadOnlyList<ClassifiedSpan>? semanticSpans = null;
+            IReadOnlyList<ReferenceSpan> csharpReferences = [];
             if (language == DecompilerLanguage.CSharp)
-                (text, semanticSpans) = await Task.Run(() => DecompileCSharp(handle, showMetadataTokens), ct);
+                (text, semanticSpans, csharpReferences) = await Task.Run(() => DecompileCSharp(handle, showMetadataTokens), ct);
             else
                 text = await Task.Run(() => language switch
                 {
@@ -484,7 +485,7 @@ internal sealed class AssemblySession : IDisposable
             var title = GetEntityName(handle);
             var links = language == DecompilerLanguage.CSharp ? BuildSymbolLinks(handle) : null;
             var symbolLocations = language == DecompilerLanguage.CSharp ? BuildSymbolLocations(text, handle) : null;
-            var references = language is DecompilerLanguage.IL or DecompilerLanguage.ILWithCSharp ? BuildILReferences(text) : [];
+            var references = language is DecompilerLanguage.IL or DecompilerLanguage.ILWithCSharp ? BuildILReferences(text) : csharpReferences;
             var binary = language == DecompilerLanguage.Hex ? image ??= module.Reader.GetEntireImage().GetContent().ToArray() : null;
             var selection = language == DecompilerLanguage.Hex ? GetHexEntityRegion(handle) : null;
             var baseRegions = language == DecompilerLanguage.Hex ? binaryRegions ??= BuildHexRegions() : null;
@@ -500,14 +501,14 @@ internal sealed class AssemblySession : IDisposable
         finally { decompiler.CancellationToken = default; gate.Release(); }
     }
 
-    private (string Text, IReadOnlyList<ClassifiedSpan> Spans) DecompileCSharp(EntityHandle handle, bool showMetadataTokens)
+    private (string Text, IReadOnlyList<ClassifiedSpan> Spans, IReadOnlyList<ReferenceSpan> References) DecompileCSharp(EntityHandle handle, bool showMetadataTokens)
     {
         // Decompile to a syntax tree and paint each token from its bound symbol (dnSpy's approach) rather
         // than lexically. The namespace header and dnSpy-style token comments are then folded back in while
-        // keeping the classification spans aligned to the text.
+        // keeping the classification spans and navigable references aligned to the text.
         var tree = decompiler.Decompile([handle]);
-        var (text, spans) = SemanticHighlighter.Highlight(tree, settings.CSharpFormattingOptions);
-        var lines = SplitIntoClassifiedLines(text, spans);
+        var (text, spans, references) = SemanticHighlighter.Highlight(tree, settings.CSharpFormattingOptions, Descriptor.ModuleMvid);
+        var lines = SplitIntoClassifiedLines(text, spans, references);
         InsertNamespaceLine(lines, DeclaringTypeOf(handle));
         if (showMetadataTokens) InsertTokenCommentLines(lines, handle);
         return FlattenClassifiedLines(lines);
@@ -516,11 +517,13 @@ internal sealed class AssemblySession : IDisposable
     private sealed class ClassifiedLine(string text)
     {
         public string Text { get; } = text;
-        // Spans are stored relative to the start of the line so inserting whole lines never disturbs them.
+        // Spans and references are stored relative to the start of the line so inserting whole lines never
+        // disturbs them; they are rebased to absolute offsets when the lines are flattened back to text.
         public List<ClassifiedSpan> Spans { get; } = [];
+        public List<ReferenceSpan> References { get; } = [];
     }
 
-    private static List<ClassifiedLine> SplitIntoClassifiedLines(string text, IReadOnlyList<ClassifiedSpan> spans)
+    private static List<ClassifiedLine> SplitIntoClassifiedLines(string text, IReadOnlyList<ClassifiedSpan> spans, IReadOnlyList<ReferenceSpan> references)
     {
         var lines = new List<ClassifiedLine>();
         var starts = new List<int> { 0 };
@@ -547,6 +550,15 @@ internal sealed class AssemblySession : IDisposable
                 line++;
             }
         }
+        foreach (var reference in references)
+        {
+            // A reference always covers a single identifier, so it lives on exactly one line.
+            var line = LineOf(starts, reference.StartOffset);
+            if (line < 0 || line >= lines.Count) continue;
+            var column = reference.StartOffset - starts[line];
+            if (column < 0 || column + reference.Length > lines[line].Text.Length) continue;
+            lines[line].References.Add(reference with { StartOffset = column });
+        }
         return lines;
     }
 
@@ -556,18 +568,20 @@ internal sealed class AssemblySession : IDisposable
         return line >= 0 ? line : ~line - 1;
     }
 
-    private static (string Text, IReadOnlyList<ClassifiedSpan> Spans) FlattenClassifiedLines(List<ClassifiedLine> lines)
+    private static (string Text, IReadOnlyList<ClassifiedSpan> Spans, IReadOnlyList<ReferenceSpan> References) FlattenClassifiedLines(List<ClassifiedLine> lines)
     {
         var builder = new StringBuilder();
         var spans = new List<ClassifiedSpan>();
+        var references = new List<ReferenceSpan>();
         for (var index = 0; index < lines.Count; index++)
         {
             var offset = builder.Length;
             builder.Append(lines[index].Text);
             foreach (var span in lines[index].Spans) spans.Add(new ClassifiedSpan(offset + span.Start, span.Length, span.Kind));
+            foreach (var reference in lines[index].References) references.Add(reference with { StartOffset = offset + reference.StartOffset });
             if (index + 1 < lines.Count) builder.Append('\n');
         }
-        return (builder.ToString(), spans);
+        return (builder.ToString(), spans, references);
     }
 
     private void InsertNamespaceLine(List<ClassifiedLine> lines, TypeDefinitionHandle typeHandle)

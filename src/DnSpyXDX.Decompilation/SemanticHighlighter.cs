@@ -1,3 +1,5 @@
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
 using System.Text;
 using DnSpyXDX.Application;
 using ICSharpCode.Decompiler.CSharp;
@@ -17,22 +19,24 @@ namespace DnSpyXDX.Decompilation;
 /// </summary>
 internal static class SemanticHighlighter
 {
-    public static (string Text, IReadOnlyList<ClassifiedSpan> Spans) Highlight(SyntaxTree tree, CSharpFormattingOptions formatting)
+    public static (string Text, IReadOnlyList<ClassifiedSpan> Spans, IReadOnlyList<ReferenceSpan> References) Highlight(SyntaxTree tree, CSharpFormattingOptions formatting, Guid moduleMvid)
     {
         var buffer = new StringWriter { NewLine = "\n" };
         var inner = new TextWriterTokenWriter(buffer) { IndentationString = "\t" };
-        var writer = new HighlightingTokenWriter(inner, buffer.GetStringBuilder());
+        var writer = new HighlightingTokenWriter(inner, buffer.GetStringBuilder(), moduleMvid);
         tree.AcceptVisitor(new CSharpOutputVisitor(writer, formatting));
-        return (buffer.ToString(), writer.Spans);
+        return (buffer.ToString(), writer.Spans, writer.References);
     }
 
     private static readonly HashSet<string> ControlKeywords =
         ["break", "case", "catch", "continue", "do", "else", "finally", "for", "foreach", "goto", "if", "in", "lock", "return", "switch", "throw", "try", "when", "while", "yield"];
 
-    private sealed class HighlightingTokenWriter(TextWriterTokenWriter inner, StringBuilder buffer) : DecoratingTokenWriter(inner)
+    private sealed class HighlightingTokenWriter(TextWriterTokenWriter inner, StringBuilder buffer, Guid moduleMvid) : DecoratingTokenWriter(inner)
     {
         private readonly List<ClassifiedSpan> spans = [];
+        private readonly List<ReferenceSpan> references = [];
         public IReadOnlyList<ClassifiedSpan> Spans => spans;
+        public IReadOnlyList<ReferenceSpan> References => references;
 
         private void Record(int start, string? kind)
         {
@@ -45,6 +49,41 @@ internal static class SemanticHighlighter
             var start = buffer.Length;
             base.WriteIdentifier(identifier);
             Record(start, ClassifyIdentifier(identifier));
+            RecordReference(identifier, start);
+        }
+
+        // Turns every identifier the decompiler bound to a definition in the assembly being shown into a
+        // navigable link, targeting the exact symbol it resolved to. This is how extension methods and any
+        // cross-type member become clickable: a purely name-based map can only reach the current type's own
+        // members, whereas the bound symbol knows precisely which method, field, or type each token means.
+        // Targets in other modules are left alone so a click never lands in an assembly that isn't open.
+        private void RecordReference(Identifier identifier, int start)
+        {
+            var end = buffer.Length;
+            if (end <= start) return;
+            var node = identifier.Parent;
+            if (node is null) return;
+            var symbol = node.GetSymbol();
+            while (symbol is null && node is VariableInitializer && node.Parent is not null)
+            {
+                node = node.Parent;
+                symbol = node.GetSymbol();
+            }
+            // A method call's target (member.Method / Method) is a method group with no single symbol; the
+            // resolved overload lives on the enclosing invocation, so reach for it. This is what makes
+            // extension-method and cross-type call sites navigable rather than dead text.
+            if (symbol is null && node is MemberReferenceExpression or IdentifierExpression &&
+                node.Parent is InvocationExpression invocation && invocation.Target == node)
+                symbol = invocation.GetSymbol();
+            if (symbol is not IEntity entity || entity.ParentModule is not { IsMainModule: true }) return;
+            var handle = entity.MetadataToken;
+            if (handle.IsNil || handle.Kind is not (HandleKind.TypeDefinition or HandleKind.MethodDefinition or
+                HandleKind.FieldDefinition or HandleKind.PropertyDefinition or HandleKind.EventDefinition)) return;
+            var target = new SymbolId(moduleMvid, MetadataTokens.GetToken(handle));
+            var name = entity.SymbolKind is SymbolKind.Constructor or SymbolKind.Destructor
+                ? entity.DeclaringType?.Name ?? entity.Name
+                : entity.Name;
+            references.Add(new ReferenceSpan(start, end - start, target, null, $"Go to {name}"));
         }
 
         public override void WriteKeyword(Role role, string keyword)
