@@ -11,6 +11,8 @@
 @inject SourcePresentationCache SourceCache
 @inject RuntimeLoggingSettings LoggingSettings
 @inject RuntimeDisplaySettings DisplaySettings
+@inject McpServerSettings McpSettings
+@inject IMcpServerService McpServer
 
 <div class="app-shell">
   <header class="toolbar">
@@ -33,8 +35,8 @@
       <button class="toolbar-icon" title="Back (Alt+Left)" aria-label="Back" disabled="@(Workspace.ActiveTab?.CanGoBack != true)" @onclick="() => NavigateHistory(false)">←</button>
       <button class="toolbar-icon" title="Forward (Alt+Right)" aria-label="Forward" disabled="@(Workspace.ActiveTab?.CanGoForward != true)" @onclick="() => NavigateHistory(true)">→</button>
     </div>
-    <button class="toolbar-icon search-toolbar-button @(bottomOpen && bottomTab == "search" ? "active" : null)" title="@(bottomOpen && bottomTab == "search" ? "Close search" : "Open search")" aria-label="@(bottomOpen && bottomTab == "search" ? "Close search" : "Open search")" aria-pressed="@(bottomOpen && bottomTab == "search")" disabled="@(Backend.Assemblies.Count == 0)" @onclick="ToggleSearchPanel">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m15.5 15.5 5 5"></path></svg>
+    <button class="toolbar-icon search-toolbar-button @(bottomOpen ? "active" : null)" title="@(bottomOpen ? "Close bottom panel" : Backend.Assemblies.Count == 0 ? "Open MCP activity" : "Open search")" aria-label="@(bottomOpen ? "Close bottom panel" : Backend.Assemblies.Count == 0 ? "Open MCP activity" : "Open search")" aria-pressed="@bottomOpen" @onclick="ToggleBottomPanel">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="1.5"></rect><path d="M3 14h18"></path><path d="m9 17 3 3 3-3"></path></svg>
     </button>
     <label class="language-selector"><span>Language</span><select value="@language" @onchange="LanguageChangedAsync"><option value="@DecompilerLanguage.CSharp">C#</option><option value="@DecompilerLanguage.IL">IL</option><option value="@DecompilerLanguage.ILWithCSharp">IL with C#</option><option value="@DecompilerLanguage.Hex">Hex</option></select></label>
   </header>
@@ -69,8 +71,9 @@
         <section class="bottom-panel" @ref="searchPanel" style="height:@($"{searchPanelHeight}px")">
           <div class="search-resizer" title="Drag to resize the panel"></div>
           <div class="bottom-tabs" role="tablist">
-            <button class="bottom-tab @(bottomTab == "search" ? "active" : null)" role="tab" aria-selected="@(bottomTab == "search")" @onclick='() => SwitchBottomTab("search")'>Search</button>
-            <button class="bottom-tab @(bottomTab == "analyzer" ? "active" : null)" role="tab" aria-selected="@(bottomTab == "analyzer")" @onclick='() => SwitchBottomTab("analyzer")'>Analyzer</button>
+            <button class="bottom-tab @(bottomTab == "search" ? "active" : null)" role="tab" aria-selected="@(bottomTab == "search")" disabled="@(Backend.Assemblies.Count == 0)" @onclick='() => SwitchBottomTab("search")'>Search</button>
+            <button class="bottom-tab @(bottomTab == "analyzer" ? "active" : null)" role="tab" aria-selected="@(bottomTab == "analyzer")" disabled="@(Backend.Assemblies.Count == 0)" @onclick='() => SwitchBottomTab("analyzer")'>Analyzer</button>
+            <button class="bottom-tab @(bottomTab == "mcp" ? "active" : null)" role="tab" aria-selected="@(bottomTab == "mcp")" @onclick='() => SwitchBottomTab("mcp")'>MCP Activity</button>
             <button class="bottom-close" title="Close panel" aria-label="Close panel" @onclick="CloseBottom">×</button>
           </div>
           <div class="search-panel search-embedded @(bottomTab == "search" ? null : "panel-hidden")">
@@ -90,6 +93,7 @@
           <div class="analyzer-body @(bottomTab == "analyzer" ? null : "panel-hidden")">
             <AnalyzerView @ref="analyzerView" OnNavigate="NavigateFromSourceAsync" InitialRoots="analyzerRoots" OnRootsChanged="AnalyzerRootsChanged" />
           </div>
+          <div class="analyzer-body @(bottomTab == "mcp" ? null : "panel-hidden")"><McpActivityPanel /></div>
         </section>
       }
     </section>
@@ -122,6 +126,9 @@
       <label class="settings-row"><span><strong>Debug logging</strong><small>Write detailed diagnostics to the console</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@debugLogging" @onchange="DebugLoggingChanged" /></label>
       <label class="settings-row"><span><strong>Metadata tokens</strong><small>Show token and RID comments in the main panel</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@showMetadataTokens" @onchange="MetadataTokensChangedAsync" /></label>
       <label class="settings-row"><span><strong>Line wrapping</strong><small>Wrap long source and resource text lines</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@wrapLines" @onchange="LineWrappingChangedAsync" /></label>
+      <label class="settings-row"><span><strong>MCP server</strong><small>Protected local endpoint for read-only assembly inspection</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@McpSettings.Enabled" @onchange="McpEnabledChangedAsync" /></label>
+      <label class="settings-row mcp-roots-setting"><span><strong>MCP allowed roots</strong><small>One absolute directory per line</small></span><textarea value="@mcpAllowedRoots" @onchange="McpRootsChangedAsync" placeholder="/path/to/assemblies"></textarea></label>
+      <div class="settings-row"><span><strong>Connection configuration</strong><small>Includes the secret bearer token; paste only into a trusted MCP host</small></span><button class="settings-action" disabled="@(McpServer.Endpoint is null)" @onclick="CopyMcpConfigurationAsync">@(mcpCopyStatus ?? "Copy configuration")</button></div>
     </section>
   }
 </div>
@@ -179,6 +186,8 @@
   private int contextMenuY;
   private DotNetObjectReference<MainWindow>? selfReference;
   private bool sessionRestoreStarted;
+  private string mcpAllowedRoots = "";
+  private string? mcpCopyStatus;
   protected override async Task OnInitializedAsync()
   {
     Workspace.Changed += Refresh;
@@ -191,7 +200,10 @@
       explorerWidth = Math.Clamp(ui.ExplorerWidth, 190, 1200);
       searchPanelHeight = Math.Clamp(ui.SearchPanelHeight, 120, 900);
       bottomOpen = ui.SearchOpen;
-      bottomTab = ui.BottomTab is "search" or "analyzer" ? ui.BottomTab : "search";
+      bottomTab = ui.BottomTab is "search" or "analyzer" or "mcp" ? ui.BottomTab : "search";
+      McpSettings.Enabled = ui.McpEnabled;
+      McpSettings.SetAllowedRoots(ui.McpAllowedRoots ?? []);
+      mcpAllowedRoots = string.Join(Environment.NewLine, McpSettings.AllowedRoots);
       analyzerRoots = ui.AnalyzerRoots?.ToList() ?? [];
       searchKind = ui.SearchKind;
       searchScope = ui.SearchScope;
@@ -228,6 +240,7 @@
         StateHasChanged();
         if (restoredFromStorage) { Session.UiState = CaptureUiState(); ScheduleSave(); StateHasChanged(); }
         if (restoring && !sessionRestoreStarted) { sessionRestoreStarted = true; _ = RestoreWorkspaceAsync(); }
+        if (McpSettings.Enabled) _ = StartMcpAsync();
       }
       if (bottomOpen) await JS.InvokeVoidAsync("dnSpyXdx.initSearchResize", searchPanel, selfReference);
       if (focusSearch) { focusSearch = false; await searchInput.FocusAsync(); }
@@ -255,12 +268,13 @@
     finally
     {
       restoring = false;
+      if (bottomOpen && Backend.Assemblies.Count == 0) bottomTab = "mcp";
       Workspace.SetBusy(false, restored && Backend.Assemblies.Count > 0 ? "Session restored" : restored ? "Ready" : "Session restore skipped");
       await InvokeAsync(StateHasChanged);
     }
   }
   private void ScheduleSave() { saveDelay?.Cancel(); saveDelay?.Dispose(); saveDelay = new CancellationTokenSource(); var token = saveDelay.Token; _ = SaveAfterDelayAsync(token); }
-  private UiSessionState CaptureUiState() => new(explorerWidth, searchPanelHeight, bottomOpen, searchKind, searchScope, zoomPercent, themeId, debugLogging, language, showMetadataTokens, wrapLines, codeFontFamily, bottomTab, analyzerRoots);
+  private UiSessionState CaptureUiState() => new(explorerWidth, searchPanelHeight, bottomOpen, searchKind, searchScope, zoomPercent, themeId, debugLogging, language, showMetadataTokens, wrapLines, codeFontFamily, bottomTab, analyzerRoots, McpSettings.Enabled, McpSettings.AllowedRoots.ToArray());
   private void AnalyzerRootsChanged(IReadOnlyList<AnalyzerRootState> updated) { analyzerRoots = updated.ToList(); ScheduleSave(); }
   private async Task SaveAfterDelayAsync(CancellationToken token) { try { await Task.Delay(350, token); Session.UiState = CaptureUiState(); await Session.SaveAsync(token); } catch (OperationCanceledException) { } }
   private async Task OpenAsync() { var path = await Dialogs.OpenAssemblyAsync(); if (path is null) return; Workspace.SetBusy(true, "Opening assembly…"); try { await Backend.OpenAsync(path); Workspace.SetBusy(false, $"Opened {Path.GetFileName(path)}"); } catch (Exception ex) { Workspace.SetBusy(false, ex.Message); } }
@@ -273,12 +287,18 @@
     menuOpen = false;
     Session.UiState = CaptureUiState();
     await Session.SaveAsync();
+    await McpServer.StopAsync();
     ApplicationLifetime.Exit();
   }
   private async Task OpenFromMenuAsync() { menuOpen = false; await OpenAsync(); }
   private async Task ExportFromMenuAsync() { menuOpen = false; await ExportAsync(); }
   private void OpenSearchPanel() { menuOpen = false; bottomOpen = true; bottomTab = "search"; focusSearch = true; ScheduleSave(); StateHasChanged(); }
-  private void ToggleSearchPanel() { if (bottomOpen && bottomTab == "search") CloseBottom(); else OpenSearchPanel(); }
+  private void ToggleBottomPanel()
+  {
+    if (bottomOpen) { CloseBottom(); return; }
+    if (Backend.Assemblies.Count == 0) SwitchBottomTab("mcp");
+    else OpenSearchPanel();
+  }
   private void SwitchBottomTab(string tab) { if (tab == "search") { OpenSearchPanel(); return; } bottomTab = tab; bottomOpen = true; ScheduleSave(); StateHasChanged(); }
   private void CloseBottom() { bottomOpen = false; ScheduleSave(); StateHasChanged(); }
   private async Task UnloadAllAsync() { menuOpen = false; CancelAllDecompilations(); Workspace.SetBusy(true, "Unloading assemblies…"); foreach (var assembly in Backend.Assemblies.ToArray()) await Backend.CloseAsync(assembly.SessionId); Workspace.Clear(); SourceViewStates.Clear(); SourceCache.Clear(); searchMatches = []; results = []; query = ""; bottomOpen = false; selectedSymbol = null; selectedNode = null; revealedPath = new HashSet<NodeId>(); Workspace.SetBusy(false, "All assemblies unloaded"); }
@@ -581,6 +601,40 @@
     wrapLines = e.Value is true;
     Session.UiState = CaptureUiState();
     await Session.SaveAsync();
+  }
+  private async Task McpEnabledChangedAsync(ChangeEventArgs e)
+  {
+    McpSettings.Enabled = e.Value is true;
+    try { if (McpSettings.Enabled) await McpServer.StartAsync(); else await McpServer.StopAsync(); }
+    catch (Exception ex) { McpSettings.Enabled = false; Workspace.SetBusy(false, $"MCP server failed: {ex.Message}"); }
+    Session.UiState = CaptureUiState();
+    await Session.SaveAsync();
+    StateHasChanged();
+  }
+  private async Task McpRootsChangedAsync(ChangeEventArgs e)
+  {
+    mcpAllowedRoots = e.Value?.ToString() ?? "";
+    McpSettings.SetAllowedRoots(mcpAllowedRoots.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    Session.UiState = CaptureUiState();
+    await Session.SaveAsync();
+  }
+  private async Task StartMcpAsync()
+  {
+    try { await McpServer.StartAsync(); await InvokeAsync(StateHasChanged); }
+    catch (Exception ex) { McpSettings.Enabled = false; Workspace.SetBusy(false, $"MCP server failed: {ex.Message}"); await InvokeAsync(StateHasChanged); }
+  }
+  private async Task CopyMcpConfigurationAsync()
+  {
+    if (McpServer.Endpoint is not { } endpoint) return;
+    var configuration = System.Text.Json.JsonSerializer.Serialize(new
+    {
+      mcpServers = new Dictionary<string, object>
+      {
+        ["dnspyxdx"] = new { type = "http", url = endpoint.ToString(), headers = new Dictionary<string, string> { ["Authorization"] = $"Bearer {McpSettings.BearerToken}" } }
+      }
+    }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+    try { await JS.InvokeVoidAsync("dnSpyXdx.copyText", configuration); mcpCopyStatus = "Copied"; }
+    catch { mcpCopyStatus = "Copy failed"; }
   }
   private async Task CodeFontChangedAsync(ChangeEventArgs e)
   {

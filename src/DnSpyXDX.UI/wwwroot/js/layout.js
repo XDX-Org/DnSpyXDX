@@ -218,3 +218,6 @@ window.dnSpyXdx.scrollHexToRow = function (viewport, row, totalRows, rowHeight) 
   const ratio = Math.min(Math.max(row, 0), maximumRow) / Math.max(1, maximumRow);
   viewport.scrollTop = ratio * Math.max(0, viewport.scrollHeight - viewport.clientHeight);
 };
+window.dnSpyXdx.copyText = async function (text) {
+  await navigator.clipboard.writeText(text);
+};
