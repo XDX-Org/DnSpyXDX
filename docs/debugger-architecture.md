@@ -285,13 +285,16 @@ session resumes.
 The first UI slice now includes:
 
 - CoreCLR launch/attach dialog and execution toolbar;
+- direct Mono host/port attach with debugger-agent guidance;
 - C#/IL breakpoint gutter backed by decompiler sequence maps;
-- current-statement gutter marker;
-- call stack, locals, breakpoint status, and bounded debugger-output panels;
-- automatic frame/locals refresh on pause and handle invalidation on resume.
+- automatic stopped-method navigation, current-statement reveal, and gutter marker;
+- selectable threads and navigable call-stack frames;
+- expandable locals/arguments, breakpoint enable/remove/navigation controls, and bounded
+  debugger-output panels;
+- automatic frame/variable refresh on pause and handle invalidation on resume.
 
-Watches, exception settings, modules, restart, breakpoint persistence, tree variables, and source
-navigation from stack frames remain.
+Watches, exception settings, modules, restart, breakpoint persistence, object-field expansion, and
+editable values remain.
 
 ## Reliability and test matrix
 

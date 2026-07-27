@@ -77,6 +77,97 @@ public sealed class DebuggerWorkspaceTests
         Assert.Equal(location, Assert.Single(request.InitialBreakpoints!).Location);
     }
 
+    [Fact]
+    public async Task Paused_workspace_selects_threads_frames_and_expandable_variables()
+    {
+        var firstThread = new DebugThread(new DebugThreadId(1), "Worker", true);
+        var stoppedThread = new DebugThread(new DebugThreadId(2), "Main", true);
+        var firstFrame = new DebugStackFrame(
+            new DebugFrameId(10),
+            firstThread.Id,
+            "Worker.Run",
+            null);
+        var stoppedFrame = new DebugStackFrame(
+            new DebugFrameId(20),
+            stoppedThread.Id,
+            "Program.Main",
+            null);
+        var rootReference = new DebugVariableReference(100);
+        var childReference = new DebugVariableReference(101);
+        var root = new DebugVariable(
+            "items",
+            "System.Int32[1]",
+            "System.Int32[]",
+            childReference);
+        var debugger = new FakeDebuggerService
+        {
+            ThreadResults = [firstThread, stoppedThread]
+        };
+        debugger.FrameResults[firstThread.Id] = [firstFrame];
+        debugger.FrameResults[stoppedThread.Id] = [stoppedFrame];
+        debugger.ScopeResults[firstFrame.Id] =
+            [new DebugScope("Locals", rootReference)];
+        debugger.ScopeResults[stoppedFrame.Id] =
+            [new DebugScope("Locals", rootReference)];
+        debugger.VariableResults[rootReference] = [root];
+        debugger.VariableResults[childReference] =
+            [new DebugVariable("[0]", "42", "System.Int32", default)];
+        using var workspace = new DebuggerWorkspace(debugger);
+
+        debugger.PublishPaused(stoppedThread.Id);
+
+        Assert.Equal(stoppedThread.Id, workspace.SelectedThread);
+        Assert.Equal(stoppedFrame, Assert.Single(workspace.Frames));
+        Assert.Equal(root, Assert.Single(workspace.Variables));
+
+        await workspace.ToggleVariableAsync(root);
+
+        Assert.True(workspace.TryGetVariableChildren(
+            childReference,
+            out var children));
+        Assert.Equal("42", Assert.Single(children).Value);
+
+        await workspace.ToggleVariableAsync(root);
+
+        Assert.False(workspace.TryGetVariableChildren(
+            childReference,
+            out _));
+
+        await workspace.ToggleVariableAsync(root);
+        await workspace.SelectThreadAsync(firstThread);
+
+        Assert.Equal(firstThread.Id, workspace.SelectedThread);
+        Assert.Equal(firstFrame, Assert.Single(workspace.Frames));
+        Assert.False(workspace.TryGetVariableChildren(
+            childReference,
+            out _));
+    }
+
+    [Fact]
+    public async Task Breakpoints_can_be_disabled_and_removed_from_panel()
+    {
+        var debugger = new FakeDebuggerService();
+        using var workspace = new DebuggerWorkspace(debugger);
+        var location = new DebugCodeLocation(
+            new DebugMethodId(Guid.NewGuid(), 0x06000001),
+            8);
+        await workspace.ToggleBreakpointAsync(location);
+        await workspace.LaunchAsync("sample.dll", [], stopAtEntry: false);
+        var breakpoint = Assert.Single(workspace.Breakpoints);
+
+        await workspace.SetBreakpointEnabledAsync(
+            breakpoint.Id,
+            enabled: false);
+
+        Assert.False(Assert.Single(workspace.Breakpoints).Enabled);
+        Assert.False(Assert.Single(debugger.LastBreakpoints).Enabled);
+
+        await workspace.RemoveBreakpointAsync(breakpoint.Id);
+
+        Assert.Empty(workspace.Breakpoints);
+        Assert.Empty(debugger.LastBreakpoints);
+    }
+
     private sealed class FakeDebuggerService : IDebuggerService
     {
         public DebugSessionSnapshot Snapshot { get; private set; } =
@@ -84,6 +175,13 @@ public sealed class DebuggerWorkspaceTests
         public IReadOnlyList<DebugBreakpointBinding> Breakpoints { get; private set; } = [];
         public IReadOnlyList<DebugBreakpoint> LastBreakpoints { get; private set; } = [];
         public DebugStartRequest? LastStartRequest { get; private set; }
+        public IReadOnlyList<DebugThread> ThreadResults { get; init; } = [];
+        public Dictionary<DebugThreadId, IReadOnlyList<DebugStackFrame>>
+            FrameResults { get; } = [];
+        public Dictionary<DebugFrameId, IReadOnlyList<DebugScope>>
+            ScopeResults { get; } = [];
+        public Dictionary<DebugVariableReference, IReadOnlyList<DebugVariable>>
+            VariableResults { get; } = [];
 
         public event Action<DebugSessionSnapshot>? StateChanged;
         public event Action<IReadOnlyList<DebugBreakpointBinding>>? BreakpointsChanged;
@@ -151,22 +249,28 @@ public sealed class DebuggerWorkspaceTests
 
         public Task<IReadOnlyList<DebugThread>> GetThreadsAsync(
             CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<DebugThread>>([]);
+            Task.FromResult(ThreadResults);
 
         public Task<IReadOnlyList<DebugStackFrame>> GetStackTraceAsync(
             DebugThreadId thread,
             CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<DebugStackFrame>>([]);
+            Task.FromResult(
+                FrameResults.GetValueOrDefault(thread) ??
+                (IReadOnlyList<DebugStackFrame>)[]);
 
         public Task<IReadOnlyList<DebugScope>> GetScopesAsync(
             DebugFrameId frame,
             CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<DebugScope>>([]);
+            Task.FromResult(
+                ScopeResults.GetValueOrDefault(frame) ??
+                (IReadOnlyList<DebugScope>)[]);
 
         public Task<IReadOnlyList<DebugVariable>> GetVariablesAsync(
             DebugVariableReference reference,
             CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<DebugVariable>>([]);
+            Task.FromResult(
+                VariableResults.GetValueOrDefault(reference) ??
+                (IReadOnlyList<DebugVariable>)[]);
 
         public Task<DebugEvaluationResult> EvaluateAsync(
             string expression,
@@ -175,5 +279,20 @@ public sealed class DebuggerWorkspaceTests
             Task.FromResult(new DebugEvaluationResult("", null, default));
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+
+        public void PublishPaused(DebugThreadId thread)
+        {
+            Snapshot = new DebugSessionSnapshot(
+                Guid.NewGuid(),
+                DebugRuntimeKind.Mono,
+                DebugSessionStatus.Paused,
+                1234,
+                DebuggerCapabilitySets.None,
+                new DebugStopInfo(
+                    DebugStopReason.Breakpoint,
+                    thread),
+                null);
+            StateChanged?.Invoke(Snapshot);
+        }
     }
 }

@@ -16,7 +16,10 @@ public sealed class DebuggerWorkspace : IDisposable
     private IReadOnlyList<DebugThread> threads = [];
     private IReadOnlyList<DebugStackFrame> frames = [];
     private IReadOnlyList<DebugVariable> variables = [];
+    private readonly Dictionary<DebugVariableReference, IReadOnlyList<DebugVariable>>
+        variableChildren = [];
     private IReadOnlyList<DebugOutputMessage> output = [];
+    private DebugThreadId? selectedThread;
     private DebugFrameId? selectedFrame;
     private bool disposed;
 
@@ -35,6 +38,7 @@ public sealed class DebuggerWorkspace : IDisposable
     public IReadOnlyList<DebugStackFrame> Frames => frames;
     public IReadOnlyList<DebugVariable> Variables => variables;
     public IReadOnlyList<DebugOutputMessage> Output => output;
+    public DebugThreadId? SelectedThread => selectedThread;
     public DebugFrameId? SelectedFrame => selectedFrame;
     public bool IsBusy { get; private set; }
     public string? Error { get; private set; }
@@ -144,6 +148,65 @@ public sealed class DebuggerWorkspace : IDisposable
             cancellationToken,
             requireActiveSession: false);
 
+    public Task SelectThreadAsync(
+        DebugThread thread,
+        CancellationToken cancellationToken = default) =>
+        RunAsync(
+            token => LoadThreadAsync(
+                thread.Id,
+                Snapshot.SessionId,
+                token),
+            cancellationToken,
+            requireActiveSession: false);
+
+    public Task ToggleVariableAsync(
+        DebugVariable variable,
+        CancellationToken cancellationToken = default) =>
+        RunAsync(async token =>
+        {
+            if (variable.Variables.Value == 0) return;
+            if (variableChildren.ContainsKey(variable.Variables))
+            {
+                CollapseVariable(variable.Variables, []);
+                NotifyChanged();
+                return;
+            }
+
+            variableChildren[variable.Variables] =
+                await debugger.GetVariablesAsync(variable.Variables, token);
+            NotifyChanged();
+        }, cancellationToken, requireActiveSession: false);
+
+    public bool TryGetVariableChildren(
+        DebugVariableReference reference,
+        out IReadOnlyList<DebugVariable> children) =>
+        variableChildren.TryGetValue(reference, out children!);
+
+    public Task RemoveBreakpointAsync(
+        Guid breakpointId,
+        CancellationToken cancellationToken = default) =>
+        RunAsync(async token =>
+        {
+            breakpoints = breakpoints
+                .Where(value => value.Id != breakpointId)
+                .ToArray();
+            await SynchronizeBreakpointsAsync(token);
+        }, cancellationToken, requireActiveSession: false);
+
+    public Task SetBreakpointEnabledAsync(
+        Guid breakpointId,
+        bool enabled,
+        CancellationToken cancellationToken = default) =>
+        RunAsync(async token =>
+        {
+            breakpoints = breakpoints
+                .Select(value => value.Id == breakpointId
+                    ? value with { Enabled = enabled }
+                    : value)
+                .ToArray();
+            await SynchronizeBreakpointsAsync(token);
+        }, cancellationToken, requireActiveSession: false);
+
     public void ClearOutput()
     {
         output = [];
@@ -226,8 +289,13 @@ public sealed class DebuggerWorkspace : IDisposable
             threads = [];
             frames = [];
             variables = [];
+            variableChildren.Clear();
+            selectedThread = null;
             selectedFrame = null;
         }
+        if (snapshot.Status == DebugSessionStatus.Faulted &&
+            !string.IsNullOrWhiteSpace(snapshot.Error))
+            Error = snapshot.Error;
         NotifyChanged();
         if (snapshot.Status == DebugSessionStatus.Paused)
             QueuePausedRefresh(snapshot.SessionId);
@@ -249,22 +317,18 @@ public sealed class DebuggerWorkspace : IDisposable
         {
             var loadedThreads = await debugger.GetThreadsAsync(cancellationToken);
             var stoppedThread = Snapshot.Stop?.Thread;
-            var selectedThread = loadedThreads.FirstOrDefault(
+            var initialThread = loadedThreads.FirstOrDefault(
                     value => value.Id == stoppedThread) ??
                 loadedThreads.FirstOrDefault();
-            var loadedFrames = selectedThread is null
-                ? []
-                : await debugger.GetStackTraceAsync(
-                    selectedThread.Id,
-                    cancellationToken);
             if (Snapshot.SessionId != sessionId ||
                 Snapshot.Status != DebugSessionStatus.Paused)
                 return;
             threads = loadedThreads;
-            frames = loadedFrames;
-            var firstFrame = loadedFrames.FirstOrDefault();
-            if (firstFrame is not null)
-                await LoadVariablesAsync(firstFrame, cancellationToken);
+            if (initialThread is not null)
+                await LoadThreadAsync(
+                    initialThread.Id,
+                    sessionId,
+                    cancellationToken);
             else
                 NotifyChanged();
         }
@@ -276,6 +340,32 @@ public sealed class DebuggerWorkspace : IDisposable
             Error = exception.Message;
             NotifyChanged();
         }
+    }
+
+    private async Task LoadThreadAsync(
+        DebugThreadId thread,
+        Guid sessionId,
+        CancellationToken cancellationToken)
+    {
+        if (Snapshot.Status != DebugSessionStatus.Paused)
+            throw new InvalidOperationException(
+                "Target must be paused to select a debugger thread.");
+        var loadedFrames = await debugger.GetStackTraceAsync(
+            thread,
+            cancellationToken);
+        if (Snapshot.SessionId != sessionId ||
+            Snapshot.Status != DebugSessionStatus.Paused)
+            return;
+        selectedThread = thread;
+        frames = loadedFrames;
+        variables = [];
+        variableChildren.Clear();
+        selectedFrame = null;
+        var firstFrame = loadedFrames.FirstOrDefault();
+        if (firstFrame is not null)
+            await LoadVariablesAsync(firstFrame, cancellationToken);
+        else
+            NotifyChanged();
     }
 
     private async Task LoadVariablesAsync(
@@ -293,7 +383,22 @@ public sealed class DebuggerWorkspace : IDisposable
         }
         selectedFrame = frame.Id;
         variables = loaded;
+        variableChildren.Clear();
         NotifyChanged();
+    }
+
+    private void CollapseVariable(
+        DebugVariableReference reference,
+        HashSet<DebugVariableReference> visited)
+    {
+        if (!visited.Add(reference) ||
+            !variableChildren.Remove(reference, out var children))
+            return;
+        foreach (var child in children)
+        {
+            if (child.Variables.Value != 0)
+                CollapseVariable(child.Variables, visited);
+        }
     }
 
     private void OnBreakpointsChanged(

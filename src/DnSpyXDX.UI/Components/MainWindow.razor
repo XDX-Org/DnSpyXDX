@@ -41,7 +41,7 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="1.5"></rect><path d="M3 14h18"></path><path d="m9 17 3 3 3-3"></path></svg>
     </button>
     <div class="debug-toolbar" aria-label="Debugger controls">
-      <button class="toolbar-icon" title="Start or attach debugger" aria-label="Start or attach debugger" disabled="@Debugger.IsBusy" @onclick="OpenDebugDialog">▶</button>
+      <button class="toolbar-icon" title="@(DebuggerActive ? "Stop the active session before starting another" : "Start or attach debugger")" aria-label="Start or attach debugger" disabled="@(Debugger.IsBusy || DebuggerActive)" @onclick="OpenDebugDialog">▶</button>
       <button class="toolbar-icon" title="Continue" aria-label="Continue" disabled="@(Debugger.IsBusy || Debugger.Snapshot.Status != DebugSessionStatus.Paused)" @onclick="() => Debugger.ContinueAsync()">▷</button>
       <button class="toolbar-icon" title="Pause" aria-label="Pause" disabled="@(Debugger.IsBusy || Debugger.Snapshot.Status != DebugSessionStatus.Running)" @onclick="() => Debugger.PauseAsync()">Ⅱ</button>
       <button class="toolbar-icon" title="Stop debugging" aria-label="Stop debugging" disabled="@(!DebuggerActive)" @onclick="() => Debugger.TerminateAsync()">■</button>
@@ -107,7 +107,7 @@
           </div>
           <div class="analyzer-body @(bottomTab == "mcp" ? null : "panel-hidden")"><McpActivityPanel /></div>
           <div class="analyzer-body @(bottomTab == "debugger" ? null : "panel-hidden")">
-            <DebuggerView />
+            <DebuggerView OnNavigateLocation="NavigateDebuggerLocationAsync" />
           </div>
         </section>
       }
@@ -201,6 +201,7 @@
   private string debugProcessId = "";
   private string debugMonoHost = "127.0.0.1";
   private string debugMonoPort = "55555";
+  private (Guid SessionId, DebugCodeLocation Location)? revealedDebuggerStop;
   private bool debugStopAtEntry = true;
   private bool focusSearch;
   private bool uiInitializationFailed;
@@ -238,9 +239,18 @@
   private string mcpAllowedRoots = "";
   private bool DebuggerActive => Debugger.Snapshot.Status is DebugSessionStatus.Running or DebugSessionStatus.Paused or DebugSessionStatus.Starting;
   private bool DebuggerPaused => !Debugger.IsBusy && Debugger.Snapshot.Status == DebugSessionStatus.Paused;
-  private string DebugStatus => Debugger.Snapshot.Status == DebugSessionStatus.Created
-    ? "Debugger idle"
-    : $"Debugger: {Debugger.Snapshot.Status}";
+  private string DebugStatus
+  {
+    get
+    {
+      var snapshot = Debugger.Snapshot;
+      if (snapshot.Status == DebugSessionStatus.Created) return "Debugger idle";
+      var runtime = snapshot.Runtime?.ToString() ?? "Debugger";
+      var process = snapshot.ProcessId is { } processId ? $" · PID {processId}" : "";
+      var reason = snapshot.Stop is { } stop ? $" · {stop.Reason}" : "";
+      return $"{runtime}: {snapshot.Status}{reason}{process}";
+    }
+  }
   protected override async Task OnInitializedAsync()
   {
     Workspace.Changed += Refresh;
@@ -304,14 +314,27 @@
     catch (Exception ex) { uiInitializationFailed = true; Workspace.SetBusy(false, $"UI initialization warning: {ex.Message}"); }
   }
   private void Refresh() { InvokeAsync(StateHasChanged); if (!restoring) ScheduleSave(); }
-  private void DebuggerRefresh() => _ = InvokeAsync(() =>
+  private void DebuggerRefresh() => _ = InvokeAsync(async () =>
   {
-    if (Debugger.Snapshot.Status is DebugSessionStatus.Starting or DebugSessionStatus.Running or DebugSessionStatus.Paused)
+    var snapshot = Debugger.Snapshot;
+    if (snapshot.Status is DebugSessionStatus.Starting or DebugSessionStatus.Running or DebugSessionStatus.Paused)
     {
       bottomOpen = true;
       bottomTab = "debugger";
     }
+    if (snapshot.Status != DebugSessionStatus.Paused)
+      revealedDebuggerStop = null;
     StateHasChanged();
+    if (snapshot.Status == DebugSessionStatus.Paused &&
+        snapshot.Stop?.Location is { } location)
+    {
+      var stop = (snapshot.SessionId, location);
+      if (revealedDebuggerStop != stop)
+      {
+        revealedDebuggerStop = stop;
+        await NavigateDebuggerLocationAsync(location);
+      }
+    }
   });
   private async Task RestoreWorkspaceAsync()
   {
@@ -566,6 +589,12 @@
     await OpenSymbolAsync(declaringType, request.NewTab, IsTypeSymbol(request.Symbol) ? request.DisplayName : null, true, IsTypeSymbol(request.Symbol) ? null : request.Symbol);
     StateHasChanged();
   }
+  private Task NavigateDebuggerLocationAsync(DebugCodeLocation location) =>
+    NavigateFromSourceAsync(new NavigationRequest(
+      new SymbolId(
+        location.Method.ModuleMvid,
+        location.Method.MetadataToken),
+      NewTab: false));
   private void TabMouseUp(MouseEventArgs e, string id) { if (e.Button == 1) CloseTab(id); }
   private static bool IsTypeSymbol(SymbolId symbol) => (symbol.MetadataToken >> 24) == 0x02;
   private async Task DecompileTypeIntoTabAsync(string tabId, SymbolId symbol, SymbolId? focusSymbol, CancellationTokenSource cancellation)
