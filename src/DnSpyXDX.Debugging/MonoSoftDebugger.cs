@@ -908,7 +908,8 @@ internal sealed class MonoSoftDebuggerSession(VirtualMachine virtualMachine)
             sourcePath,
             sourceLine,
             sourceColumn,
-            Safe(() => method.DeclaringType.Assembly.GetName().Name));
+            Safe(() => method.DeclaringType.Assembly.GetName().Name),
+            NullIfWhiteSpace(Safe(() => method.DeclaringType.Assembly.Location)));
     }
 
     private IReadOnlyList<DebugVariable> ReadArguments(MonoStackFrame frame)

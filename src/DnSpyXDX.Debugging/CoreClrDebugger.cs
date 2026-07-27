@@ -386,17 +386,60 @@ internal sealed class NetCoreDbgEngine(
             new JsonObject { ["threadId"] = thread.Value },
             cancellationToken).ConfigureAwait(false));
         var frames = RequiredArray(body, "stackFrames");
+        var modulePaths = await TryGetModulePathsAsync(cancellationToken)
+            .ConfigureAwait(false);
         return frames.EnumerateArray()
-            .Select(value => new DebugStackFrame(
-                new DebugFrameId(RequiredInt64(value, "id")),
-                thread,
-                OptionalString(value, "name") ?? "<unknown>",
-                Location: OptionalDebugLocation(value),
-                SourcePath: OptionalObjectString(value, "source", "path"),
-                SourceLine: OptionalPositiveInt32(value, "line"),
-                SourceColumn: OptionalPositiveInt32(value, "column"),
-                ModuleName: OptionalDisplayValue(value, "moduleId")))
+            .Select(value =>
+            {
+                var moduleId = OptionalDisplayValue(value, "moduleId");
+                return new DebugStackFrame(
+                    new DebugFrameId(RequiredInt64(value, "id")),
+                    thread,
+                    OptionalString(value, "name") ?? "<unknown>",
+                    Location: OptionalDebugLocation(value),
+                    SourcePath: OptionalObjectString(value, "source", "path"),
+                    SourceLine: OptionalPositiveInt32(value, "line"),
+                    SourceColumn: OptionalPositiveInt32(value, "column"),
+                    ModuleName: moduleId,
+                    ModulePath: moduleId is not null &&
+                        modulePaths.TryGetValue(moduleId, out var modulePath)
+                            ? modulePath
+                            : null);
+            })
             .ToArray();
+    }
+
+    private async Task<IReadOnlyDictionary<string, string>>
+        TryGetModulePathsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await GetWorker().Connection.SendRequestAsync(
+                "modules",
+                new JsonObject(),
+                cancellationToken).ConfigureAwait(false);
+            if (!response.Success || response.Body is not { } body)
+                return new Dictionary<string, string>();
+            var result = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var module in RequiredArray(body, "modules").EnumerateArray())
+            {
+                var id = OptionalDisplayValue(module, "id");
+                var path = OptionalString(module, "path");
+                if (!string.IsNullOrWhiteSpace(id) &&
+                    !string.IsNullOrWhiteSpace(path))
+                    result[id] = path;
+            }
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception) when (
+            exception is InvalidDataException or InvalidOperationException)
+        {
+            return new Dictionary<string, string>();
+        }
     }
 
     public async Task<IReadOnlyList<DebugScope>> GetScopesAsync(

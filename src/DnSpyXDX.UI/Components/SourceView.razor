@@ -138,7 +138,7 @@ else
       currentStatementLine = DebuggerSourceMap.FindLine(
         Document.DebugMap,
         prepared,
-        Debugger.Snapshot.Stop?.Location);
+        Debugger.CurrentLocation);
       revealCurrentStatement = currentStatementLine is not null;
       if (WrapLines) wrappedLines = await LoadWrappedLinesAsync(prepared, token);
       modelLease = Cache.Activate(key);
@@ -384,7 +384,7 @@ else
       var nextLine = DebuggerSourceMap.FindLine(
         Document.DebugMap,
         model,
-        Debugger.Snapshot.Stop?.Location);
+        Debugger.CurrentLocation);
       revealCurrentStatement =
         nextLine is not null &&
         nextLine != currentStatementLine;

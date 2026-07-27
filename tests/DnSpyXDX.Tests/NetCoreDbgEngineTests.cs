@@ -100,6 +100,7 @@ public sealed class NetCoreDbgEngineTests
         Assert.Equal(12, frame.SourceLine);
         Assert.Equal(5, frame.SourceColumn);
         Assert.Equal("Sample.dll", frame.ModuleName);
+        Assert.Equal("/debug/Sample.dll", frame.ModulePath);
         Assert.Equal("Locals", scope.Name);
         Assert.Equal("answer", variable.Name);
         Assert.Equal("42", variable.Value);

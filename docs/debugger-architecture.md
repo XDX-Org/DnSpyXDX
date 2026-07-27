@@ -286,8 +286,11 @@ The first UI slice now includes:
 
 - CoreCLR launch/attach dialog and execution toolbar;
 - direct Mono host/port attach with debugger-agent guidance;
+- automatic decompiler-workspace loading for launch targets and runtime module paths discovered
+  from CoreCLR or Mono frames;
 - C#/IL breakpoint gutter backed by decompiler sequence maps;
-- automatic stopped-method navigation, current-statement reveal, and gutter marker;
+- automatic stopped-method navigation from stopped events or top-frame fallback,
+  current-statement reveal, and gutter marker;
 - selectable threads and navigable call-stack frames;
 - expandable locals/arguments, breakpoint enable/remove/navigation controls, and bounded
   debugger-output panels;

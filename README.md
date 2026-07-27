@@ -22,7 +22,8 @@ DnSpyXDX is a cross-platform assembly browser and debugger for Windows and Linux
 - Read decompiler-derived semantic source highlighting and metadata tokens
 - Expose the live workspace to local MCP hosts through an optional authenticated loopback endpoint
 - Debug CoreCLR or attach to a Mono soft-debugger agent with IL-native decompiled-code
-  breakpoints, automatic stopped-source reveal, thread/frame navigation, and expandable variables
+  breakpoints, automatic debug-module loading and stopped-source reveal, thread/frame navigation,
+  and expandable variables
 
 ## Safety model
 

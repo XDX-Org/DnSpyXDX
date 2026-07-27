@@ -254,6 +254,22 @@ static async Task<int> RunNetCoreDbgAsync(string mode)
                         ["totalFrames"] = 1
                     });
                 break;
+            case "modules":
+                await RespondAsync(
+                    sequence,
+                    command,
+                    new JsonObject
+                    {
+                        ["modules"] = new JsonArray(
+                            new JsonObject
+                            {
+                                ["id"] = "Sample.dll",
+                                ["name"] = "Sample.dll",
+                                ["path"] = "/debug/Sample.dll"
+                            }),
+                        ["totalModules"] = 1
+                    });
+                break;
             case "scopes":
                 await RespondAsync(
                     sequence,

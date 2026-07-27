@@ -326,13 +326,16 @@
       revealedDebuggerStop = null;
     StateHasChanged();
     if (snapshot.Status == DebugSessionStatus.Paused &&
-        snapshot.Stop?.Location is { } location)
+        Debugger.CurrentLocation is { } location)
     {
       var stop = (snapshot.SessionId, location);
       if (revealedDebuggerStop != stop)
       {
-        revealedDebuggerStop = stop;
-        await NavigateDebuggerLocationAsync(location);
+        if (await EnsureDebuggerLocationAssemblyAsync(location))
+        {
+          revealedDebuggerStop = stop;
+          await NavigateDebuggerLocationAsync(location);
+        }
       }
     }
   });
@@ -433,6 +436,7 @@
     {
       var arguments = debugArguments
         .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+      await Assemblies.TryOpenDebuggerModuleAsync(debugLaunchPath);
       await Debugger.LaunchAsync(debugLaunchPath, arguments, debugStopAtEntry);
     }
     if (Debugger.Error is null) debugDialogOpen = false;
@@ -595,6 +599,51 @@
         location.Method.ModuleMvid,
         location.Method.MetadataToken),
       NewTab: false));
+  private async Task<bool> EnsureDebuggerLocationAssemblyAsync(
+    DebugCodeLocation location)
+  {
+    if (Backend.Assemblies.Any(
+        assembly => assembly.ModuleMvid == location.Method.ModuleMvid))
+      return true;
+
+    var modulePaths = Debugger.Frames
+      .Where(frame =>
+        frame.Location?.Method.ModuleMvid == location.Method.ModuleMvid)
+      .Select(frame => frame.ModulePath)
+      .Where(path => !string.IsNullOrWhiteSpace(path))
+      .Cast<string>();
+    if (Debugger.StartRequest is DebugLaunchRequest launch)
+      modulePaths = modulePaths.Prepend(launch.ExecutablePath);
+
+    foreach (var path in modulePaths.Distinct(
+      OperatingSystem.IsWindows()
+        ? StringComparer.OrdinalIgnoreCase
+        : StringComparer.Ordinal))
+    {
+      var assembly = await Assemblies.TryOpenDebuggerModuleAsync(
+        path,
+        location.Method.ModuleMvid);
+      if (assembly is not null) return true;
+    }
+
+    try
+    {
+      await Backend.OpenAssemblyForSymbolAsync(new SymbolId(
+        location.Method.ModuleMvid,
+        location.Method.MetadataToken));
+      return true;
+    }
+    catch (Exception exception) when (
+      exception is FileNotFoundException or
+        BadImageFormatException or
+        IOException or
+        UnauthorizedAccessException or
+        InvalidOperationException)
+    {
+      return false;
+    }
+  }
+
   private void TabMouseUp(MouseEventArgs e, string id) { if (e.Button == 1) CloseTab(id); }
   private static bool IsTypeSymbol(SymbolId symbol) => (symbol.MetadataToken >> 24) == 0x02;
   private async Task DecompileTypeIntoTabAsync(string tabId, SymbolId symbol, SymbolId? focusSymbol, CancellationTokenSource cancellation)

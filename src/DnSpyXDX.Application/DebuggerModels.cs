@@ -169,7 +169,8 @@ public sealed record DebugStackFrame(
     string? SourcePath = null,
     int? SourceLine = null,
     int? SourceColumn = null,
-    string? ModuleName = null);
+    string? ModuleName = null,
+    string? ModulePath = null);
 
 public sealed record DebugScope(
     string Name,

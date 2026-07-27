@@ -161,8 +161,6 @@
   private async Task SelectFrameAsync(DebugStackFrame frame)
   {
     await Debugger.SelectFrameAsync(frame);
-    if (frame.Location is { } location)
-      await OnNavigateLocation.InvokeAsync(location);
   }
 
   private Task SetBreakpointEnabledAsync(

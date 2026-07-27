@@ -38,6 +38,11 @@ public sealed class DebuggerWorkspace : IDisposable
     public IReadOnlyList<DebugStackFrame> Frames => frames;
     public IReadOnlyList<DebugVariable> Variables => variables;
     public IReadOnlyList<DebugOutputMessage> Output => output;
+    public DebugStartRequest? StartRequest { get; private set; }
+    public DebugCodeLocation? CurrentLocation =>
+        frames.FirstOrDefault(value => value.Id == selectedFrame)?.Location ??
+        Snapshot.Stop?.Location ??
+        frames.FirstOrDefault()?.Location;
     public DebugThreadId? SelectedThread => selectedThread;
     public DebugFrameId? SelectedFrame => selectedFrame;
     public bool IsBusy { get; private set; }
@@ -58,16 +63,16 @@ public sealed class DebuggerWorkspace : IDisposable
         CancellationToken cancellationToken = default) =>
         RunAsync(async token =>
         {
-            await debugger.StartAsync(
-                new DebugLaunchRequest(
+            var request = new DebugLaunchRequest(
                     DebugRuntimeKind.CoreClr,
                     executablePath,
                     arguments,
                     StopAtEntry: stopAtEntry)
                 {
                     InitialBreakpoints = breakpoints
-                },
-                token);
+                };
+            StartRequest = request;
+            await debugger.StartAsync(request, token);
         }, cancellationToken, requireActiveSession: false);
 
     public Task AttachAsync(
@@ -75,14 +80,14 @@ public sealed class DebuggerWorkspace : IDisposable
         CancellationToken cancellationToken = default) =>
         RunAsync(async token =>
         {
-            await debugger.StartAsync(
-                new DebugAttachRequest(
+            var request = new DebugAttachRequest(
                     DebugRuntimeKind.CoreClr,
                     ProcessId: processId)
                 {
                     InitialBreakpoints = breakpoints
-                },
-                token);
+                };
+            StartRequest = request;
+            await debugger.StartAsync(request, token);
         }, cancellationToken, requireActiveSession: false);
 
     public Task AttachMonoAsync(
@@ -91,15 +96,15 @@ public sealed class DebuggerWorkspace : IDisposable
         CancellationToken cancellationToken = default) =>
         RunAsync(async token =>
         {
-            await debugger.StartAsync(
-                new DebugAttachRequest(
+            var request = new DebugAttachRequest(
                     DebugRuntimeKind.Mono,
                     Host: host,
                     Port: port)
                 {
                     InitialBreakpoints = breakpoints
-                },
-                token);
+                };
+            StartRequest = request;
+            await debugger.StartAsync(request, token);
         }, cancellationToken, requireActiveSession: false);
 
     public Task ContinueAsync(CancellationToken cancellationToken = default) =>

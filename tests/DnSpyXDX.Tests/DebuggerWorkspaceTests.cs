@@ -26,6 +26,10 @@ public sealed class DebuggerWorkspaceTests
         Assert.Equal(DebugSessionStatus.Running, workspace.Snapshot.Status);
         Assert.Equal(location, Assert.Single(debugger.LastBreakpoints).Location);
         Assert.True(Assert.Single(workspace.Bindings).IsVerified);
+        Assert.Equal(
+            "sample.dll",
+            Assert.IsType<DebugLaunchRequest>(
+                workspace.StartRequest).ExecutablePath);
     }
 
     [Fact]
@@ -91,7 +95,9 @@ public sealed class DebuggerWorkspaceTests
             new DebugFrameId(20),
             stoppedThread.Id,
             "Program.Main",
-            null);
+            new DebugCodeLocation(
+                new DebugMethodId(Guid.NewGuid(), 0x06000001),
+                0));
         var rootReference = new DebugVariableReference(100);
         var childReference = new DebugVariableReference(101);
         var root = new DebugVariable(
@@ -119,6 +125,7 @@ public sealed class DebuggerWorkspaceTests
         Assert.Equal(stoppedThread.Id, workspace.SelectedThread);
         Assert.Equal(stoppedFrame, Assert.Single(workspace.Frames));
         Assert.Equal(root, Assert.Single(workspace.Variables));
+        Assert.Equal(stoppedFrame.Location, workspace.CurrentLocation);
 
         await workspace.ToggleVariableAsync(root);
 
