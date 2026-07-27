@@ -46,7 +46,9 @@ internal static class Program
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "DnSpyXDX", "WebView2");
         Directory.CreateDirectory(userDataFolder);
-        app.MainWindow.SetLogVerbosity(0).SetTemporaryFilesPath(userDataFolder).SetTitle("DnSpyXDX").SetIconFile(Path.Combine(AppContext.BaseDirectory, "wwwroot", "dnspyxdx.png")).SetSize(1320, 840).SetMinSize(860, 560).SetUseOsDefaultSize(false);
+        // Windows uses a multi-resolution .ico for the window/taskbar icon; GTK on Linux wants a .png.
+        var iconFile = OperatingSystem.IsWindows() ? "dnspyxdx.ico" : "dnspyxdx.png";
+        app.MainWindow.SetLogVerbosity(0).SetTemporaryFilesPath(userDataFolder).SetTitle("DnSpyXDX").SetIconFile(Path.Combine(AppContext.BaseDirectory, "wwwroot", iconFile)).SetSize(1320, 840).SetMinSize(860, 560).SetUseOsDefaultSize(false);
         zoomService.Attach(app.MainWindow);
         applicationLifetime.Attach(app.MainWindow);
         WindowStateManager.Attach(app.MainWindow);

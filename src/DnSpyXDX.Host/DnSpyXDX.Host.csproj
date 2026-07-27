@@ -5,6 +5,7 @@
     <AssemblyName>DnSpyXDX</AssemblyName>
     <Product>DnSpyXDX</Product>
     <Description>A cross-platform desktop explorer for inspecting, searching, decompiling, and exporting managed .NET assemblies.</Description>
+    <ApplicationIcon>wwwroot/dnspyxdx.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../DnSpyXDX.Application/DnSpyXDX.Application.csproj" />
