@@ -4,18 +4,32 @@ namespace DnSpyXDX.Application;
 
 public sealed class McpServerSettings
 {
-    private readonly List<string> allowedRoots = [];
+    private readonly object gate = new();
+    private string[] allowedRoots = [];
 
     public event Action? Changed;
     public bool Enabled { get; set; }
     public int Port { get; set; }
     public string BearerToken { get; } = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-    public IReadOnlyList<string> AllowedRoots => allowedRoots;
+    public long MaximumAssemblyBytes { get; set; } = 512L * 1024 * 1024;
+    public int MaximumOpenAssemblies { get; set; } = 32;
+    public int MaximumConcurrentRequests { get; set; } = 2;
+    public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(30);
+    public IReadOnlyList<string> AllowedRoots { get { lock (gate) return allowedRoots; } }
 
     public void SetAllowedRoots(IEnumerable<string> roots)
     {
-        allowedRoots.Clear();
-        allowedRoots.AddRange(roots.Where(root => !string.IsNullOrWhiteSpace(root)));
+        var normalized = roots
+            .Where(root => !string.IsNullOrWhiteSpace(root))
+            .Select(root =>
+            {
+                if (!Path.IsPathFullyQualified(root))
+                    throw new ArgumentException("MCP roots must be absolute paths.", nameof(roots));
+                return Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+            })
+            .Distinct(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)
+            .ToArray();
+        lock (gate) allowedRoots = normalized;
         Changed?.Invoke();
     }
 }

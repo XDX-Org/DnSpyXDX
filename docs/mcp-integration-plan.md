@@ -209,38 +209,46 @@ These are protocol requirements and recommendations in the [Streamable HTTP tran
 
 ### Phase 0 — compatibility spike
 
-- Pin a stable official C# SDK version centrally.
-- Build the Settings-controlled loopback endpoint with `list_assemblies` and `open_assembly`.
-- Add the minimal activity panel and structured activity/log pipeline.
-- Verify protocol initialization/capability negotiation with MCP Inspector and at least two real hosts.
-- Confirm authentication, origin rejection, capability negotiation, and sanitized logging in normal, debug, cancellation, and failure paths.
-- Record the supported MCP protocol version and SDK compatibility policy.
+**Status: Functionally demonstrated; exit verification incomplete.** The endpoint, Settings control, initial tools, authentication, origin checks, and activity panel exist. MCP Inspector, two-host verification, full lifecycle/security automation, and Windows verification remain.
+
+- [x] Pin a stable official C# SDK version centrally.
+- [x] Build the Settings-controlled loopback endpoint with `list_assemblies` and `open_assembly`.
+- [ ] **Partial:** Add the minimal activity panel and structured activity/log pipeline. The panel logs implemented handlers; interception, queued/running entries, client identity, and structured logging remain.
+- [ ] Verify protocol initialization/capability negotiation with MCP Inspector and at least two real hosts.
+- [ ] **Partial:** Confirm authentication, origin rejection, capability negotiation, and sanitized logging in normal, debug, cancellation, and failure paths. Happy-path manual HTTP coverage exists; the full matrix does not.
+- [ ] Record the supported MCP protocol version and SDK compatibility policy.
 
 Exit: switching MCP on starts a protected loopback endpoint, a host can connect and open a fixture under an allowed root, the panel shows sanitized request state, switching MCP off cancels requests and closes the endpoint, and the lifecycle works on Windows and Linux.
 
 ### Phase 1 — read-only inspection MVP
 
-- Implement all initial tools and resource templates.
-- Add roots enforcement, limits, cursor pagination, structured errors, cancellation, and safe logging.
-- Return resource links from search/symbol tools and fetch decompilation only on demand.
-- Reuse exact cross-assembly MVID/token resolution.
-- Ship example host configurations generated from the live endpoint settings.
+**Status: In progress.** Initial assembly/symbol tools and source resources exist. Configured roots are absolute, snapshot-based, link-resolved, and revalidated after open; assembly size/open-count/open-timeout/concurrent-open limits are present. Client roots, complete resources, `list_children`, pagination, structured errors, endpoint-wide limits, and integration/security tests remain.
+
+- [ ] **Partial:** Implement all initial tools and resource templates. `list_children`, assembly/symbol descriptors, and embedded-text resources remain.
+- [ ] **Partial:** Add roots enforcement, limits, cursor pagination, structured errors, cancellation, and safe logging. Configured-root hardening and initial open limits are implemented; client roots, full limits, pagination, and structured errors remain.
+- [x] Return resource links from search/symbol tools and fetch decompilation only on demand.
+- [x] Reuse exact cross-assembly MVID/token resolution.
+- [x] Generate example host configuration from the live endpoint settings.
 
 Exit: an agent can open related assemblies, find an overloaded member, retrieve its declaring type's C# or IL, follow an exact external reference, and cannot read outside allowed roots.
 
 ### Phase 2 — analysis
 
-- Build the planned assembly-open search/reference index once and share it with desktop and MCP paths.
-- Add callers, callees, type uses, derived types, and interface implementations.
-- Return bounded graph edges plus resource links instead of large nested documents.
-- Add deterministic API/assembly comparison resources if product demand justifies them.
+**Status: Not started as a phase.** A bounded outgoing `Uses` operation exists as an early functional slice; the shared index and richer relations remain.
+
+- [ ] Build the planned assembly-open search/reference index once and share it with desktop and MCP paths.
+- [ ] Add callers, callees, type uses, derived types, and interface implementations.
+- [ ] **Partial:** Return bounded graph edges plus resource links instead of large nested documents. Outgoing `Uses` results are bounded and linked.
+- [ ] Add deterministic API/assembly comparison resources if product demand justifies them.
 
 ### Phase 3 — richer integration
 
-- Emit resource-list changes as the live workspace changes.
-- Add per-client connection visibility and revocation.
-- Add optional confirmation policies per tool if write-capable operations are ever proposed.
-- Extend the activity view only after the separate richer-panel work establishes its UI contract.
+**Status: Not started.** Resource-list notifications, client visibility/revocation, and confirmation policies remain.
+
+- [ ] Emit resource-list changes as the live workspace changes.
+- [ ] Add per-client connection visibility and revocation.
+- [ ] Add optional confirmation policies per tool if write-capable operations are ever proposed.
+- [ ] Extend the activity view only after the separate richer-panel work establishes its UI contract.
 
 ## Test matrix
 

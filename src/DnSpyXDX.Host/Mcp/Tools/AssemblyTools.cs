@@ -5,8 +5,23 @@ using ModelContextProtocol.Server;
 namespace DnSpyXDX.Host.Mcp.Tools;
 
 [McpServerToolType]
-public sealed class AssemblyTools(IDecompilerBackend backend, WorkspaceState workspace, McpServerSettings settings, McpActivityLog activity)
+public sealed class AssemblyTools
 {
+    private readonly IDecompilerBackend backend;
+    private readonly WorkspaceState workspace;
+    private readonly McpServerSettings settings;
+    private readonly McpActivityLog activity;
+    private readonly SemaphoreSlim openConcurrency;
+
+    public AssemblyTools(IDecompilerBackend backend, WorkspaceState workspace, McpServerSettings settings, McpActivityLog activity)
+    {
+        this.backend = backend;
+        this.workspace = workspace;
+        this.settings = settings;
+        this.activity = activity;
+        openConcurrency = new(Math.Max(1, settings.MaximumConcurrentRequests));
+    }
+
     [McpServerTool(Name = "list_assemblies", ReadOnly = true, UseStructuredContent = true)]
     [Description("Lists managed assemblies currently open in DnSpyXDX without exposing local paths.")]
     public IReadOnlyList<McpAssemblyDescriptor> ListAssemblies()
@@ -57,8 +72,32 @@ public sealed class AssemblyTools(IDecompilerBackend backend, WorkspaceState wor
         activity.Begin();
         try
         {
-            var canonicalPath = ValidatePath(path);
-            var result = ToDescriptor(await backend.OpenAsync(canonicalPath, cancellationToken));
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(settings.RequestTimeout);
+            await openConcurrency.WaitAsync(timeout.Token);
+            McpAssemblyDescriptor result;
+            try
+            {
+                if (backend.Assemblies.Count >= settings.MaximumOpenAssemblies)
+                    throw new InvalidOperationException("The open assembly limit has been reached.");
+                var roots = settings.AllowedRoots.ToArray();
+                var canonicalPath = ValidatePath(path, roots);
+                var length = new FileInfo(canonicalPath).Length;
+                if (length > settings.MaximumAssemblyBytes)
+                    throw new InvalidOperationException("The assembly exceeds the configured file size limit.");
+                var opened = await backend.OpenAsync(canonicalPath, timeout.Token);
+                try
+                {
+                    ValidatePath(canonicalPath, roots);
+                    result = ToDescriptor(opened);
+                }
+                catch
+                {
+                    await backend.CloseAsync(opened.SessionId);
+                    throw;
+                }
+            }
+            finally { openConcurrency.Release(); }
             workspace.SetBusy(false, $"Opened {result.Name} through MCP");
             activity.Add(new(started, "open_assembly", safeTarget, "succeeded", DateTimeOffset.UtcNow - started));
             return result;
@@ -76,16 +115,36 @@ public sealed class AssemblyTools(IDecompilerBackend backend, WorkspaceState wor
         OperationCanceledException => "Request cancelled.",
         UnauthorizedAccessException => "Access denied.",
         ArgumentException => "Invalid path.",
+        InvalidOperationException => exception.Message,
         _ => "Assembly inspection failed."
     };
 
-    private string ValidatePath(string path)
+    private static string ValidatePath(string path, IReadOnlyList<string> roots)
     {
         if (!Path.IsPathFullyQualified(path)) throw new ArgumentException("An absolute path is required.", nameof(path));
-        var canonicalPath = Path.GetFullPath(path);
-        var allowed = settings.AllowedRoots.Any(root => IsWithin(canonicalPath, Path.GetFullPath(root)));
+        var canonicalPath = ResolveExistingPath(path, file: true);
+        var allowed = roots.Any(root => IsWithin(canonicalPath, ResolveExistingPath(root, file: false)));
         if (!allowed) throw new UnauthorizedAccessException("The path is outside the configured MCP roots.");
         return canonicalPath;
+    }
+
+    private static string ResolveExistingPath(string path, bool file)
+    {
+        var fullPath = Path.GetFullPath(path);
+        if (file && !File.Exists(fullPath)) throw new FileNotFoundException("The assembly file was not found.", fullPath);
+        if (!file && !Directory.Exists(fullPath)) throw new DirectoryNotFoundException("An allowed MCP root was not found.");
+
+        var root = Path.GetPathRoot(fullPath)!;
+        var current = root;
+        var parts = fullPath[root.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+        for (var index = 0; index < parts.Length; index++)
+        {
+            current = Path.Combine(current, parts[index]);
+            FileSystemInfo entry = index == parts.Length - 1 && file ? new FileInfo(current) : new DirectoryInfo(current);
+            if (entry.LinkTarget is not null)
+                current = entry.ResolveLinkTarget(true)?.FullName ?? throw new IOException("A symbolic link could not be resolved.");
+        }
+        return Path.GetFullPath(current);
     }
 
     private static bool IsWithin(string path, string root)
