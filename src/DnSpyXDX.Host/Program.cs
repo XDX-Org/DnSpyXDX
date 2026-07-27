@@ -38,7 +38,15 @@ internal static class Program
         builder.Services.AddSingleton<IApplicationLifetime>(applicationLifetime);
         builder.RootComponents.Add<App>("app");
         var app = builder.Build();
-        app.MainWindow.SetLogVerbosity(0).SetTitle("DnSpyXDX").SetIconFile(Path.Combine(AppContext.BaseDirectory, "wwwroot", "dnspyxdx.png")).SetSize(1320, 840).SetMinSize(860, 560).SetUseOsDefaultSize(false);
+        // WebView2's user-data folder defaults to a location shared by all Photino apps
+        // (%LOCALAPPDATA%\Photino\EBWebView). A second Photino app (e.g. the SPT launcher)
+        // holding that folder open leaves us with a black window. Use a private folder so we
+        // never collide with another Photino process.
+        var userDataFolder = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "DnSpyXDX", "WebView2");
+        Directory.CreateDirectory(userDataFolder);
+        app.MainWindow.SetLogVerbosity(0).SetTemporaryFilesPath(userDataFolder).SetTitle("DnSpyXDX").SetIconFile(Path.Combine(AppContext.BaseDirectory, "wwwroot", "dnspyxdx.png")).SetSize(1320, 840).SetMinSize(860, 560).SetUseOsDefaultSize(false);
         zoomService.Attach(app.MainWindow);
         applicationLifetime.Attach(app.MainWindow);
         WindowStateManager.Attach(app.MainWindow);
