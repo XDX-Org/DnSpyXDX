@@ -103,6 +103,16 @@ public sealed class PersistentDecompileCache
         }
     }
 
+    /// <summary>Remove every persisted entry for one assembly. Used when the user explicitly unloads it in
+    /// the UI (a deliberate "forget this" gesture); app shutdown deliberately does not call this, so a saved
+    /// session still restores from the cache on the next launch.</summary>
+    public void Evict(string assemblyId)
+    {
+        var directory = Path.Combine(root, assemblyId);
+        try { if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+    }
+
     private string PathFor(string assemblyId, int metadataToken, DecompilerLanguage language, bool showMetadataTokens) =>
         Path.Combine(root, assemblyId, $"{metadataToken:X8}-{language.Key()}-{(showMetadataTokens ? 1 : 0)}.json.gz");
 }

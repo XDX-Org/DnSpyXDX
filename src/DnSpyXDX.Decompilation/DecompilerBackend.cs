@@ -101,7 +101,9 @@ public sealed class DecompilerBackend : IDecompilerBackend
 
     public Task CloseAsync(Guid sessionId)
     {
-        if (sessions.TryRemove(sessionId, out var session)) session.Dispose();
+        // An explicit unload is a deliberate "forget this assembly" gesture, so drop its persisted decompile
+        // entries too. The id is captured before Dispose frees the module; the delete runs in the background.
+        if (sessions.TryRemove(sessionId, out var session)) { session.EvictFromCache(); session.Dispose(); }
         foreach (var other in sessions.Values) other.InvalidateAnalyzerIndex();
         return Task.CompletedTask;
     }
@@ -635,6 +637,26 @@ internal sealed class AssemblySession : IDisposable
         return bounded.IsNil ? richest : bounded;
     }
 
+    // The content-hash identity used to key persistent cache entries, computed once from this assembly's
+    // bytes and memoised. Reads the in-memory PE image, so callers must invoke it while the module is alive.
+    private string AssemblyId() => assemblyId ??= PersistentDecompileCache.ComputeAssemblyId(module.Reader.GetEntireImage().GetContent().AsSpan());
+
+    // Delete this assembly's persisted decompile entries. Called on an explicit UI unload, not on app
+    // shutdown (which saves the session and keeps the cache for a fast restore). The id is captured now while
+    // the module is alive; the deletion runs in the background and reads it from the file only if this session
+    // never had to compute it, so it remains correct after the module is disposed.
+    public void EvictFromCache()
+    {
+        if (documentCache is not { } cache) return;
+        var known = assemblyId;
+        var path = Descriptor.Path;
+        _ = Task.Run(() =>
+        {
+            try { cache.Evict(known ?? PersistentDecompileCache.ComputeAssemblyId(File.ReadAllBytes(path))); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        });
+    }
+
     public async Task<DecompilerDocument> DecompileAsync(SymbolId symbol, DecompilerLanguage language, CancellationToken ct)
     {
         if (!Enum.IsDefined(language)) throw new ArgumentOutOfRangeException(nameof(language));
@@ -648,10 +670,11 @@ internal sealed class AssemblySession : IDisposable
             // A previous run may have already decompiled this exact document; loading it from disk avoids
             // re-running ILSpy, which is what makes restoring a saved session (or reopening a type) fast.
             var cacheable = documentCache is not null && PersistentDecompileCache.IsCacheable(language);
+            string? cacheAssemblyId = null;
             if (cacheable)
             {
-                assemblyId ??= PersistentDecompileCache.ComputeAssemblyId(module.Reader.GetEntireImage().GetContent().AsSpan());
-                var stored = await Task.Run(() => documentCache!.TryLoad(assemblyId, symbol.MetadataToken, language, showMetadataTokens), ct);
+                cacheAssemblyId = AssemblyId();
+                var stored = await Task.Run(() => documentCache!.TryLoad(cacheAssemblyId, symbol.MetadataToken, language, showMetadataTokens), ct);
                 if (stored is not null) return cache[key] = stored;
             }
             var handle = MetadataTokens.EntityHandle(symbol.MetadataToken);
@@ -685,7 +708,7 @@ internal sealed class AssemblySession : IDisposable
                 BinarySelectionOffset: selection?.Offset, BinarySelectionLength: selection?.Length ?? 0, BinaryRegions: regions, SymbolLocations: symbolLocations, SemanticSpans: semanticSpans);
             cache[key] = result;
             // Persist off the gate so writing the entry never delays returning the document to the UI.
-            if (cacheable) _ = Task.Run(() => documentCache!.Save(assemblyId!, result, language, showMetadataTokens));
+            if (cacheable) _ = Task.Run(() => documentCache!.Save(AssemblyId(), result, language, showMetadataTokens));
             return result;
         }
         finally { decompiler.CancellationToken = default; gate.Release(); }
