@@ -1,0 +1,3 @@
+# Keep test fixtures byte-stable across platforms; several tests assert exact
+# resource content, so autocrlf must not rewrite their line endings.
+tests/DnSpyXDX.Tests/Fixtures/** -text

@@ -25,6 +25,7 @@ public enum SourceTokenKind
     Field,
     Property,
     Event,
+    EnumMember,
     Namespace,
     Brace
 }
@@ -94,6 +95,9 @@ public static class SourceTokenizer
         var rawQuoteCount = state.RawQuoteCount;
         var nextBracePair = state.NextBracePair;
         var index = 0;
+        // Kind of the most recent identifier, so a member reached through a member-access dot can be
+        // read against what it was reached from - notably an enum type's members become enum members.
+        SourceTokenKind? previousIdentifier = null;
 
         while (index < line.Length)
         {
@@ -179,7 +183,9 @@ public static class SourceTokenizer
                 var end = index + (character == '@' ? 1 : 0) + 1;
                 while (end < line.Length && (char.IsLetterOrDigit(line[end]) || line[end] == '_')) end++;
                 var word = line[index..end];
-                var kind = ClassifyWord(line, word, end, typeKinds, namespaceLine, language);
+                var afterDot = index > 0 && line[index - 1] == '.';
+                var kind = ClassifyWord(line, word, end, typeKinds, namespaceLine, language, afterDot, previousIdentifier);
+                previousIdentifier = kind;
                 var isLinkable = kind is SourceTokenKind.Type or SourceTokenKind.StaticType or SourceTokenKind.Interface or SourceTokenKind.Enum or SourceTokenKind.Struct or SourceTokenKind.Delegate or SourceTokenKind.Method or SourceTokenKind.Field or SourceTokenKind.Property or SourceTokenKind.Event or SourceTokenKind.Identifier;
                 SymbolId? target = null;
                 string? symbolName = null;
@@ -231,7 +237,7 @@ public static class SourceTokenizer
     private static bool IsIdentifierStart(string line, int index) =>
         char.IsLetter(line[index]) || line[index] == '_' || line[index] == '@' && index + 1 < line.Length && (char.IsLetter(line[index + 1]) || line[index + 1] == '_');
 
-    private static SourceTokenKind ClassifyWord(string line, string word, int end, IReadOnlyDictionary<string, string>? typeKinds, bool namespaceLine, string language)
+    private static SourceTokenKind ClassifyWord(string line, string word, int end, IReadOnlyDictionary<string, string>? typeKinds, bool namespaceLine, string language, bool afterDot, SourceTokenKind? previousIdentifier)
     {
         if (Visibility.Contains(word)) return SourceTokenKind.Visibility;
         if (Constants.Contains(word)) return SourceTokenKind.Constant;
@@ -239,14 +245,27 @@ public static class SourceTokenizer
         if (Keywords.Contains(word)) return SourceTokenKind.Keyword;
         if (language.StartsWith("il", StringComparison.Ordinal) && ILKeywords.Contains(word.Split('.')[0])) return SourceTokenKind.Keyword;
         if (namespaceLine) return SourceTokenKind.Namespace;
+        if (BuiltInTypes.Contains(word)) return SourceTokenKind.BuiltInType;
+
+        // The type system tells types (class/interface/enum/struct/delegate) and the document's own
+        // members (field/property/event/enum member) apart, so properties and PascalCase fields keep
+        // their member color instead of falling through to the class color like every capital word.
+        var mapKind = typeKinds is not null && typeKinds.TryGetValue(word.TrimStart('@'), out var resolved) ? resolved : null;
+        // A known type standing on its own is a type reference, a constructor, or an attribute - dnSpy
+        // colors all of those by the type, not as a method - so a type name wins over the trailing '('
+        // that would otherwise read new Foo(), Foo() and [Attr(...)] as method calls. After a dot the
+        // name is a member, so the type shortcut is skipped there.
+        if (!afterDot && IsTypeKind(mapKind)) return MapKind(mapKind!);
+
         var next = end;
         while (next < line.Length && char.IsWhiteSpace(line[next])) next++;
         if (next < line.Length && line[next] == '(') return SourceTokenKind.Method;
-        if (BuiltInTypes.Contains(word)) return SourceTokenKind.BuiltInType;
-        // The metadata map tells types (class/interface/enum/struct/delegate) and the displayed
-        // type's own members (field/property/event) apart, so properties and PascalCase fields keep
-        // their member color instead of falling through to the class color like every capital word.
-        if (typeKinds is not null && typeKinds.TryGetValue(word.TrimStart('@'), out var kind)) return MapKind(kind);
+
+        // A name reached through a member-access dot is a member, not a type. We can't tell property
+        // from field for a type outside this document, so both read as a property; a member off a known
+        // enum is an enum member. This stops x.Prop and SomeEnum.Value from reading as class names.
+        if (afterDot) return mapKind is not null ? MapKind(mapKind) : previousIdentifier == SourceTokenKind.Enum ? SourceTokenKind.EnumMember : SourceTokenKind.Property;
+        if (mapKind is not null) return MapKind(mapKind);
         if (char.IsUpper(word.TrimStart('@')[0])) return SourceTokenKind.Type;
         return word.StartsWith('_') ? SourceTokenKind.Field : SourceTokenKind.Identifier;
     }
@@ -265,6 +284,9 @@ public static class SourceTokenizer
         span.StartsWith(word, StringComparison.Ordinal) &&
         (span.Length == word.Length || !char.IsLetterOrDigit(span[word.Length]) && span[word.Length] != '_');
 
+    private static bool IsTypeKind(string? kind) =>
+        kind is "class" or "staticclass" or "interface" or "enum" or "struct" or "delegate" or "typeparam";
+
     private static SourceTokenKind MapKind(string kind) => kind switch
     {
         "staticclass" => SourceTokenKind.StaticType,
@@ -276,6 +298,7 @@ public static class SourceTokenizer
         "field" => SourceTokenKind.Field,
         "property" => SourceTokenKind.Property,
         "event" => SourceTokenKind.Event,
+        "enumfield" => SourceTokenKind.EnumMember,
         _ => SourceTokenKind.Type
     };
 

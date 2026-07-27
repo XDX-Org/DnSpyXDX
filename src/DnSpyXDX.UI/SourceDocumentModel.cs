@@ -115,6 +115,7 @@ public sealed partial class SourceDocumentModel
         IReadOnlyDictionary<string, SymbolId?>? symbolLinks = null,
         IReadOnlyDictionary<string, string>? typeKinds = null,
         IReadOnlyList<ReferenceSpan>? references = null,
+        IReadOnlyList<ClassifiedSpan>? semanticSpans = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(startLine);
@@ -143,13 +144,72 @@ public sealed partial class SourceDocumentModel
                     var tokenized = SourceTokenizer.Tokenize(text, state, symbolLinks, typeKinds, Key.Language);
                     state = tokenized.EndState;
                     if (lineNumber >= startLine)
-                        result.Add(new SourceTokenizedLine(lineNumber, line.StartOffset, text, ApplyReferences(tokenized.Tokens, line.StartOffset, references), startState, state));
+                    {
+                        var tokens = ApplySemanticSpans(tokenized.Tokens, line.StartOffset, semanticSpans);
+                        tokens = ApplyReferences(tokens, line.StartOffset, references);
+                        result.Add(new SourceTokenizedLine(lineNumber, line.StartOffset, text, tokens, startState, state));
+                    }
                 }
                 return result;
             }, cancellationToken);
         }
         finally { tokenizerGate.Release(); }
     }
+
+    // Repaints each word token with the classification the decompiler resolved for that exact position,
+    // so colors reflect bound symbols (dnSpy's model) instead of lexical guesses. Braces and punctuation
+    // keep their lexical kind so rainbow matching and structure are unaffected.
+    private static IReadOnlyList<SourceToken> ApplySemanticSpans(IReadOnlyList<SourceToken> tokens, int lineOffset, IReadOnlyList<ClassifiedSpan>? spans)
+    {
+        if (spans is null || spans.Count == 0) return tokens;
+        var result = new SourceToken[tokens.Count];
+        for (var index = 0; index < tokens.Count; index++)
+        {
+            var token = tokens[index];
+            if (token.Kind is SourceTokenKind.Brace or SourceTokenKind.Plain) { result[index] = token; continue; }
+            var kind = SpanKindAt(spans, lineOffset + token.Start);
+            result[index] = kind is { } resolved ? token with { Kind = resolved } : token;
+        }
+        return result;
+    }
+
+    private static SourceTokenKind? SpanKindAt(IReadOnlyList<ClassifiedSpan> spans, int offset)
+    {
+        int low = 0, high = spans.Count - 1, found = -1;
+        while (low <= high)
+        {
+            var mid = (low + high) / 2;
+            if (spans[mid].Start <= offset) { found = mid; low = mid + 1; } else high = mid - 1;
+        }
+        if (found < 0) return null;
+        var span = spans[found];
+        return offset < span.Start + span.Length ? MapSpanKind(span.Kind) : null;
+    }
+
+    private static SourceTokenKind? MapSpanKind(string kind) => kind switch
+    {
+        "class" => SourceTokenKind.Type,
+        "staticclass" => SourceTokenKind.StaticType,
+        "interface" => SourceTokenKind.Interface,
+        "enum" => SourceTokenKind.Enum,
+        "struct" => SourceTokenKind.Struct,
+        "delegate" => SourceTokenKind.Delegate,
+        "typeparam" => SourceTokenKind.TypeParameter,
+        "field" => SourceTokenKind.Field,
+        "property" => SourceTokenKind.Property,
+        "event" => SourceTokenKind.Event,
+        "enummember" => SourceTokenKind.EnumMember,
+        "method" => SourceTokenKind.Method,
+        "namespace" => SourceTokenKind.Namespace,
+        "keyword" => SourceTokenKind.Keyword,
+        "control" => SourceTokenKind.ControlKeyword,
+        "constant" => SourceTokenKind.Constant,
+        "number" => SourceTokenKind.Number,
+        "string" => SourceTokenKind.String,
+        "comment" => SourceTokenKind.Comment,
+        "local" => SourceTokenKind.Identifier,
+        _ => null
+    };
 
     private static IReadOnlyList<SourceToken> ApplyReferences(IReadOnlyList<SourceToken> tokens, int lineOffset, IReadOnlyList<ReferenceSpan>? references)
     {

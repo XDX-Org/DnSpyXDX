@@ -13,6 +13,7 @@ using ICSharpCode.Decompiler.CSharp;
 using ICSharpCode.Decompiler.CSharp.OutputVisitor;
 using ICSharpCode.Decompiler.Disassembler;
 using ICSharpCode.Decompiler.Metadata;
+using ICSharpCode.Decompiler.TypeSystem;
 using DnSpyXDX.Application;
 
 namespace DnSpyXDX.Decompilation;
@@ -467,14 +468,18 @@ internal sealed class AssemblySession : IDisposable
             if (cache.TryGetValue(key, out cached)) return cached;
             var handle = MetadataTokens.EntityHandle(symbol.MetadataToken);
             decompiler.CancellationToken = ct;
-            var text = await Task.Run(() => language switch
-            {
-                DecompilerLanguage.CSharp => DecompileCSharp(handle, showMetadataTokens),
-                DecompilerLanguage.IL => Disassemble(handle, ct, showMetadataTokens),
-                DecompilerLanguage.ILWithCSharp => DisassembleWithCSharp(handle, ct, showMetadataTokens),
-                DecompilerLanguage.Hex => "",
-                _ => throw new ArgumentOutOfRangeException(nameof(language))
-            }, ct);
+            string text;
+            IReadOnlyList<ClassifiedSpan>? semanticSpans = null;
+            if (language == DecompilerLanguage.CSharp)
+                (text, semanticSpans) = await Task.Run(() => DecompileCSharp(handle, showMetadataTokens), ct);
+            else
+                text = await Task.Run(() => language switch
+                {
+                    DecompilerLanguage.IL => Disassemble(handle, ct, showMetadataTokens),
+                    DecompilerLanguage.ILWithCSharp => DisassembleWithCSharp(handle, ct, showMetadataTokens),
+                    DecompilerLanguage.Hex => "",
+                    _ => throw new ArgumentOutOfRangeException(nameof(language))
+                }, ct);
             ct.ThrowIfCancellationRequested();
             var title = GetEntityName(handle);
             var links = language == DecompilerLanguage.CSharp ? BuildSymbolLinks(handle) : null;
@@ -484,19 +489,153 @@ internal sealed class AssemblySession : IDisposable
             var selection = language == DecompilerLanguage.Hex ? GetHexEntityRegion(handle) : null;
             var baseRegions = language == DecompilerLanguage.Hex ? binaryRegions ??= BuildHexRegions() : null;
             var regions = baseRegions;
-            var result = new DecompilerDocument(symbol, title, language.Key(), text, references, [], links, TypeClassifications: BuildClassifications(handle), Binary: binary,
-                BinarySelectionOffset: selection?.Offset, BinarySelectionLength: selection?.Length ?? 0, BinaryRegions: regions, SymbolLocations: symbolLocations);
+            // C# colors come from the syntax-tree spans, so the assembly-wide name map (which walks every
+            // referenced assembly) is only built for the IL view that still relies on lexical classification.
+            var classifications = language == DecompilerLanguage.CSharp ? null : BuildClassifications(handle);
+            var result = new DecompilerDocument(symbol, title, language.Key(), text, references, [], links, TypeClassifications: classifications, Binary: binary,
+                BinarySelectionOffset: selection?.Offset, BinarySelectionLength: selection?.Length ?? 0, BinaryRegions: regions, SymbolLocations: symbolLocations, SemanticSpans: semanticSpans);
             cache[key] = result;
             return result;
         }
         finally { decompiler.CancellationToken = default; gate.Release(); }
     }
 
-    private string DecompileCSharp(EntityHandle handle, bool showMetadataTokens)
+    private (string Text, IReadOnlyList<ClassifiedSpan> Spans) DecompileCSharp(EntityHandle handle, bool showMetadataTokens)
     {
-        var source = decompiler.DecompileAsString([handle]);
-        source = AddNamespaceDeclaration(source, DeclaringTypeOf(handle));
-        return showMetadataTokens ? AddTokenComments(source, handle) : source;
+        // Decompile to a syntax tree and paint each token from its bound symbol (dnSpy's approach) rather
+        // than lexically. The namespace header and dnSpy-style token comments are then folded back in while
+        // keeping the classification spans aligned to the text.
+        var tree = decompiler.Decompile([handle]);
+        var (text, spans) = SemanticHighlighter.Highlight(tree, settings.CSharpFormattingOptions);
+        var lines = SplitIntoClassifiedLines(text, spans);
+        InsertNamespaceLine(lines, DeclaringTypeOf(handle));
+        if (showMetadataTokens) InsertTokenCommentLines(lines, handle);
+        return FlattenClassifiedLines(lines);
+    }
+
+    private sealed class ClassifiedLine(string text)
+    {
+        public string Text { get; } = text;
+        // Spans are stored relative to the start of the line so inserting whole lines never disturbs them.
+        public List<ClassifiedSpan> Spans { get; } = [];
+    }
+
+    private static List<ClassifiedLine> SplitIntoClassifiedLines(string text, IReadOnlyList<ClassifiedSpan> spans)
+    {
+        var lines = new List<ClassifiedLine>();
+        var starts = new List<int> { 0 };
+        for (var index = 0; index < text.Length; index++) if (text[index] == '\n') starts.Add(index + 1);
+        for (var line = 0; line < starts.Count; line++)
+        {
+            var start = starts[line];
+            var end = line + 1 < starts.Count ? starts[line + 1] - 1 : text.Length;
+            lines.Add(new ClassifiedLine(text[start..end]));
+        }
+        foreach (var span in spans)
+        {
+            // A span may straddle line breaks (a verbatim string); clip it onto each line it covers.
+            var remaining = span;
+            var line = LineOf(starts, remaining.Start);
+            while (remaining.Length > 0 && line < lines.Count)
+            {
+                var lineStart = starts[line];
+                var column = remaining.Start - lineStart;
+                var take = Math.Min(remaining.Length, lines[line].Text.Length - column);
+                if (take > 0) lines[line].Spans.Add(new ClassifiedSpan(column, take, remaining.Kind));
+                var consumed = lines[line].Text.Length - column + 1;
+                remaining = new ClassifiedSpan(remaining.Start + consumed, remaining.Length - consumed, remaining.Kind);
+                line++;
+            }
+        }
+        return lines;
+    }
+
+    private static int LineOf(List<int> lineStarts, int offset)
+    {
+        var line = lineStarts.BinarySearch(offset);
+        return line >= 0 ? line : ~line - 1;
+    }
+
+    private static (string Text, IReadOnlyList<ClassifiedSpan> Spans) FlattenClassifiedLines(List<ClassifiedLine> lines)
+    {
+        var builder = new StringBuilder();
+        var spans = new List<ClassifiedSpan>();
+        for (var index = 0; index < lines.Count; index++)
+        {
+            var offset = builder.Length;
+            builder.Append(lines[index].Text);
+            foreach (var span in lines[index].Spans) spans.Add(new ClassifiedSpan(offset + span.Start, span.Length, span.Kind));
+            if (index + 1 < lines.Count) builder.Append('\n');
+        }
+        return (builder.ToString(), spans);
+    }
+
+    private void InsertNamespaceLine(List<ClassifiedLine> lines, TypeDefinitionHandle typeHandle)
+    {
+        if (typeHandle.IsNil) return;
+        var outer = typeHandle;
+        while (!metadata.GetTypeDefinition(outer).GetDeclaringType().IsNil) outer = metadata.GetTypeDefinition(outer).GetDeclaringType();
+        var ns = metadata.GetString(metadata.GetTypeDefinition(outer).Namespace);
+        if (string.IsNullOrEmpty(ns)) return;
+        if (lines.Any(line => line.Text.Contains($"namespace {ns}", StringComparison.Ordinal))) return;
+
+        var insertion = 0;
+        while (insertion < lines.Count)
+        {
+            var text = lines[insertion].Text.TrimStart();
+            if (text.Length == 0 || text.StartsWith("using ", StringComparison.Ordinal) || text.StartsWith("extern alias ", StringComparison.Ordinal) || text.StartsWith('#')) insertion++;
+            else break;
+        }
+        var declaration = new ClassifiedLine($"namespace {ns};");
+        declaration.Spans.Add(new ClassifiedSpan(0, "namespace".Length, "keyword"));
+        declaration.Spans.Add(new ClassifiedSpan("namespace ".Length, ns.Length, "namespace"));
+        lines.Insert(insertion, declaration);
+        lines.Insert(insertion + 1, new ClassifiedLine(""));
+    }
+
+    private void InsertTokenCommentLines(List<ClassifiedLine> lines, EntityHandle selected)
+    {
+        if (selected.Kind != HandleKind.TypeDefinition)
+        {
+            lines.Insert(0, CommentLine(TokenComment(selected)));
+            return;
+        }
+        var type = metadata.GetTypeDefinition((TypeDefinitionHandle)selected);
+        var declarations = new List<(EntityHandle Handle, string Name, bool Callable)> { (selected, TypeIdentifier(type), false) };
+        declarations.AddRange(type.GetFields().Select(h => ((EntityHandle)h, metadata.GetString(metadata.GetFieldDefinition(h).Name), false)));
+        declarations.AddRange(type.GetProperties().Select(h => ((EntityHandle)h, metadata.GetString(metadata.GetPropertyDefinition(h).Name), false)));
+        declarations.AddRange(type.GetEvents().Select(h => ((EntityHandle)h, metadata.GetString(metadata.GetEventDefinition(h).Name), false)));
+        declarations.AddRange(type.GetMethods().Where(h => !metadata.GetMethodDefinition(h).Attributes.HasFlag(MethodAttributes.SpecialName) || metadata.GetString(metadata.GetMethodDefinition(h).Name) is ".ctor" or ".cctor").Select(h =>
+        {
+            var name = metadata.GetString(metadata.GetMethodDefinition(h).Name);
+            return ((EntityHandle)h, name is ".ctor" or ".cctor" ? TypeIdentifier(type) : name, true);
+        }));
+
+        var insertions = new List<(int Index, ClassifiedLine Line)>();
+        var used = new HashSet<int>();
+        foreach (var declaration in declarations)
+        {
+            var candidates = Enumerable.Range(0, lines.Count)
+                .Where(i => !used.Contains(i) && IsDeclarationLine(lines[i].Text, declaration.Name, declaration.Callable))
+                .ToArray();
+            if (candidates.Length == 0) continue;
+            var declarationIndent = candidates.Min(i => LeadingWhitespace(lines[i].Text));
+            foreach (var i in candidates.Where(i => LeadingWhitespace(lines[i].Text) == declarationIndent))
+            {
+                used.Add(i);
+                var indent = lines[i].Text[..(lines[i].Text.Length - lines[i].Text.TrimStart().Length)];
+                insertions.Add((i, CommentLine(indent + TokenComment(declaration.Handle))));
+                break;
+            }
+        }
+        foreach (var insertion in insertions.OrderByDescending(x => x.Index)) lines.Insert(insertion.Index, insertion.Line);
+    }
+
+    private static ClassifiedLine CommentLine(string text)
+    {
+        var line = new ClassifiedLine(text);
+        line.Spans.Add(new ClassifiedSpan(0, text.Length, "comment"));
+        return line;
     }
 
     private BinaryRegion? GetHexEntityRegion(EntityHandle handle)
@@ -844,55 +983,72 @@ internal sealed class AssemblySession : IDisposable
 
     private IReadOnlyDictionary<string, string> TypeClassificationMap => typeClassifications ??= BuildTypeClassifications();
 
-    // Records each type's declared kind (class/interface/enum/struct/delegate) keyed by the simple
-    // name that appears in decompiled source, so the viewer can give enums, interfaces, structs and
-    // delegates their own dnSpy-style colors. Names shared by several types are dropped, matching
-    // BuildTypeLinks, so a color never misrepresents an ambiguous name.
+    // Records each type's declared kind (class/interface/enum/struct/delegate) keyed by the simple name
+    // that appears in decompiled source, so the viewer can give enums, interfaces, structs, delegates and
+    // static classes their own dnSpy-style colors. This walks the decompiler's whole type system - the
+    // module plus every referenced assembly - so framework types such as IDisposable, Action and
+    // KeyValuePair are colored by their real kind, exactly as dnSpy resolves them. A name whose kind is
+    // not consistent across the types that share it is dropped so a color never misrepresents it.
     private IReadOnlyDictionary<string, string> BuildTypeClassifications()
     {
         var byName = new Dictionary<string, string>(StringComparer.Ordinal);
-        var ambiguous = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var h in metadata.TypeDefinitions)
+        var conflicting = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var type in decompiler.TypeSystem.GetAllTypeDefinitions())
         {
-            var definition = metadata.GetTypeDefinition(h);
-            var name = metadata.GetString(definition.Name);
-            if (name.StartsWith('<')) continue;
-            var display = name.Split('`')[0];
-            if (display.Length == 0) continue;
-            if (!byName.TryAdd(display, Classify(definition))) ambiguous.Add(display);
+            var name = type.Name;
+            if (string.IsNullOrEmpty(name) || name.StartsWith('<')) continue;
+            if (ClassifyKind(type) is not { } kind) continue;
+            if (byName.TryGetValue(name, out var existing)) { if (existing != kind) conflicting.Add(name); }
+            else byName[name] = kind;
         }
-        foreach (var name in ambiguous) byName.Remove(name);
+        foreach (var name in conflicting) byName.Remove(name);
         return byName;
     }
 
-    // Combines the assembly-wide type kinds with the members declared by the type being shown, so the
-    // viewer can color a name by what it actually is. Members win over a same-named type, mirroring how
-    // BuildSymbolLinks resolves the click target.
+    private static string? ClassifyKind(ITypeDefinition type) => type.Kind switch
+    {
+        TypeKind.Interface => "interface",
+        TypeKind.Enum => "enum",
+        TypeKind.Delegate => "delegate",
+        TypeKind.Struct => "struct",
+        TypeKind.Class => type.IsStatic ? "staticclass" : "class",
+        _ => null
+    };
+
+    // Layers the members declared by the type being shown - and by its nested types, since the decompiled
+    // document contains them too - over the assembly-wide type kinds, so the viewer can color a name by
+    // what it actually is. Members shadow a same-named type, mirroring how BuildSymbolLinks resolves the
+    // click target. The shared type map is referenced rather than copied so opening a document over a large
+    // reference set stays cheap.
     private IReadOnlyDictionary<string, string> BuildClassifications(EntityHandle selected)
     {
-        var map = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var pair in TypeClassificationMap) map[pair.Key] = pair.Value;
-
         var typeHandle = DeclaringTypeOf(selected);
-        if (typeHandle.IsNil) return map;
-        var type = metadata.GetTypeDefinition(typeHandle);
+        if (typeHandle.IsNil) return TypeClassificationMap;
 
+        var members = new Dictionary<string, string>(StringComparer.Ordinal);
         void AddMember(string name, string kind)
         {
             if (name.Length == 0 || name.StartsWith('<')) return;
-            map[name] = kind;
+            members[name] = kind;
         }
 
-        foreach (var h in type.GetFields()) AddMember(metadata.GetString(metadata.GetFieldDefinition(h).Name), "field");
-        foreach (var h in type.GetProperties()) AddMember(metadata.GetString(metadata.GetPropertyDefinition(h).Name), "property");
-        foreach (var h in type.GetEvents()) AddMember(metadata.GetString(metadata.GetEventDefinition(h).Name), "event");
-        // Generic parameters are added last so that inside the type's own source a name like T reads as
-        // a type parameter rather than a same-named class, matching dnSpy's distinct parameter color.
-        foreach (var h in type.GetGenericParameters()) AddMember(metadata.GetString(metadata.GetGenericParameter(h).Name), "typeparam");
-        foreach (var m in type.GetMethods())
-            foreach (var h in metadata.GetMethodDefinition(m).GetGenericParameters())
-                AddMember(metadata.GetString(metadata.GetGenericParameter(h).Name), "typeparam");
-        return map;
+        void AddType(TypeDefinition type)
+        {
+            var fieldKind = IsEnum(type) ? "enumfield" : "field";
+            foreach (var h in type.GetFields()) AddMember(metadata.GetString(metadata.GetFieldDefinition(h).Name), fieldKind);
+            foreach (var h in type.GetProperties()) AddMember(metadata.GetString(metadata.GetPropertyDefinition(h).Name), "property");
+            foreach (var h in type.GetEvents()) AddMember(metadata.GetString(metadata.GetEventDefinition(h).Name), "event");
+            // Generic parameters are added last so that inside the type's own source a name like T reads
+            // as a type parameter rather than a same-named class, matching dnSpy's distinct parameter color.
+            foreach (var h in type.GetGenericParameters()) AddMember(metadata.GetString(metadata.GetGenericParameter(h).Name), "typeparam");
+            foreach (var m in type.GetMethods())
+                foreach (var h in metadata.GetMethodDefinition(m).GetGenericParameters())
+                    AddMember(metadata.GetString(metadata.GetGenericParameter(h).Name), "typeparam");
+            foreach (var nested in type.GetNestedTypes()) AddType(metadata.GetTypeDefinition(nested));
+        }
+
+        AddType(metadata.GetTypeDefinition(typeHandle));
+        return new LayeredClassifications(members, TypeClassificationMap);
     }
 
     private string Classify(TypeDefinition definition)
@@ -902,6 +1058,21 @@ internal sealed class AssemblySession : IDisposable
         if (IsDelegate(definition)) return "delegate";
         if (IsValueType(definition)) return "struct";
         return IsStaticClass(definition) ? "staticclass" : "class";
+    }
+
+    // Answers a name from the document's own member overlay first, then the shared assembly-wide type
+    // map, so that large map is referenced rather than copied into every document's classifications.
+    private sealed class LayeredClassifications(IReadOnlyDictionary<string, string> overlay, IReadOnlyDictionary<string, string> baseMap) : IReadOnlyDictionary<string, string>
+    {
+        public bool TryGetValue(string key, out string value) => overlay.TryGetValue(key, out value!) || baseMap.TryGetValue(key, out value!);
+        public bool ContainsKey(string key) => overlay.ContainsKey(key) || baseMap.ContainsKey(key);
+        public string this[string key] => TryGetValue(key, out var value) ? value : throw new KeyNotFoundException(key);
+        public IEnumerable<string> Keys => this.Select(pair => pair.Key);
+        public IEnumerable<string> Values => this.Select(pair => pair.Value);
+        public int Count => overlay.Count + baseMap.Count(pair => !overlay.ContainsKey(pair.Key));
+        public IEnumerator<KeyValuePair<string, string>> GetEnumerator() =>
+            overlay.Concat(baseMap.Where(pair => !overlay.ContainsKey(pair.Key))).GetEnumerator();
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     // A static class compiles to an abstract sealed class; that flag pair is unique to static classes,
@@ -990,45 +1161,6 @@ internal sealed class AssemblySession : IDisposable
         HandleKind.EventDefinition => metadata.GetEventDefinition((EventDefinitionHandle)handle).GetAccessors() is var e && !e.Adder.IsNil ? metadata.GetMethodDefinition(e.Adder).GetDeclaringType() : FindEventDeclaringType((EventDefinitionHandle)handle),
         _ => default
     };
-
-    private string AddTokenComments(string source, EntityHandle selected)
-    {
-        if (selected.Kind != HandleKind.TypeDefinition) return TokenComment(selected) + Environment.NewLine + source;
-        var type = metadata.GetTypeDefinition((TypeDefinitionHandle)selected);
-        var declarations = new List<(EntityHandle Handle, string Name, bool Callable)>
-        {
-            (selected, TypeIdentifier(type), false)
-        };
-        declarations.AddRange(type.GetFields().Select(h => ((EntityHandle)h, metadata.GetString(metadata.GetFieldDefinition(h).Name), false)));
-        declarations.AddRange(type.GetProperties().Select(h => ((EntityHandle)h, metadata.GetString(metadata.GetPropertyDefinition(h).Name), false)));
-        declarations.AddRange(type.GetEvents().Select(h => ((EntityHandle)h, metadata.GetString(metadata.GetEventDefinition(h).Name), false)));
-        declarations.AddRange(type.GetMethods().Where(h => !metadata.GetMethodDefinition(h).Attributes.HasFlag(MethodAttributes.SpecialName) || metadata.GetString(metadata.GetMethodDefinition(h).Name) is ".ctor" or ".cctor").Select(h =>
-        {
-            var name = metadata.GetString(metadata.GetMethodDefinition(h).Name);
-            return ((EntityHandle)h, name is ".ctor" or ".cctor" ? TypeIdentifier(type) : name, true);
-        }));
-
-        var lines = source.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n').ToList();
-        var insertions = new List<(int Index, string Comment)>();
-        var used = new HashSet<int>();
-        foreach (var declaration in declarations)
-        {
-            var candidates = Enumerable.Range(0, lines.Count)
-                .Where(i => !used.Contains(i) && IsDeclarationLine(lines[i], declaration.Name, declaration.Callable))
-                .ToArray();
-            if (candidates.Length == 0) continue;
-            var declarationIndent = candidates.Min(i => LeadingWhitespace(lines[i]));
-            foreach (var i in candidates.Where(i => LeadingWhitespace(lines[i]) == declarationIndent))
-            {
-                used.Add(i);
-                var indent = lines[i][..(lines[i].Length - lines[i].TrimStart().Length)];
-                insertions.Add((i, indent + TokenComment(declaration.Handle)));
-                break;
-            }
-        }
-        foreach (var insertion in insertions.OrderByDescending(x => x.Index)) lines.Insert(insertion.Index, insertion.Comment);
-        return string.Join(Environment.NewLine, lines);
-    }
 
     private static bool IsDeclarationLine(string line, string name, bool callable)
     {
@@ -1149,28 +1281,6 @@ internal sealed class AssemblySession : IDisposable
 
     private TypeDefinitionHandle FindPropertyDeclaringType(PropertyDefinitionHandle target) => metadata.TypeDefinitions.FirstOrDefault(t => metadata.GetTypeDefinition(t).GetProperties().Contains(target));
     private TypeDefinitionHandle FindEventDeclaringType(EventDefinitionHandle target) => metadata.TypeDefinitions.FirstOrDefault(t => metadata.GetTypeDefinition(t).GetEvents().Contains(target));
-
-    private string AddNamespaceDeclaration(string source, TypeDefinitionHandle typeHandle)
-    {
-        if (typeHandle.IsNil) return source;
-        var outer = typeHandle;
-        while (!metadata.GetTypeDefinition(outer).GetDeclaringType().IsNil) outer = metadata.GetTypeDefinition(outer).GetDeclaringType();
-        var ns = metadata.GetString(metadata.GetTypeDefinition(outer).Namespace);
-        if (string.IsNullOrEmpty(ns)) return source;
-        if (source.Contains($"namespace {ns}", StringComparison.Ordinal)) return source;
-
-        var lines = source.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n').ToList();
-        var insertion = 0;
-        while (insertion < lines.Count)
-        {
-            var line = lines[insertion].TrimStart();
-            if (line.Length == 0 || line.StartsWith("using ", StringComparison.Ordinal) || line.StartsWith("extern alias ", StringComparison.Ordinal) || line.StartsWith('#')) insertion++;
-            else break;
-        }
-        lines.Insert(insertion, $"namespace {ns};");
-        lines.Insert(insertion + 1, "");
-        return string.Join(Environment.NewLine, lines);
-    }
 
     private SearchResult Result(EntityHandle h, string name, string kind)
     {

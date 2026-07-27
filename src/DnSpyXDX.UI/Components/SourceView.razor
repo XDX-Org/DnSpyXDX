@@ -175,12 +175,12 @@ else
   private async ValueTask<ItemsProviderResult<SourceTokenizedLine>> LoadLinesAsync(ItemsProviderRequest request)
   {
     if (model is null) return new ItemsProviderResult<SourceTokenizedLine>([], 0);
-    var lines = await Cache.GetLinesAsync(model, request.StartIndex, request.Count, Document.SymbolLinks, Document.TypeClassifications, Document.References, request.CancellationToken);
+    var lines = await Cache.GetLinesAsync(model, request.StartIndex, request.Count, Document.SymbolLinks, Document.TypeClassifications, Document.References, Document.SemanticSpans, request.CancellationToken);
     return new ItemsProviderResult<SourceTokenizedLine>(lines, model.LineCount);
   }
 
   private Task<IReadOnlyList<SourceTokenizedLine>> LoadWrappedLinesAsync(SourceDocumentModel document, CancellationToken token) =>
-    document.TokenizeLinesAsync(0, document.LineCount, Document.SymbolLinks, Document.TypeClassifications, Document.References, token);
+    document.TokenizeLinesAsync(0, document.LineCount, Document.SymbolLinks, Document.TypeClassifications, Document.References, Document.SemanticSpans, token);
 
   [JSInvokable]
   public void OpenFind()

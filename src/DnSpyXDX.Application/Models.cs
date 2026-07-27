@@ -63,6 +63,11 @@ public sealed record ReferenceSpan(
 
 public sealed record DiagnosticMessage(string Severity, string Message);
 public sealed record BinaryRegion(int Offset, int Length, string Tooltip, bool IsEntity = false);
+
+/// <summary>A run of decompiled text with a semantic classification resolved from the decompiler's
+/// syntax tree (e.g. "class", "interface", "field", "property", "method"), so the viewer can color each
+/// token by its bound symbol the way dnSpy does rather than by lexical guesswork.</summary>
+public readonly record struct ClassifiedSpan(int Start, int Length, string Kind);
 public sealed record ResourceDocument(NodeId Id, SymbolId Symbol, string Name, byte[] Data, string Kind, string? Text = null, string? MimeType = null);
 
 public sealed record DecompilerDocument(
@@ -80,7 +85,8 @@ public sealed record DecompilerDocument(
     int BinarySelectionLength = 0,
     IReadOnlyList<BinaryRegion>? BinaryRegions = null,
     ResourceDocument? Resource = null,
-    IReadOnlyDictionary<int, int>? SymbolLocations = null);
+    IReadOnlyDictionary<int, int>? SymbolLocations = null,
+    IReadOnlyList<ClassifiedSpan>? SemanticSpans = null);
 
 public sealed record SearchResult(SymbolId Symbol, string Name, string Kind, string AssemblyName, string Namespace, SymbolId DeclaringType, string? QualifiedName = null);
 

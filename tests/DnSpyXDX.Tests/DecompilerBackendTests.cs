@@ -1,5 +1,6 @@
 using DnSpyXDX.Application;
 using DnSpyXDX.Decompilation;
+using DnSpyXDX.UI;
 using Xunit;
 
 namespace DnSpyXDX.Tests;
@@ -237,6 +238,125 @@ public sealed class DecompilerBackendTests
     }
 
     [Fact]
+    public async Task Semantic_spans_color_each_token_by_its_resolved_symbol()
+    {
+        await using var backend = new DecompilerBackend();
+        var assembly = await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
+        var namespaces = (await backend.GetChildrenAsync(assembly.RootNode)).Single(n => n.Name == "Namespaces");
+        var types = await backend.GetChildrenAsync((await backend.GetChildrenAsync(namespaces.Id)).Single(n => n.Name == "DnSpyXDX.Tests").Id);
+        var sample = types.Single(n => n.Name == nameof(HighlightSample));
+
+        var document = await backend.DecompileAsync(sample.Symbol!.Value, DecompilerLanguage.CSharp);
+        var text = document.Text;
+        var spans = document.SemanticSpans!;
+        string KindAt(int index) => spans.Single(s => index >= s.Start && index < s.Start + s.Length).Kind;
+
+        // "public Marker Marker;" — the type reference and the same-named field must be colored apart,
+        // which only per-token symbol resolution can do.
+        var field = text.IndexOf("Marker Marker;", StringComparison.Ordinal);
+        Assert.Equal("struct", KindAt(field));                // the type reference
+        Assert.Equal("field", KindAt(field + "Marker ".Length)); // the field named the same
+
+        // Property access on an external type, an enum type, and an enum member.
+        Assert.Equal("property", KindAt(text.IndexOf(".Length", StringComparison.Ordinal) + 1));
+        Assert.Equal("enum", KindAt(text.IndexOf("HighlightChoice State", StringComparison.Ordinal)));
+        Assert.Equal("property", KindAt(text.IndexOf("State {", StringComparison.Ordinal)));
+
+        // An attribute name and a constructor name both take their type's color, not the method color.
+        Assert.Equal("class", KindAt(text.IndexOf("Obsolete", StringComparison.Ordinal)));
+        Assert.Equal("class", KindAt(text.IndexOf("HighlightSample(int", StringComparison.Ordinal)));
+
+        // A genuine method call keeps the method color.
+        Assert.Equal("method", KindAt(text.IndexOf("Measure(", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task Semantic_spans_cover_literals_and_control_flow()
+    {
+        await using var backend = new DecompilerBackend();
+        var assembly = await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
+        var namespaces = (await backend.GetChildrenAsync(assembly.RootNode)).Single(n => n.Name == "Namespaces");
+        var types = await backend.GetChildrenAsync((await backend.GetChildrenAsync(namespaces.Id)).Single(n => n.Name == "DnSpyXDX.Tests").Id);
+        var sample = types.Single(n => n.Name == nameof(HighlightSample));
+
+        var document = await backend.DecompileAsync(sample.Symbol!.Value, DecompilerLanguage.CSharp);
+        var text = document.Text;
+        var spans = document.SemanticSpans!;
+        string KindAt(int index) => spans.Single(s => index >= s.Start && index < s.Start + s.Length).Kind;
+
+        // Control-flow keywords, a numeric literal, an interpolated string and a plain string literal each
+        // get their own classification straight from the syntax tree.
+        Assert.Equal("control", KindAt(text.IndexOf("if (", StringComparison.Ordinal)));
+        Assert.Equal("control", KindAt(text.IndexOf("return ", StringComparison.Ordinal)));
+        Assert.Equal("keyword", KindAt(text.IndexOf("public ", StringComparison.Ordinal)));
+        Assert.Equal("number", KindAt(text.IndexOf("> 0", StringComparison.Ordinal) + 2));
+        Assert.Equal("string", KindAt(text.IndexOf("\"none\"", StringComparison.Ordinal)));
+        Assert.Equal("string", KindAt(text.IndexOf("n={", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task Generic_type_parameters_are_classified_from_the_syntax_tree()
+    {
+        await using var backend = new DecompilerBackend();
+        var assembly = await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
+        var namespaces = (await backend.GetChildrenAsync(assembly.RootNode)).Single(n => n.Name == "Namespaces");
+        var types = await backend.GetChildrenAsync((await backend.GetChildrenAsync(namespaces.Id)).Single(n => n.Name == "DnSpyXDX.Tests").Id);
+        var generic = types.Single(n => n.Name == "GenericSample<TItem>");
+
+        var document = await backend.DecompileAsync(generic.Symbol!.Value, DecompilerLanguage.CSharp);
+        var text = document.Text;
+        var spans = document.SemanticSpans!;
+        string KindAt(int index) => spans.Single(s => index >= s.Start && index < s.Start + s.Length).Kind;
+
+        Assert.Equal("typeparam", KindAt(text.IndexOf("TItem>", StringComparison.Ordinal)));
+        Assert.Equal("typeparam", KindAt(text.IndexOf("TItem? Item", StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public async Task Semantic_spans_repaint_rendered_tokens_end_to_end()
+    {
+        await using var backend = new DecompilerBackend();
+        var assembly = await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
+        var namespaces = (await backend.GetChildrenAsync(assembly.RootNode)).Single(n => n.Name == "Namespaces");
+        var types = await backend.GetChildrenAsync((await backend.GetChildrenAsync(namespaces.Id)).Single(n => n.Name == "DnSpyXDX.Tests").Id);
+        var sample = types.Single(n => n.Name == nameof(HighlightSample));
+
+        var document = await backend.DecompileAsync(sample.Symbol!.Value, DecompilerLanguage.CSharp);
+        var model = SourceDocumentModel.Create(document);
+        var lines = await model.TokenizeLinesAsync(0, model.LineCount, document.SymbolLinks, document.TypeClassifications, document.References, document.SemanticSpans);
+
+        // The rendered line, not just the raw spans, must carry the resolved kinds: the type reference and
+        // the same-named field on "public Marker Marker;" end up as distinct token kinds.
+        var line = lines.Single(l => l.Text.Contains("Marker Marker;", StringComparison.Ordinal));
+        var markers = line.Tokens.Where(t => line.Text.AsSpan(t.Start, t.Length).SequenceEqual("Marker")).ToArray();
+        Assert.Equal(2, markers.Length);
+        Assert.Equal(SourceTokenKind.Struct, markers[0].Kind);
+        Assert.Equal(SourceTokenKind.Field, markers[1].Kind);
+    }
+
+    [Fact]
+    public async Task Classifies_members_and_types_of_nested_classes_from_the_outer_type()
+    {
+        await using var backend = new DecompilerBackend();
+        var assembly = await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
+        var namespaces = (await backend.GetChildrenAsync(assembly.RootNode)).Single(n => n.Name == "Namespaces");
+        var types = await backend.GetChildrenAsync((await backend.GetChildrenAsync(namespaces.Id)).Single(n => n.Name == "DnSpyXDX.Tests").Id);
+        var outer = types.Single(n => n.Name == nameof(NestedHost));
+
+        var document = await backend.DecompileAsync(outer.Symbol!.Value, DecompilerLanguage.CSharp);
+        var text = document.Text;
+        var spans = document.SemanticSpans!;
+        string KindAt(int index) => spans.Single(s => index >= s.Start && index < s.Start + s.Length).Kind;
+
+        // Members and types declared inside a nested class must be classified when the outer type is shown,
+        // because the decompiled document renders those nested classes in full and the syntax tree carries
+        // their bound symbols.
+        Assert.Equal("enum", KindAt(text.IndexOf("NestedChoice Choice", StringComparison.Ordinal)));
+        Assert.Equal("property", KindAt(text.IndexOf("Choice {", StringComparison.Ordinal)));
+        Assert.Equal("field", KindAt(text.IndexOf("NestedField;", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public async Task Displays_generic_types_with_their_parameter_names()
     {
         await using var backend = new DecompilerBackend();
@@ -363,6 +483,36 @@ public sealed class SampleMembers
         return SampleField;
     }
     public sealed class SampleNested { }
+}
+
+public struct Marker { }
+
+public sealed class HighlightSample
+{
+    public Marker Marker;
+    public HighlightChoice State { get; set; }
+    public HighlightSample(int seed) { }
+    [System.Obsolete("x")]
+    public int Measure(string text) => text.Length;
+    public string Describe(int count)
+    {
+        if (count > 0)
+        {
+            return $"n={count}";
+        }
+        return "none";
+    }
+    public enum HighlightChoice { On, Off }
+}
+
+public sealed class NestedHost
+{
+    public sealed class NestedBody
+    {
+        public NestedChoice Choice { get; set; }
+        public int NestedField;
+        public enum NestedChoice { First, Second }
+    }
 }
 
 public sealed class GenericSample<TItem>

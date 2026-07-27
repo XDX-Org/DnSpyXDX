@@ -130,6 +130,41 @@ public sealed class SourceTokenizerTests
     }
 
     [Fact]
+    public void Colors_constructors_and_attributes_as_their_type_not_methods()
+    {
+        const string line = "[JsonProperty(\"qid\")] var x = new Widget();";
+        var kinds = new Dictionary<string, string>(StringComparer.Ordinal) { ["JsonProperty"] = "class", ["Widget"] = "class" };
+
+        var (tokens, _) = SourceTokenizer.Tokenize(line, SourceTokenizerState.Initial, null, kinds);
+
+        Assert.Equal(SourceTokenKind.Type, Kind(tokens, "JsonProperty", line));
+        Assert.Equal(SourceTokenKind.Type, Kind(tokens, "Widget", line));
+    }
+
+    [Fact]
+    public void Keeps_real_method_calls_as_methods()
+    {
+        const string line = "value = obj.Compute(count);";
+        var (tokens, _) = SourceTokenizer.Tokenize(line, SourceTokenizerState.Initial);
+
+        Assert.Equal(SourceTokenKind.Method, Kind(tokens, "Compute", line));
+    }
+
+    [Fact]
+    public void Colors_member_access_by_context_rather_than_as_a_type()
+    {
+        const string line = "return x.Template != null && x.Status == EStatus.Started;";
+        var kinds = new Dictionary<string, string>(StringComparer.Ordinal) { ["EStatus"] = "enum" };
+
+        var (tokens, _) = SourceTokenizer.Tokenize(line, SourceTokenizerState.Initial, null, kinds);
+
+        Assert.Equal(SourceTokenKind.Property, Kind(tokens, "Template", line));
+        Assert.Equal(SourceTokenKind.Property, Kind(tokens, "Status", line));
+        Assert.Equal(SourceTokenKind.Enum, Kind(tokens, "EStatus", line));
+        Assert.Equal(SourceTokenKind.EnumMember, Kind(tokens, "Started", line));
+    }
+
+    [Fact]
     public void Colors_using_and_namespace_segments_as_namespaces()
     {
         const string usingLine = "using System.Collections.Generic;";
