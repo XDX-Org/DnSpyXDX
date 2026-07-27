@@ -1,0 +1,124 @@
+name: Nightly
+
+on:
+  schedule:
+    # 07:00 UTC daily (~midnight US Pacific)
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish a rolling 'nightly' prerelease with the built binaries"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore DnSpyXDX.slnx
+
+      - name: Build
+        run: dotnet build DnSpyXDX.slnx -c Release --no-restore
+
+      - name: Test
+        run: dotnet test DnSpyXDX.slnx -c Release --no-build --logger "trx;LogFileName=test-results.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: "**/TestResults/*.trx"
+          if-no-files-found: ignore
+
+  publish:
+    name: Publish (${{ matrix.rid }})
+    needs: build-test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: ubuntu-latest
+            rid: linux-x64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Publish self-contained (${{ matrix.rid }})
+        run: >
+          dotnet publish src/DnSpyXDX.Host
+          -c Release
+          -r ${{ matrix.rid }}
+          --self-contained true
+          -p:PublishSingleFile=false
+          -o publish/${{ matrix.rid }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DnSpyXDX-${{ matrix.rid }}
+          path: publish/${{ matrix.rid }}
+          if-no-files-found: error
+
+  release:
+    name: Rolling nightly prerelease
+    needs: publish
+    # Scheduled runs always publish; manual runs only when explicitly requested.
+    if: github.event_name == 'schedule' || inputs.publish_release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Package per-RID archives
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for dir in artifacts/DnSpyXDX-*; do
+            [ -d "$dir" ] || continue
+            rid="${dir##*/DnSpyXDX-}"
+            (cd "$dir" && zip -r "$GITHUB_WORKSPACE/dist/DnSpyXDX-${rid}.zip" .)
+          done
+          ls -l dist
+
+      - name: Publish rolling 'nightly' release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly build
+          prerelease: true
+          body: |
+            Automated nightly build from `${{ github.sha }}`.
+            Self-contained binaries for Windows x64 and Linux x64. Not a stable release.
+          files: dist/*.zip
