@@ -2,7 +2,7 @@
 
 Prepared on 2026-07-24. This supersedes the delivery order in `next-steps-23-07.md`.
 
-Implementation status: complete and merged into `main`. The current automated suite passes (64 tests), and `linux-x64`/`win-x64` publishes passed during implementation. Interactive GUI smoke testing remains a release follow-up.
+Implementation status: complete and merged into `main`. The automated suite and `linux-x64`/`win-x64` publishes passed during implementation, and interactive GUI smoke testing is complete.
 
 ## Decision
 
@@ -104,7 +104,7 @@ Acceptance:
 - Restarting restores the selected language and documents in that language.
 - Sessions written by the current release still load.
 
-### 7. Tests and release gate — automated checks complete; GUI smoke testing pending
+### 7. Tests and release gate — complete
 
 Add or update tests for:
 
@@ -122,7 +122,7 @@ Release follow-up:
 1. [x] Run the full test suite.
 2. [x] Build the solution with warnings treated as failures where supported.
 3. [x] Publish `linux-x64` and `win-x64` using the documented commands.
-4. [ ] Smoke-test switching all modes, rapid switching, tab history, search navigation, session restart, and a large type.
+4. [x] Smoke-test switching all modes, rapid switching, tab history, search navigation, session restart, and a large type.
 
 ## Ordered backlog after language selection
 
@@ -130,7 +130,7 @@ Release follow-up:
 2. Indexed workspace search.
 3. Reliable multi-project export and project-reference remapping.
 4. Hardening: input limits, adversarial fixtures, cancellation, recovery, and cache limits.
-5. Release automation, packaging, licenses, and cross-platform GUI smoke tests.
+5. Release automation, packaging, and licenses.
 6. Decompilation performance measurement and optimization.
 
 The deferred performance phase should still separate cold/warm assembly resolution, ILSpy transforms, source generation, link construction, presentation indexing/tokenization, and first viewport render. Optimize only from measured evidence.

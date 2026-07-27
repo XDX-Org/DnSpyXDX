@@ -17,7 +17,7 @@ This milestone does not add IL modes, exact semantic-reference production, editi
 
 ## Progress
 
-Updated on 2026-07-23. The visualisation milestone is complete and accepted. Linux behavior was manually verified; Windows runtime validation is deferred to external testing.
+Updated on 2026-07-27. The visualisation milestone is complete and accepted, including Windows WebView2 and Linux WebKitGTK runtime validation.
 
 | Phase | Status | Notes |
 | --- | --- | --- |
@@ -26,7 +26,7 @@ Updated on 2026-07-23. The visualisation milestone is complete and accepted. Lin
 | 3. Virtualized viewer | Complete | The production source view uses `Virtualize<TItem>`, fixed-height rows, overscan, stable width, and hidden scrollbars. Large types are still limited by decompilation time before rendering begins. |
 | 4. Viewer features | Complete | Find, Enter/Shift+Enter/Escape, click/Ctrl+click navigation, declaration reveal/flash, occurrence hover, direct-token hover, visible guides, themes, and syntax colors have passed manual checks. |
 | 5. View state and caches | Complete | Per-tab/document scroll restoration, bounded model/token-batch LRU caching, eviction cancellation, debug counters, and tab/assembly cleanup passed manual verification. |
-| 6. Verification and rollout | Complete | Superseded code is removed, automated tests and both RID publishes pass, and the milestone is accepted. Windows WebView2 runtime validation is tracked as deferred external testing. |
+| 6. Verification and rollout | Complete | Superseded code is removed, automated tests and both RID publishes pass, and the viewer is runtime-validated on Windows WebView2 and Linux WebKitGTK. |
 
 ### Implementation notes
 
@@ -38,7 +38,7 @@ Updated on 2026-07-23. The visualisation milestone is complete and accepted. Lin
 - Rainbow brace token coloring was removed at user request.
 - ILSpy's `IndentSwitchBody` formatting option is enabled. Case labels are indented inside `switch` braces while their statements retain normal case-body indentation.
 - Whole-document copy has not been added; the need for it remains a phase 4 follow-up decision rather than a blocker for phase 5.
-- Current automated result: 64 tests passing. Both RID publishes passed during rollout; Windows GUI runtime validation remains deferred external testing.
+- Both RID publishes passed during rollout, and GUI runtime validation is complete on Windows and Linux.
 
 ## Why this design
 

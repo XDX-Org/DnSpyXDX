@@ -28,10 +28,10 @@ The assembly tree intentionally stops at types. Members remain discoverable thro
    - Key cache entries by symbol, language, settings, and decompiler version.
    - Refresh the active document in place while preserving navigation and selection.
    - Persist the selected mode and support cancellation.
-5. **Exact semantic navigation**
-   - Produce exact reference spans during decompilation.
-   - Resolve those spans across open assemblies.
-   - Replace identifier-name heuristics in editor navigation.
+5. **Exact semantic navigation — partial**
+   - Exact decompiler-derived C# reference spans now replace identifier-name heuristics for symbols in the current module.
+   - Resolved overloads, extension methods, and cross-type members navigate to their precise definitions.
+   - Resolve references into other open assemblies; external-module targets are currently left unlinked to prevent incorrect navigation.
 6. **Indexed search**
    - Build an index when assemblies open instead of scanning metadata for every query.
    - Keep filtering and cancellation behavior.
@@ -45,7 +45,7 @@ The assembly tree intentionally stops at types. Members remain discoverable thro
    - Add malformed and adversarial assembly fixtures.
    - Test cancellation, crash recovery, and session restoration.
    - Automate `win-x64` and `linux-x64` publishing.
-   - Validate package layouts, bundle licenses, and run GUI smoke tests on both platforms.
+   - Validate package layouts and bundle licenses. GUI smoke tests are complete on both platforms.
 
 ## Work completed ahead of earlier backlog items
 
@@ -64,12 +64,12 @@ This sequencing delivered a broad usable workflow, but source scalability, bound
 
 | Original direction | Current implementation | Follow-up |
 | --- | --- | --- |
-| Expand members beneath types in the tree | Tree intentionally stops at types | Update remaining product documentation to describe search/source navigation as the member workflow |
+| Expand members beneath types in the tree | Tree intentionally stops at types | Complete; docs describe search/source navigation as the member workflow |
 | Virtualized source editor | Pure-Blazor virtualized line viewer | Complete |
-| Exact semantic spans | Identifier-name matching | Replace with decompiler-derived spans |
+| Exact semantic spans | Decompiled C# uses resolved symbol spans within the current module | Add cross-module target identity and resolution |
 | Indexed workspace search | Metadata scan per query | Add an index before analyzer/reference features |
 | Bounded LRU cache | Bounded model and token-batch caches | Complete |
-| Automated dual-platform release | Manual publish instructions | Add CI publishing, packaging, licenses, and smoke tests |
+| Automated dual-platform release | Manual publish instructions and cross-platform GUI smoke tests | Add CI publishing, packaging, and licenses |
 | Project-reference mapping | Multi-project output without remapping | Resolve open-assembly references to generated projects |
 
 ## Roadmap maintenance changes
@@ -82,10 +82,6 @@ This sequencing delivered a broad usable workflow, but source scalability, bound
 - Track release work as separate publishing, packaging, licensing, and platform smoke-test tasks.
 - Separate completed capabilities from future milestones once the ordered backlog is next reorganized.
 
-## Documentation follow-up
+## Documentation follow-up — complete
 
-The type-bounded tree is now the intended product behavior. These existing descriptions should be aligned:
-
-- `README.md` currently says members are browsed in the assembly tree.
-- `product-direction.md` lists member nodes in the expandable tree as an MVP requirement.
-- Navigation documentation should avoid presenting member expansion as the primary interaction.
+The README and product direction now describe the type-bounded tree and identify search/source navigation as the member workflow.

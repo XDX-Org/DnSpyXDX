@@ -36,7 +36,8 @@ The first useful release should support:
    - references and resources
    - namespaces
    - types
-   - fields, properties, events, constructors, and methods
+
+   Members are reached through search and source navigation rather than expanded beneath types.
 4. Decompile a selected type or member to C# without blocking the UI.
 5. Open decompiled documents in tabs.
 6. Navigate back/forward and from a method to its declaring type.
