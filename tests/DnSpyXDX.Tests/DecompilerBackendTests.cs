@@ -55,8 +55,8 @@ public sealed class DecompilerBackendTests
 
         Assert.Contains("class DecompilerBackendTests", document.Text, StringComparison.Ordinal);
         Assert.Contains("namespace DnSpyXDX.Tests;", document.Text, StringComparison.Ordinal);
-        Assert.Contains("// Token: 0x", document.Text, StringComparison.Ordinal);
-        Assert.Contains("RID:", document.Text, StringComparison.Ordinal);
+        Assert.False(new RuntimeDisplaySettings().ShowMetadataTokens);
+        Assert.False(new UiSessionState().ShowMetadataTokens);
     }
 
     [Fact]
@@ -81,6 +81,7 @@ public sealed class DecompilerBackendTests
     public async Task Metadata_token_setting_updates_decompiled_output()
     {
         var displaySettings = new RuntimeDisplaySettings();
+        displaySettings.ShowMetadataTokens = true;
         await using var backend = new DecompilerBackend(displaySettings);
         await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
         var type = Assert.Single(await backend.SearchAsync(nameof(SampleMembers)), result =>
@@ -154,7 +155,8 @@ public sealed class DecompilerBackendTests
     [Fact]
     public async Task Decompiles_csharp_il_sequence_point_annotated_il_and_hex_independently()
     {
-        await using var backend = new DecompilerBackend();
+        var displaySettings = new RuntimeDisplaySettings { ShowMetadataTokens = true };
+        await using var backend = new DecompilerBackend(displaySettings);
         await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
         var type = (await backend.SearchAsync(nameof(SampleMembers))).First(result =>
             result.Kind == "Type" && result.QualifiedName == "DnSpyXDX.Tests.SampleMembers");
@@ -470,7 +472,8 @@ public sealed class DecompilerBackendTests
     [Fact]
     public async Task Token_comments_are_attached_to_declarations_and_include_method_locations()
     {
-        await using var backend = new DecompilerBackend();
+        var displaySettings = new RuntimeDisplaySettings { ShowMetadataTokens = true };
+        await using var backend = new DecompilerBackend(displaySettings);
         var assembly = await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
         var namespaces = (await backend.GetChildrenAsync(assembly.RootNode)).Single(n => n.Name == "Namespaces");
         var ownNamespace = (await backend.GetChildrenAsync(namespaces.Id)).Single(n => n.Name == "DnSpyXDX.Tests");

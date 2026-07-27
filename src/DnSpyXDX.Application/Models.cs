@@ -107,6 +107,6 @@ public sealed record UiSessionState(
     string ThemeId = "default",
     bool DebugLogging = false,
     DecompilerLanguage Language = DecompilerLanguage.CSharp,
-    bool ShowMetadataTokens = true,
+    bool ShowMetadataTokens = false,
     bool WrapLines = false,
     string CodeFontFamily = "");

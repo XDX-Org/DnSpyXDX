@@ -61,7 +61,7 @@ public sealed class RuntimeLoggingSettings
 
 public sealed class RuntimeDisplaySettings
 {
-    private int showMetadataTokens = 1;
+    private int showMetadataTokens;
     public bool ShowMetadataTokens
     {
         get => Volatile.Read(ref showMetadataTokens) != 0;
