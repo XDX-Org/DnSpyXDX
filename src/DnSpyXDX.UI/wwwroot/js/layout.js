@@ -300,3 +300,6 @@ window.dnSpyXdx.initFileDrop = function (dotNet) {
     await dotNet.invokeMethodAsync("OpenDroppedAssemblies", batch, names);
   });
 };
+window.dnSpyXdx.copyText = async function (text) {
+  await navigator.clipboard.writeText(text);
+};

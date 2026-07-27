@@ -55,8 +55,8 @@ public sealed class DecompilerBackendTests
 
         Assert.Contains("class DecompilerBackendTests", document.Text, StringComparison.Ordinal);
         Assert.Contains("namespace DnSpyXDX.Tests;", document.Text, StringComparison.Ordinal);
-        Assert.Contains("// Token: 0x", document.Text, StringComparison.Ordinal);
-        Assert.Contains("RID:", document.Text, StringComparison.Ordinal);
+        Assert.False(new RuntimeDisplaySettings().ShowMetadataTokens);
+        Assert.False(new UiSessionState().ShowMetadataTokens);
     }
 
     [Fact]

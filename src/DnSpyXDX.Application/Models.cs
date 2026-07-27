@@ -144,4 +144,6 @@ public sealed record UiSessionState(
     bool WrapLines = false,
     string CodeFontFamily = "",
     string BottomTab = "search",
-    IReadOnlyList<AnalyzerRootState>? AnalyzerRoots = null);
+    IReadOnlyList<AnalyzerRootState>? AnalyzerRoots = null,
+    bool McpEnabled = false,
+    IReadOnlyList<string>? McpAllowedRoots = null);

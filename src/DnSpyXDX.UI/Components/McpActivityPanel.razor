@@ -1,0 +1,83 @@
+@implements IDisposable
+@inject IMcpServerService Server
+@inject McpActivityLog Activity
+@inject McpServerSettings Settings
+@inject IWorkspaceSessionService Session
+@inject IJSRuntime JS
+
+<div class="mcp-activity">
+  <header>
+    <span class="mcp-status mcp-@Server.Status.ToString().ToLowerInvariant()"></span>
+    <strong>@Server.Status</strong>
+    @if (Server.Endpoint is { } endpoint) { <code>@endpoint</code> }
+    <small>@Activity.RequestCount request@(Activity.RequestCount == 1 ? "" : "s") · @Activity.ActiveCalls active</small>
+    <div class="mcp-actions">
+      <button disabled="@IsTransitioning" @onclick="ToggleServerAsync">@(Server.Status == McpServerStatus.Listening ? "Stop MCP" : "Start MCP")</button>
+      <button disabled="@(Server.Endpoint is null)" title="Includes the secret bearer token; paste only into a trusted MCP host" @onclick="CopyConfigurationAsync">@copyLabel</button>
+    </div>
+    <button disabled="@(Activity.Entries.Count == 0)" @onclick="Activity.Clear">Clear</button>
+  </header>
+  @if (Settings.AllowedRoots.Count == 0) {
+    <div class="mcp-warning"><strong>No MCP allowed roots configured.</strong><span>Add an absolute directory in Settings before clients can use <code>open_assembly</code>. Assemblies opened in the desktop app remain available.</span></div>
+  }
+  <div class="mcp-activity-head"><span>Time</span><span>Client</span><span>Operation</span><span>Target</span><span>Status</span><span>Duration</span></div>
+  <div class="mcp-activity-rows">
+    @if (Activity.Entries.Count == 0) { <div class="no-results">@(Server.Status == McpServerStatus.Listening ? "Waiting for MCP requests." : "Enable the MCP server in Settings to accept requests.")</div> }
+    else @foreach (var entry in Activity.Entries.Reverse()) {
+      <div class="mcp-activity-row" title="@entry.Error"><time>@entry.Timestamp.ToLocalTime().ToString("HH:mm:ss")</time><span>@(entry.ClientName ?? "—")</span><span>@entry.Operation</span><span>@entry.Target</span><span class="mcp-entry-@entry.State">@entry.State</span><span>@(entry.State == "running" ? "—" : $"{entry.Duration.TotalMilliseconds:0} ms")</span></div>
+    }
+  </div>
+</div>
+
+@code {
+  private string copyLabel = "Copy configuration";
+  private bool IsTransitioning => Server.Status is McpServerStatus.Starting or McpServerStatus.Stopping;
+
+  protected override void OnInitialized()
+  {
+    Activity.Changed += Refresh;
+    Server.Changed += Refresh;
+    Settings.Changed += Refresh;
+  }
+  private void Refresh() => InvokeAsync(StateHasChanged);
+  private async Task ToggleServerAsync()
+  {
+    try
+    {
+      if (Server.Status == McpServerStatus.Listening)
+      {
+        Settings.Enabled = false;
+        await Server.StopAsync();
+      }
+      else
+      {
+        Settings.Enabled = true;
+        await Server.StartAsync();
+      }
+    }
+    catch { Settings.Enabled = false; }
+    Session.UiState = Session.UiState with { McpEnabled = Settings.Enabled };
+    await Session.SaveAsync();
+  }
+
+  private async Task CopyConfigurationAsync()
+  {
+    if (Server.Endpoint is not { } endpoint) return;
+    var configuration = System.Text.Json.JsonSerializer.Serialize(new
+    {
+      mcpServers = new Dictionary<string, object>
+      {
+        ["dnspyxdx"] = new { type = "http", url = endpoint.ToString(), headers = new Dictionary<string, string> { ["Authorization"] = $"Bearer {Settings.BearerToken}" } }
+      }
+    }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+    try { await JS.InvokeVoidAsync("dnSpyXdx.copyText", configuration); copyLabel = "Copied"; }
+    catch { copyLabel = "Copy failed"; }
+  }
+
+  public void Dispose()
+  {
+    Activity.Changed -= Refresh;
+    Server.Changed -= Refresh;
+    Settings.Changed -= Refresh;
+  }
+}

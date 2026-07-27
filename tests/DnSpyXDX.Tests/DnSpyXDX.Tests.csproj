@@ -5,6 +5,7 @@
     <ProjectReference Include="../../src/DnSpyXDX.Decompilation/DnSpyXDX.Decompilation.csproj" />
     <ProjectReference Include="../../src/DnSpyXDX.Export/DnSpyXDX.Export.csproj" />
     <ProjectReference Include="../../src/DnSpyXDX.UI/DnSpyXDX.UI.csproj" />
+    <ProjectReference Include="../../src/DnSpyXDX.Host/DnSpyXDX.Host.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio"><PrivateAssets>all</PrivateAssets></PackageReference>
