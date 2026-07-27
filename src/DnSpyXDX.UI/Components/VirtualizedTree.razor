@@ -17,7 +17,7 @@
 </div>
 
 @code {
-  private const int RowHeight = 26;
+  private const int RowHeight = 22;
   [Parameter, EditorRequired] public IReadOnlyList<AssemblyDescriptor> Assemblies { get; set; } = [];
   [Parameter] public string EmptyMessage { get; set; } = "Open a managed .dll or .exe to begin.";
   [Parameter] public EventCallback<NavigationRequest> OnOpen { get; set; }

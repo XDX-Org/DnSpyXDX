@@ -79,7 +79,7 @@
 .tree-row.selected{background:var(--theme-color-293957);box-shadow:inset 2px 0 var(--theme-color-7c72ff)}.tree-row.selected:hover{background:var(--theme-color-314567)}
 
 /* Compact dnSpy-style inline member signatures */
-.tree-row{height:26px;gap:4px}
+.tree-row{height:22px;padding-top:2px;padding-bottom:2px;gap:4px}
 .tree-row>.chevron,.tree-row>.node-icon{flex:0 0 auto}
 .tree-row>.meta-visibility,.tree-row>.meta-type,.tree-row>.meta-name{display:inline;flex:0 0 auto;overflow:visible;text-overflow:clip}
 
