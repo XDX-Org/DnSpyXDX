@@ -1,6 +1,6 @@
 # MCP implementation audit
 
-Audited and updated on 2026-07-27 against [mcp-integration-plan.md](mcp-integration-plan.md).
+Audited and updated on 2026-07-27 through commit `44b37f3` against [mcp-integration-plan.md](mcp-integration-plan.md).
 
 The MCP implementation is a working compatibility spike, but it does not yet satisfy the full Phase 1 MVP or test matrix.
 
@@ -144,7 +144,7 @@ Desktop and MCP assembly operations now use `WorkspaceAssemblyService`. Closing 
 
 ## Testing status
 
-The automated MCP suite now covers absolute/snapshotted roots, live endpoint authentication and Origin rejection, protocol initialization, activity/client capture, assembly and symbol descriptor reads, paginated tree traversal, stale cursors, stale resources after close, and shared workspace close cleanup. All 95 current tests pass. Manual HTTP testing also covered tool discovery, live assembly/search/source reads, coded errors, and clean session deletion.
+The automated MCP suite now covers absolute/snapshotted roots, live endpoint authentication and Origin rejection, protocol initialization, activity/client capture, assembly and symbol descriptor reads, paginated tree traversal, stale cursors, stale resources after close, and shared workspace close cleanup. All 105 current tests pass. Manual HTTP testing also covered tool discovery, live assembly/search/source reads, coded errors, and clean session deletion.
 
 Still untested:
 
@@ -171,6 +171,6 @@ Still untested:
 8. [x] Establish the MCP integration and security test suite; continue expanding the matrix.
 9. [x] Complete activity interception and scoped structured logging for the current protocol surface.
 10. [ ] Add configurable port and protected token persistence.
-11. [ ] Add richer analysis operations and shared indexing.
+11. [ ] **Partial:** The desktop backend and Analyzer panel support richer relations; expose them through MCP and share indexing with workspace search.
 
 Phase 0 is functionally demonstrated with initial automated security and lifecycle coverage; Windows verification, MCP Inspector, and two real hosts remain. Phase 1 is substantially implemented: exact descriptor/source resources, tree browsing, configured/client roots, initial limits, coded errors, shared lifecycle, activity interception, and integration tests are present. Embedded-resource reads, search/reference cursors, complete limits, richer symbol data, and broader adversarial coverage remain.

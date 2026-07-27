@@ -11,12 +11,16 @@ DnSpyXDX is a focused, read-only assembly browser for Windows and Linux. It comb
 - Open managed `.dll` and `.exe` files without executing assembly code, from a dialog or by dragging them onto the window
 - Lazily browse assemblies, references, resources, namespaces, and types; reach members through search and source navigation
 - Decompile complete types or individual members into readable C#
+- Switch between C#, IL, and sequence-point-mapped IL with C# views
 - Search types, methods, fields, properties, and events across one or all open assemblies
+- Analyze symbol relationships including uses, callers, derived types, overrides, implementations, instantiation, exposure, and event firing
 - Reveal search results in the assembly tree
+- Reopen previously decompiled documents quickly through a content-addressed local cache
 - Export open assemblies as SDK-style C# projects in a `.slnx` solution
 - Restore open assemblies, document tabs, search state, panel layout, and window placement
 - Navigate large trees and source documents with persistent, themed scrollbars
 - Read decompiler-derived semantic source highlighting and metadata tokens
+- Expose the live workspace to local MCP hosts through an optional authenticated loopback endpoint
 
 ## Safety model
 
@@ -24,7 +28,7 @@ DnSpyXDX treats assemblies as untrusted input. It reads PE files and CLI metadat
 
 Malformed files can still consume significant CPU or memory while being parsed or decompiled. Do not treat the current in-process architecture as a security boundary.
 
-The application UI is fully offline-capable: its HTML, CSS, JavaScript, images, and fonts are bundled with the published application, without restricting application network access.
+The application UI is fully offline-capable: its HTML, CSS, JavaScript, images, and fonts are bundled with the published application. The optional MCP server uses an authenticated loopback HTTP endpoint only when explicitly started from the MCP Activity panel.
 
 ## Requirements
 
@@ -62,9 +66,9 @@ Trimming, Native AOT, and single-file publishing are intentionally disabled for 
 - `DnSpyXDX.Host` — Photino executable, native dialogs, and session/window persistence
 - `DnSpyXDX.UI` — Blazor desktop interface and source presentation
 - `DnSpyXDX.Application` — application contracts and workspace state
-- `DnSpyXDX.Decompilation` — metadata browsing and ILSpy decompilation backend
+- `DnSpyXDX.Decompilation` — metadata browsing, analysis, persistent caching, and ILSpy decompilation backend
 - `DnSpyXDX.Export` — project export, reports, and `.slnx` generation
-- `DnSpyXDX.Tests` — metadata, decompilation, export, and presentation tests
+- `DnSpyXDX.Tests` — metadata, decompilation, analysis, MCP, export, cache, and presentation tests
 
 The project and namespace names consistently use the DnSpyXDX product identity while retaining clear architectural boundaries.
 

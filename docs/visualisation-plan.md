@@ -13,7 +13,7 @@ The implementation must remain .NET-centric:
 - Razor renders only the visible line range through .NET 10 `Virtualize<TItem>`
 - browser interop limited to scroll position, viewport measurements, focus, and scrolling to an exact line in the existing `layout.js`
 
-This milestone does not add IL modes, exact semantic-reference production, editing, language servers, or a persistent disk cache.
+This milestone did not add IL modes, exact semantic-reference production, editing, language servers, or a persistent disk cache. IL modes, exact semantic references, and persistent caching were delivered in later milestones.
 
 ## Progress
 
@@ -38,6 +38,7 @@ Updated on 2026-07-27. The visualisation milestone is complete and accepted, inc
 - Rainbow brace token coloring was removed at user request.
 - ILSpy's `IndentSwitchBody` formatting option is enabled. Case labels are indented inside `switch` braces while their statements retain normal case-body indentation.
 - Whole-document copy has not been added; the need for it remains a phase 4 follow-up decision rather than a blocker for phase 5.
+- A later performance pass added a compressed, content-addressed persistent cache for C#, IL, and IL-with-C# documents. It is separate from the bounded in-memory presentation caches described here.
 - Both RID publishes passed during rollout, and GUI runtime validation is complete on Windows and Linux.
 
 ## Why this design

@@ -4,7 +4,7 @@ This documentation describes the planned cross-platform dnSpy-style decompiler b
 
 ## Guide
 
-- [Product direction](product-direction.md) — recommendation, MVP scope, deferred work, and future roadmap.
+- [Product direction](product-direction.md) — recommendation, MVP scope, completed follow-on capabilities, deferred work, and future roadmap.
 - [Application architecture](application-architecture.md) — solution structure, boundaries, and core contracts.
 - [Assembly workspace and navigation](assembly-workspace-and-navigation.md) — opening assemblies, indexing, decompilation, source links, tree state, tabs, and history.
 - [Project export](project-export.md) — SDK-style project generation, multi-project `.slnx` output, validation, and reports.

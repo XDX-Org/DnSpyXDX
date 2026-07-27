@@ -32,15 +32,19 @@ The assembly tree intentionally stops at types. Members remain discoverable thro
    - Exact decompiler-derived C# reference spans replace identifier-name heuristics.
    - Resolved overloads, extension methods, and cross-type members navigate to their precise definitions.
    - Cross-assembly links resolve by module MVID and automatically discover matching managed DLL/EXE files beside open assemblies.
-6. **Indexed search**
+6. **Analyzer — complete; shared indexing remains**
+   - Add lazy, navigable relationship analysis for uses, callers, derived types, overrides, implementations, instantiation, exposure, and event firing.
+   - Persist analyzer roots across sessions.
+   - The current analyzer builds its own lazy indexes; search still scans metadata separately.
+7. **Indexed search**
    - Build an index when assemblies open instead of scanning metadata for every query.
    - Keep filtering and cancellation behavior.
    - Design the index so future reference analysis can reuse it.
-7. **Reliable multi-project export**
+8. **Reliable multi-project export**
    - Remap references between open assemblies to project references.
    - Report unresolved, framework, and external references separately.
    - Exercise generated solutions with build validation.
-8. **Hardening and release engineering**
+9. **Hardening and release engineering**
    - Add file-size, work, cache, and memory limits.
    - Add malformed and adversarial assembly fixtures.
    - Test cancellation, crash recovery, and session restoration.
@@ -68,7 +72,9 @@ This sequencing delivered a broad usable workflow, but source scalability, bound
 | Virtualized source editor | Pure-Blazor virtualized line viewer | Complete |
 | Exact semantic spans | Decompiled C# uses resolved symbol spans and exact-MVID cross-assembly navigation | Complete |
 | Indexed workspace search | Metadata scan per query | Add an index before analyzer/reference features |
+| Analyzer/reference features | Lazy relationship indexes and dnSpy-style Analyzer panel | Complete for desktop; unify indexing with workspace search later |
 | Bounded LRU cache | Bounded model and token-batch caches | Complete |
+| Persistent decompilation cache | Content-addressed, versioned, compressed disk cache | Complete |
 | Automated dual-platform release | Manual publish instructions and cross-platform GUI smoke tests | Add CI publishing, packaging, and licenses |
 | Project-reference mapping | Multi-project output without remapping | Resolve open-assembly references to generated projects |
 

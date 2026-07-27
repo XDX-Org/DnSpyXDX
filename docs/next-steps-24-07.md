@@ -126,11 +126,12 @@ Release follow-up:
 
 ## Ordered backlog after language selection
 
-1. Indexed workspace search.
-2. Reliable multi-project export and project-reference remapping.
-3. Hardening: input limits, adversarial fixtures, cancellation, recovery, and cache limits.
-4. Release automation, packaging, and licenses.
-5. Decompilation performance measurement and optimization.
+1. [x] Add the desktop Analyzer with lazy relationship indexes and persisted roots.
+2. [ ] Unify indexed workspace search and analysis.
+3. [ ] Complete reliable multi-project export and project-reference remapping.
+4. [ ] Complete hardening: endpoint-wide limits, adversarial fixtures, cancellation, recovery, and aggregate cache limits.
+5. [ ] Add release automation, packaging, and licenses.
+6. [ ] Complete decompilation performance measurement and optimization. A content-addressed persistent document cache now improves repeat loads, but measured cold/warm baselines and budgets remain.
 
 The deferred performance phase should still separate cold/warm assembly resolution, ILSpy transforms, source generation, link construction, presentation indexing/tokenization, and first viewport render. Optimize only from measured evidence.
 

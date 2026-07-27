@@ -234,11 +234,11 @@ Exit: an agent can open related assemblies, find an overloaded member, retrieve 
 
 ### Phase 2 — analysis
 
-**Status: Not started as a phase.** A bounded outgoing `Uses` operation exists as an early functional slice; the shared index and richer relations remain.
+**Status: Partially available through the desktop analyzer.** The backend now supports bounded uses, callers, derived types, overrides, implementations, instantiation, exposure, and event-firing relations. MCP still exposes only outgoing `Uses`, and search and analysis do not share an assembly-open index.
 
 - [ ] Build the planned assembly-open search/reference index once and share it with desktop and MCP paths.
-- [ ] Add callers, callees, type uses, derived types, and interface implementations.
-- [ ] **Partial:** Return bounded graph edges plus resource links instead of large nested documents. Outgoing `Uses` results are bounded and linked.
+- [ ] **Partial:** Add callers, callees, type uses, derived types, and interface implementations. These exist in the desktop analyzer but are not exposed through MCP.
+- [ ] **Partial:** Return bounded graph edges plus resource links instead of large nested documents. Outgoing MCP `Uses` results are bounded and linked.
 - [ ] Add deterministic API/assembly comparison resources if product demand justifies them.
 
 ### Phase 3 — richer integration

@@ -56,7 +56,6 @@ Do not include these in the first release:
 - compiling edited C# back into a DLL
 - IL editing, metadata table editing, or a hex editor
 - BAML-to-XAML reconstruction
-- caller/callee analysis
 - extension/plugin loading
 - Unity-specific debugger support
 
@@ -66,15 +65,16 @@ Those are separate products' worth of complexity. The architecture below leaves 
 
 Add capabilities in this order:
 
-1. IL disassembly view.
-2. Analyzer: callers, callees, type uses, derived types, and interface implementations. Add an IDE-style `Used By: N` indicator above symbol declarations; selecting it opens a searchable, keyboard-accessible popover of referencing symbols, and selecting a result navigates to the containing method or type. Initially index static metadata/IL references across open assemblies, with exact source-location navigation added after semantic reference spans are available.
-3. Resource viewer and extraction.
-4. Assembly diff and API diff.
-5. PDB/source-link awareness.
-6. BAML/XAML support.
-7. Out-of-process hardened worker.
-8. Assembly editing with dnlib and save-as semantics.
-9. Roslyn-based C# editing/compilation.
-10. Debugging as a separate subsystem.
+1. [x] IL disassembly view.
+2. [x] Analyzer for callers, callees, type uses, derived types, overrides, implementations, instantiation, exposure, and event firing, with navigable lazy results and persisted roots.
+3. [ ] Unify workspace search and analysis behind a shared assembly-open index; consider an IDE-style `Used By: N` indicator with searchable exact-location results.
+4. [x] Resource viewer and extraction.
+5. [ ] Assembly diff and API diff.
+6. [ ] PDB/source-link awareness.
+7. [ ] BAML/XAML support.
+8. [ ] Out-of-process hardened worker.
+9. [ ] Assembly editing with dnlib and save-as semantics.
+10. [ ] Roslyn-based C# editing/compilation.
+11. [ ] Debugging as a separate subsystem.
 
 Assembly editing changes the product's risk profile: it requires metadata preservation, strong-name handling, deterministic backups, verification, and extensive round-trip testing. Do not let it leak into the read-only MVP abstractions prematurely.
