@@ -46,6 +46,8 @@ public sealed class McpServerService(
             if (application is not null) return;
             Status = McpServerStatus.Starting;
             var builder = WebApplication.CreateSlimBuilder();
+            // The SDK logs expected McpException tool results as unhandled errors after converting them to isError responses.
+            builder.Logging.AddFilter("ModelContextProtocol.Server.McpServer", LogLevel.Critical);
             builder.WebHost.ConfigureKestrel(server => server.Listen(IPAddress.Loopback, settings.Port));
             builder.Services.AddSingleton(backend);
             builder.Services.AddSingleton(workspace);

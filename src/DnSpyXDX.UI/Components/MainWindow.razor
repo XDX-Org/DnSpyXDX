@@ -126,9 +126,7 @@
       <label class="settings-row"><span><strong>Debug logging</strong><small>Write detailed diagnostics to the console</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@debugLogging" @onchange="DebugLoggingChanged" /></label>
       <label class="settings-row"><span><strong>Metadata tokens</strong><small>Show token and RID comments in the main panel</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@showMetadataTokens" @onchange="MetadataTokensChangedAsync" /></label>
       <label class="settings-row"><span><strong>Line wrapping</strong><small>Wrap long source and resource text lines</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@wrapLines" @onchange="LineWrappingChangedAsync" /></label>
-      <label class="settings-row"><span><strong>MCP server</strong><small>Protected local endpoint for read-only assembly inspection</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@McpSettings.Enabled" @onchange="McpEnabledChangedAsync" /></label>
       <label class="settings-row mcp-roots-setting"><span><strong>MCP allowed roots</strong><small>One absolute directory per line</small></span><textarea value="@mcpAllowedRoots" @onchange="McpRootsChangedAsync" placeholder="/path/to/assemblies"></textarea></label>
-      <div class="settings-row"><span><strong>Connection configuration</strong><small>Includes the secret bearer token; paste only into a trusted MCP host</small></span><button class="settings-action" disabled="@(McpServer.Endpoint is null)" @onclick="CopyMcpConfigurationAsync">@(mcpCopyStatus ?? "Copy configuration")</button></div>
     </section>
   }
 </div>
@@ -187,7 +185,6 @@
   private DotNetObjectReference<MainWindow>? selfReference;
   private bool sessionRestoreStarted;
   private string mcpAllowedRoots = "";
-  private string? mcpCopyStatus;
   protected override async Task OnInitializedAsync()
   {
     Workspace.Changed += Refresh;
@@ -602,15 +599,6 @@
     Session.UiState = CaptureUiState();
     await Session.SaveAsync();
   }
-  private async Task McpEnabledChangedAsync(ChangeEventArgs e)
-  {
-    McpSettings.Enabled = e.Value is true;
-    try { if (McpSettings.Enabled) await McpServer.StartAsync(); else await McpServer.StopAsync(); }
-    catch (Exception ex) { McpSettings.Enabled = false; Workspace.SetBusy(false, $"MCP server failed: {ex.Message}"); }
-    Session.UiState = CaptureUiState();
-    await Session.SaveAsync();
-    StateHasChanged();
-  }
   private async Task McpRootsChangedAsync(ChangeEventArgs e)
   {
     mcpAllowedRoots = e.Value?.ToString() ?? "";
@@ -622,19 +610,6 @@
   {
     try { await McpServer.StartAsync(); await InvokeAsync(StateHasChanged); }
     catch (Exception ex) { McpSettings.Enabled = false; Workspace.SetBusy(false, $"MCP server failed: {ex.Message}"); await InvokeAsync(StateHasChanged); }
-  }
-  private async Task CopyMcpConfigurationAsync()
-  {
-    if (McpServer.Endpoint is not { } endpoint) return;
-    var configuration = System.Text.Json.JsonSerializer.Serialize(new
-    {
-      mcpServers = new Dictionary<string, object>
-      {
-        ["dnspyxdx"] = new { type = "http", url = endpoint.ToString(), headers = new Dictionary<string, string> { ["Authorization"] = $"Bearer {McpSettings.BearerToken}" } }
-      }
-    }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-    try { await JS.InvokeVoidAsync("dnSpyXdx.copyText", configuration); mcpCopyStatus = "Copied"; }
-    catch { mcpCopyStatus = "Copy failed"; }
   }
   private async Task CodeFontChangedAsync(ChangeEventArgs e)
   {

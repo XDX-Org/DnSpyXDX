@@ -6,7 +6,7 @@ Research reviewed on 2026-07-27 against the published MCP `2025-11-25` specifica
 
 Add DnSpyXDX as a local, read-only MCP server. Its purpose should be to let an MCP host inspect managed assemblies through the same metadata-only backend used by the desktop application.
 
-Host the server inside the existing DnSpyXDX application. Add an **Enable MCP server** switch in Settings; off is the default. Enabling it starts an authenticated Streamable HTTP endpoint bound only to loopback, and disabling it stops the endpoint and rejects new requests.
+Host the server inside the existing DnSpyXDX application. Add a **Start MCP** control to the MCP Activity panel; off is the default. Starting it creates an authenticated Streamable HTTP endpoint bound only to loopback, and stopping it closes the endpoint and rejects new requests. Keep root policy in Settings.
 
 Do not add a separate MCP executable or process. The embedded server should use the live `IDecompilerBackend`, so MCP and the UI see the same opened assemblies, caches, and exact symbol identities.
 
@@ -106,7 +106,7 @@ tests/DnSpyXDX.Tests/Mcp/
 
 Keep the protocol adapter in the host composition layer. Tool handlers should call application contracts rather than Razor components or ILSpy directly. Keep MCP DTOs separate from application models so the public protocol can remain compatible when internal records change.
 
-Use `ModelContextProtocol.AspNetCore` from the [official C# SDK](https://github.com/modelcontextprotocol/csharp-sdk#packages) for Streamable HTTP and integrate its services into the existing generic host. Keep endpoint creation and disposal behind `IMcpServerService` so the Settings switch owns a small, testable lifecycle boundary.
+Use `ModelContextProtocol.AspNetCore` from the [official C# SDK](https://github.com/modelcontextprotocol/csharp-sdk#packages) for Streamable HTTP and integrate its services into the existing generic host. Keep endpoint creation and disposal behind `IMcpServerService` so the activity-panel control owns a small, testable lifecycle boundary.
 
 ### Settings and endpoint lifecycle
 
@@ -116,7 +116,7 @@ Add these persisted settings:
 - `McpPort`, default `0` for an OS-selected available port;
 - a generated bearer token stored using the best available per-user protected storage, never in ordinary logs or session export.
 
-When enabled, show the effective endpoint and a **Copy connection configuration** action in Settings. Bind to `127.0.0.1` and, where supported consistently, `::1`; never bind to `0.0.0.0`. A port change restarts only the MCP endpoint. App shutdown first stops accepting requests, cancels active calls, then closes the listener.
+When enabled, show the effective endpoint and connected **Start/Stop MCP** and **Copy configuration** actions in the MCP Activity panel. Bind to `127.0.0.1` and, where supported consistently, `::1`; never bind to `0.0.0.0`. A port change restarts only the MCP endpoint. App shutdown first stops accepting requests, cancels active calls, then closes the listener.
 
 The server operates on the live workspace:
 
@@ -184,7 +184,7 @@ Inspected assemblies are untrusted and may contain proprietary source reconstruc
 
 ### Required controls
 
-1. Use Streamable HTTP bound only to loopback because the server is enabled inside an already-running GUI. Validate every `Origin` header, require a generated bearer token, use a non-predictable endpoint path if supported, and reject requests while the Settings switch is off. The [transport specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#streamable-http) explicitly requires origin validation and recommends loopback binding plus authentication for local servers.
+1. Use Streamable HTTP bound only to loopback because the server is enabled inside an already-running GUI. Validate every `Origin` header, require a generated bearer token, use a non-predictable endpoint path if supported, and reject requests while the activity-panel control is off. The [transport specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#streamable-http) explicitly requires origin validation and recommends loopback binding plus authentication for local servers.
 2. Restrict file access to client-provided MCP roots or explicit allowed directories configured in Settings. Canonicalize paths, resolve links where practical, reject traversal, and revalidate after opening. The [roots specification](https://modelcontextprotocol.io/specification/2025-11-25/client/roots) requires servers to respect and validate root boundaries.
 3. Do not use `Assembly.Load`, reflection, an `AssemblyLoadContext`, module initializers, or target code execution.
 4. Do not expose arbitrary file-read tools. Embedded resources must be fetched by assembly/resource identity and remain size-limited.
@@ -198,7 +198,7 @@ Official [MCP security guidance](https://modelcontextprotocol.io/docs/tutorials/
 ### If remote HTTP is added later
 
 - Keep local and remote endpoint configuration separate.
-- Never make the local Settings toggle expose a network interface.
+- Never make the local activity-panel control expose a network interface.
 - Require authentication and authorization; sessions and the local bearer token are not sufficient for remote access.
 - Use established OAuth libraries, HTTPS, audience validation, least-privilege scopes, and redacted logs.
 - Keep remote workspaces isolated per authenticated principal.
@@ -212,7 +212,7 @@ These are protocol requirements and recommendations in the [Streamable HTTP tran
 **Status: Functionally demonstrated; exit verification incomplete.** The endpoint, Settings control, initial tools, authentication, origin checks, and activity panel exist. MCP Inspector, two-host verification, full lifecycle/security automation, and Windows verification remain.
 
 - [x] Pin a stable official C# SDK version centrally.
-- [x] Build the Settings-controlled loopback endpoint with `list_assemblies` and `open_assembly`.
+- [x] Build the activity-panel-controlled loopback endpoint with `list_assemblies` and `open_assembly`.
 - [ ] **Partial:** Add the minimal activity panel and structured activity/log pipeline. The panel logs implemented handlers; interception, queued/running entries, client identity, and structured logging remain.
 - [ ] Verify protocol initialization/capability negotiation with MCP Inspector and at least two real hosts.
 - [ ] **Partial:** Confirm authentication, origin rejection, capability negotiation, and sanitized logging in normal, debug, cancellation, and failure paths. Happy-path manual HTTP coverage exists; the full matrix does not.

@@ -9,7 +9,7 @@ The MCP implementation is a working compatibility spike, but it does not yet sat
 | Area | Status |
 | --- | --- |
 | Embedded loopback HTTP server | Complete |
-| Default-off Settings switch | Complete |
+| Default-off activity-panel control | Complete |
 | Bearer authentication | Complete |
 | Origin validation | Partial |
 | Live endpoint and configuration copy | Complete |
