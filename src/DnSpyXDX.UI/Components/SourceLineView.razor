@@ -11,7 +11,7 @@
       var matchClass = segment.IsActiveMatch ? "source-find-match active" : segment.IsMatch ? "source-find-match" : null;
       if (segment.Token.Target is { } target)
       {
-        <button type="button" class="source-token @CssClass(segment.Token) code-link @matchClass @(IsHovered(segment.Token) ? "code-link-active" : null)" title="@(segment.Token.Tooltip ?? $"Go to {segment.Token.SymbolName}")" @onclick="e => NavigateAsync(target, e)" @oncontextmenu="e => AnalyzeAsync(target, segment.Token, e)" @oncontextmenu:preventDefault="@(AnalyzableKind(segment.Token.Kind) is not null)" @onmouseenter="() => HoverAsync(segment.Token.SymbolName)" @onmouseleave="() => HoverAsync(null)">@text</button>
+        <button type="button" class="source-token @CssClass(segment.Token) code-link @matchClass" data-symbol="@segment.Token.SymbolName" title="@(segment.Token.Tooltip ?? $"Go to {segment.Token.SymbolName}")" @onclick="e => NavigateAsync(target, e)" @oncontextmenu="e => AnalyzeAsync(target, segment.Token, e)" @oncontextmenu:preventDefault="@(AnalyzableKind(segment.Token.Kind) is not null)">@text</button>
       }
       else if (segment.Token.DocumentOffset is { } offset)
       {
@@ -19,7 +19,7 @@
       }
       else
       {
-        <span class="source-token @CssClass(segment.Token) @(segment.Token.SymbolName is null ? null : "code-link") @matchClass @(IsHovered(segment.Token) ? "code-link-active" : null)" @onmouseenter="() => HoverAsync(segment.Token.SymbolName)" @onmouseleave="() => HoverAsync(null)">@text</span>
+        <span class="source-token @CssClass(segment.Token) @(segment.Token.SymbolName is null ? null : "code-link") @matchClass" data-symbol="@segment.Token.SymbolName">@text</span>
       }
     }
   </code>
@@ -35,15 +35,11 @@
   [Parameter] public IReadOnlyList<SourceFindSpan> Matches { get; set; } = [];
   [Parameter] public int ActiveMatchOffset { get; set; } = -1;
   [Parameter] public int FocusedLine { get; set; } = -1;
-  [Parameter] public string? HoveredSymbol { get; set; }
-  [Parameter] public EventCallback<string?> OnHoverSymbol { get; set; }
   [Parameter] public int LineHeight { get; set; } = 20;
   [Parameter] public bool WrapLines { get; set; }
 
   private bool IsFocused => FocusedLine == Line.Number;
   private string LineStyle => WrapLines ? $"--continuation-indent:{LeadingColumns() + SourceDocumentModel.TabWidth}ch" : $"height:{LineHeight}px";
-  private bool IsHovered(SourceToken token) => token.SymbolName is not null && token.SymbolName == HoveredSymbol;
-  private Task HoverAsync(string? symbol) => OnHoverSymbol.InvokeAsync(symbol);
 
   private int LeadingColumns()
   {
@@ -89,6 +85,14 @@
 
   private IEnumerable<RenderedSegment> Segments()
   {
+    // The common case is no active find: every token renders as a single segment, so skip the per-token
+    // boundary machinery (a SortedSet, an array, and a scan) that only exists to split tokens around matches.
+    if (Matches.Count == 0)
+    {
+      foreach (var token in Line.Tokens)
+        yield return new RenderedSegment(token, token.Start, token.Length, false, false);
+      yield break;
+    }
     foreach (var token in Line.Tokens)
     {
       var boundaries = new SortedSet<int> { token.Start, token.Start + token.Length };

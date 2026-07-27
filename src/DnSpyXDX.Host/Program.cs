@@ -25,6 +25,9 @@ internal static class Program
         });
         builder.Services.AddSingleton(loggingSettings);
         builder.Services.AddSingleton<RuntimeDisplaySettings>();
+        // A disk-backed decompile cache so restoring a session (or reopening a type) loads its source without
+        // re-running ILSpy. Injected into DecompilerBackend's two-argument constructor.
+        builder.Services.AddSingleton(PersistentDecompileCache.Default());
         builder.Services.AddSingleton<IDecompilerBackend, DecompilerBackend>();
         builder.Services.AddSingleton<IProjectExportService, ProjectExportService>();
         builder.Services.AddSingleton<WorkspaceState>();

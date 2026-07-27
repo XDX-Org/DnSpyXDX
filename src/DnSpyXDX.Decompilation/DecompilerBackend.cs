@@ -22,9 +22,19 @@ public sealed class DecompilerBackend : IDecompilerBackend
 {
     private readonly ConcurrentDictionary<Guid, AssemblySession> sessions = new();
     private readonly RuntimeDisplaySettings displaySettings;
+    private readonly PersistentDecompileCache? documentCache;
+    // ILSpy's decompilation pipeline is large and pays a heavy one-time JIT cost: the first type decompiled
+    // in the process takes several times longer than every later one. That flag ensures exactly one opened
+    // assembly kicks off a background warm-up so the user's first real click lands on an already-hot pipeline.
+    private static int warmUpStarted;
 
     public DecompilerBackend() : this(new RuntimeDisplaySettings()) { }
-    public DecompilerBackend(RuntimeDisplaySettings displaySettings) => this.displaySettings = displaySettings;
+    public DecompilerBackend(RuntimeDisplaySettings displaySettings) : this(displaySettings, null) { }
+    public DecompilerBackend(RuntimeDisplaySettings displaySettings, PersistentDecompileCache? documentCache)
+    {
+        this.displaySettings = displaySettings;
+        this.documentCache = documentCache;
+    }
     public IReadOnlyList<AssemblyDescriptor> Assemblies => sessions.Values.Select(s => s.Descriptor).OrderBy(s => s.Name).ToArray();
 
     public Task<AssemblyDescriptor> OpenAsync(string path, CancellationToken cancellationToken = default)
@@ -34,11 +44,12 @@ public sealed class DecompilerBackend : IDecompilerBackend
             cancellationToken.ThrowIfCancellationRequested();
             var fullPath = Path.GetFullPath(path);
             if (!File.Exists(fullPath)) throw new FileNotFoundException("Assembly not found.", fullPath);
-            var session = AssemblySession.Open(fullPath, displaySettings);
+            var session = AssemblySession.Open(fullPath, displaySettings, documentCache);
             if (!sessions.TryAdd(session.Descriptor.SessionId, session)) { session.Dispose(); throw new InvalidOperationException("Could not add assembly session."); }
             // The reverse-reference index gates cross-assembly matches on the set of open assemblies, so
             // every index becomes stale when that set changes; drop them all and let them rebuild lazily.
             foreach (var other in sessions.Values) other.InvalidateAnalyzerIndex();
+            if (Interlocked.Exchange(ref warmUpStarted, 1) == 0) session.BeginWarmUp();
             return session.Descriptor;
         }, cancellationToken);
     }
@@ -225,6 +236,10 @@ internal sealed class AssemblySession : IDisposable
     private readonly MetadataTypeNameProvider typeNames;
     private readonly SemaphoreSlim gate = new(1, 1);
     private readonly RuntimeDisplaySettings displaySettings;
+    private readonly PersistentDecompileCache? documentCache;
+    // A content hash of this assembly, so a patched or rebuilt file never reads another build's cached source.
+    // Computed once, lazily, the first time a cacheable document is decompiled (under the decompile gate).
+    private string? assemblyId;
     private readonly Dictionary<(int Token, DecompilerLanguage Language, bool ShowMetadataTokens), DecompilerDocument> cache = [];
     private byte[]? image;
     private IReadOnlyList<BinaryRegion>? binaryRegions;
@@ -237,18 +252,19 @@ internal sealed class AssemblySession : IDisposable
     private readonly object indexLock = new();
     public AssemblyDescriptor Descriptor { get; }
 
-    private AssemblySession(PEFile module, CSharpDecompiler decompiler, DecompilerSettings settings, AssemblyDescriptor descriptor, RuntimeDisplaySettings displaySettings)
+    private AssemblySession(PEFile module, CSharpDecompiler decompiler, DecompilerSettings settings, AssemblyDescriptor descriptor, RuntimeDisplaySettings displaySettings, PersistentDecompileCache? documentCache)
     {
         this.module = module;
         metadata = module.Metadata;
         this.decompiler = decompiler;
         this.settings = settings;
         this.displaySettings = displaySettings;
+        this.documentCache = documentCache;
         typeNames = new MetadataTypeNameProvider(metadata);
         Descriptor = descriptor;
     }
 
-    public static AssemblySession Open(string path, RuntimeDisplaySettings displaySettings)
+    public static AssemblySession Open(string path, RuntimeDisplaySettings displaySettings, PersistentDecompileCache? documentCache = null)
     {
         PEFile module;
         try { module = new PEFile(path, PEStreamOptions.PrefetchEntireImage); }
@@ -266,7 +282,7 @@ internal sealed class AssemblySession : IDisposable
         var decompiler = new CSharpDecompiler(module, resolver, settings);
         var sessionId = Guid.NewGuid();
         var descriptor = new AssemblyDescriptor(sessionId, mvid, name, path, module.DetectTargetFrameworkId() ?? "Unknown", module.Reader.PEHeaders.CoffHeader.Machine.ToString(), new NodeId(sessionId, "root"));
-        return new AssemblySession(module, decompiler, settings, descriptor, displaySettings);
+        return new AssemblySession(module, decompiler, settings, descriptor, displaySettings, documentCache);
     }
 
     public IReadOnlyList<TreeNodeDescriptor> GetChildren(NodeId parent, CancellationToken ct)
@@ -560,6 +576,65 @@ internal sealed class AssemblySession : IDisposable
         TypeAttributes.NestedFamANDAssem => "private protected", TypeAttributes.NestedPrivate => "private", _ => "internal"
     };
 
+    // Fire-and-forget JIT warm-up. The first heavy decompile in the process is several times slower than
+    // later ones because ILSpy's hot loops start at unoptimized tier-0 and only get promoted to optimized
+    // tier-1 after enough invocations; measured on EFT.Player the first decompile is ~9s versus ~2.5s once
+    // hot. Repeatedly decompiling one representative type on a background thread drives that promotion before
+    // the user's first real click, cutting a large first decompile to roughly a third. A throwaway decompiler
+    // is used so this never contends with a real DecompileAsync on the session gate; JIT state is process-wide,
+    // so warming a separate instance warms the paths the real one takes. Best-effort - failures are ignored.
+    private const int WarmUpPasses = 5;
+    public void BeginWarmUp() => Task.Run(async () =>
+    {
+        try
+        {
+            var handle = WarmUpType();
+            if (handle.IsNil) return;
+            var warmUpDecompiler = CreateDecompiler();
+            for (var pass = 0; pass < WarmUpPasses; pass++)
+            {
+                warmUpDecompiler.Decompile([handle]);
+                // Yield between passes so the runtime's background tier-1 recompilation can make progress.
+                await Task.Delay(250).ConfigureAwait(false);
+            }
+        }
+        catch { /* warm-up is best-effort; a cold first decompile is the only cost of failure */ }
+    });
+
+    // A separate decompiler over the same module, for the background warm-up. Mirrors the configuration built
+    // in Open so the warm-up exercises the same pipeline the real decompiler uses.
+    private CSharpDecompiler CreateDecompiler()
+    {
+        var resolver = new UniversalAssemblyResolver(Descriptor.Path, false, module.DetectTargetFrameworkId());
+        resolver.AddSearchDirectory(Path.GetDirectoryName(Descriptor.Path)!);
+        return new CSharpDecompiler(module, resolver, settings);
+    }
+
+    // A representative top-level type for the warm-up: large enough to exercise ILSpy's loop-heavy transforms
+    // (a trivial type promotes almost none of them), but the smallest such type so the warm-up stays cheap.
+    // Falls back to the type with the most methods when nothing clears the threshold.
+    private TypeDefinitionHandle WarmUpType()
+    {
+        const int desiredMethods = 25;
+        TypeDefinitionHandle bounded = default, richest = default;
+        int boundedCost = int.MaxValue, richestMethods = -1;
+        foreach (var handle in metadata.TypeDefinitions)
+        {
+            var type = metadata.GetTypeDefinition(handle);
+            if (!type.GetDeclaringType().IsNil) continue;
+            var name = metadata.GetString(type.Name);
+            if (name.Length == 0 || name.StartsWith('<')) continue;
+            var methods = type.GetMethods();
+            var withBodies = 0;
+            foreach (var method in methods) if (metadata.GetMethodDefinition(method).RelativeVirtualAddress != 0) withBodies++;
+            if (withBodies == 0) continue;
+            if (withBodies > richestMethods) { richestMethods = withBodies; richest = handle; }
+            var cost = methods.Count + type.GetFields().Count + type.GetProperties().Count;
+            if (withBodies >= desiredMethods && cost < boundedCost) { boundedCost = cost; bounded = handle; }
+        }
+        return bounded.IsNil ? richest : bounded;
+    }
+
     public async Task<DecompilerDocument> DecompileAsync(SymbolId symbol, DecompilerLanguage language, CancellationToken ct)
     {
         if (!Enum.IsDefined(language)) throw new ArgumentOutOfRangeException(nameof(language));
@@ -570,6 +645,15 @@ internal sealed class AssemblySession : IDisposable
         try
         {
             if (cache.TryGetValue(key, out cached)) return cached;
+            // A previous run may have already decompiled this exact document; loading it from disk avoids
+            // re-running ILSpy, which is what makes restoring a saved session (or reopening a type) fast.
+            var cacheable = documentCache is not null && PersistentDecompileCache.IsCacheable(language);
+            if (cacheable)
+            {
+                assemblyId ??= PersistentDecompileCache.ComputeAssemblyId(module.Reader.GetEntireImage().GetContent().AsSpan());
+                var stored = await Task.Run(() => documentCache!.TryLoad(assemblyId, symbol.MetadataToken, language, showMetadataTokens), ct);
+                if (stored is not null) return cache[key] = stored;
+            }
             var handle = MetadataTokens.EntityHandle(symbol.MetadataToken);
             decompiler.CancellationToken = ct;
             string text;
@@ -600,6 +684,8 @@ internal sealed class AssemblySession : IDisposable
             var result = new DecompilerDocument(symbol, title, language.Key(), text, references, [], links, TypeClassifications: classifications, Binary: binary,
                 BinarySelectionOffset: selection?.Offset, BinarySelectionLength: selection?.Length ?? 0, BinaryRegions: regions, SymbolLocations: symbolLocations, SemanticSpans: semanticSpans);
             cache[key] = result;
+            // Persist off the gate so writing the entry never delays returning the document to the UI.
+            if (cacheable) _ = Task.Run(() => documentCache!.Save(assemblyId!, result, language, showMetadataTokens));
             return result;
         }
         finally { decompiler.CancellationToken = default; gate.Release(); }
@@ -729,22 +815,18 @@ internal sealed class AssemblySession : IDisposable
             return ((EntityHandle)h, name is ".ctor" or ".cctor" ? TypeIdentifier(type) : name, true);
         }));
 
+        var texts = new string[lines.Count];
+        for (var i = 0; i < lines.Count; i++) texts[i] = lines[i].Text;
+        var (indent, byIdentifier) = IndexIdentifierLines(texts);
+
         var insertions = new List<(int Index, ClassifiedLine Line)>();
         var used = new HashSet<int>();
         foreach (var declaration in declarations)
         {
-            var candidates = Enumerable.Range(0, lines.Count)
-                .Where(i => !used.Contains(i) && IsDeclarationLine(lines[i].Text, declaration.Name, declaration.Callable))
-                .ToArray();
-            if (candidates.Length == 0) continue;
-            var declarationIndent = candidates.Min(i => LeadingWhitespace(lines[i].Text));
-            foreach (var i in candidates.Where(i => LeadingWhitespace(lines[i].Text) == declarationIndent))
-            {
-                used.Add(i);
-                var indent = lines[i].Text[..(lines[i].Text.Length - lines[i].Text.TrimStart().Length)];
-                insertions.Add((i, CommentLine(indent + TokenComment(declaration.Handle))));
-                break;
-            }
+            var line = LocateDeclaration(texts, indent, byIdentifier, used, declaration.Name, declaration.Callable);
+            if (line < 0) continue;
+            used.Add(line);
+            insertions.Add((line, CommentLine(texts[line][..indent[line]] + TokenComment(declaration.Handle))));
         }
         foreach (var insertion in insertions.OrderByDescending(x => x.Index)) lines.Insert(insertion.Index, insertion.Line);
     }
@@ -1254,20 +1336,65 @@ internal sealed class AssemblySession : IDisposable
             ((EntityHandle)handle, metadata.GetString(metadata.GetMethodDefinition(handle).Name), true)));
 
         var lines = SourceLines(source);
+        var texts = new string[lines.Count];
+        for (var index = 0; index < lines.Count; index++) texts[index] = lines[index].Text;
+        var (indent, byIdentifier) = IndexIdentifierLines(texts);
+
         var used = new HashSet<int>();
         var locations = new Dictionary<int, int>();
         foreach (var declaration in declarations)
         {
-            var candidates = Enumerable.Range(0, lines.Count)
-                .Where(index => !used.Contains(index) && IsDeclarationLine(lines[index].Text, declaration.Name, declaration.Callable))
-                .ToArray();
-            if (candidates.Length == 0) continue;
-            var declarationIndent = candidates.Min(index => LeadingWhitespace(lines[index].Text));
-            var line = candidates.First(index => LeadingWhitespace(lines[index].Text) == declarationIndent);
+            var line = LocateDeclaration(texts, indent, byIdentifier, used, declaration.Name, declaration.Callable);
+            if (line < 0) continue;
             used.Add(line);
             locations[MetadataTokens.GetToken(declaration.Handle)] = lines[line].Offset;
         }
         return locations;
+    }
+
+    // Reverse index over a document's lines: each whole-word identifier maps to the ascending line indices
+    // it appears on, alongside every line's leading-whitespace width. Locating a declaration then scans only
+    // the handful of lines that actually contain its name instead of every line in the document, turning the
+    // O(declarations x lines) search into O(text + declarations x matches).
+    private static (int[] Indent, Dictionary<string, List<int>> Lines) IndexIdentifierLines(IReadOnlyList<string> lineTexts)
+    {
+        var indent = new int[lineTexts.Count];
+        var byIdentifier = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+        for (var line = 0; line < lineTexts.Count; line++)
+        {
+            var text = lineTexts[line];
+            indent[line] = LeadingWhitespace(text);
+            var index = 0;
+            while (index < text.Length)
+            {
+                var c = text[index];
+                if (c == '_' || char.IsLetter(c))
+                {
+                    var start = index;
+                    do index++; while (index < text.Length && (text[index] == '_' || char.IsLetterOrDigit(text[index])));
+                    var token = text[start..index];
+                    if (!byIdentifier.TryGetValue(token, out var list)) byIdentifier[token] = list = [];
+                    if (list.Count == 0 || list[^1] != line) list.Add(line);
+                }
+                else index++;
+            }
+        }
+        return (indent, byIdentifier);
+    }
+
+    // The line where a member is declared: among the not-yet-claimed lines that name it and read as a
+    // declaration, the one with the least indentation (earliest on a tie). Mirrors the previous exhaustive
+    // scan exactly, but only visits lines the reverse index says contain the name. Returns -1 if none match.
+    private static int LocateDeclaration(string[] texts, int[] indent, Dictionary<string, List<int>> byIdentifier, HashSet<int> used, string name, bool callable)
+    {
+        if (!byIdentifier.TryGetValue(name, out var candidateLines)) return -1;
+        var best = -1;
+        foreach (var line in candidateLines)
+        {
+            if (used.Contains(line) || (best >= 0 && indent[line] >= indent[best])) continue;
+            if (IsDeclarationLine(texts[line], name, callable)) best = line;
+        }
+        return best;
     }
 
     private TypeDefinitionHandle DeclaringTypeOf(EntityHandle handle) => handle.Kind switch

@@ -28,6 +28,12 @@ public sealed partial class SourceDocumentModel
     private readonly Dictionary<int, SourcePosition> tokenLocations;
     private readonly SortedDictionary<int, SourceTokenizerState> tokenizerCheckpoints = new() { [0] = SourceTokenizerState.Initial };
     private readonly SemaphoreSlim tokenizerGate = new(1, 1);
+    // References are supplied per tokenize call but are stable for a given document, so the mapping from line
+    // to the references that touch it is built once and reused. Without it every rendered line linearly scans
+    // the whole reference list (tens of thousands of entries for a large type). Guarded by tokenizerGate.
+    private IReadOnlyList<ReferenceSpan>? bucketedReferenceSource;
+    private Dictionary<int, List<ReferenceSpan>>? referenceBucketsByLine;
+    private volatile bool checkpointsWarmed;
 
     private SourceDocumentModel(
         SourceDocumentKey key,
@@ -129,6 +135,7 @@ public sealed partial class SourceDocumentModel
         {
             return await Task.Run<IReadOnlyList<SourceTokenizedLine>>(() =>
             {
+                var buckets = references is { Count: > 0 } ? ReferenceBucketsByLine(references) : null;
                 var checkpoint = tokenizerCheckpoints.Last(pair => pair.Key <= startLine);
                 var state = checkpoint.Value;
                 var result = new List<SourceTokenizedLine>(take);
@@ -146,7 +153,8 @@ public sealed partial class SourceDocumentModel
                     if (lineNumber >= startLine)
                     {
                         var tokens = ApplySemanticSpans(tokenized.Tokens, line.StartOffset, semanticSpans);
-                        tokens = ApplyReferences(tokens, line.StartOffset, references);
+                        var lineReferences = buckets is not null && buckets.TryGetValue(lineNumber, out var bucket) ? bucket : null;
+                        tokens = ApplyReferences(tokens, line.StartOffset, lineReferences);
                         result.Add(new SourceTokenizedLine(lineNumber, line.StartOffset, text, tokens, startState, state));
                     }
                 }
@@ -154,6 +162,31 @@ public sealed partial class SourceDocumentModel
             }, cancellationToken);
         }
         finally { tokenizerGate.Release(); }
+    }
+
+    public bool CheckpointsWarmed => checkpointsWarmed;
+
+    // Runs the whole document through the tokenizer once, in small chunks, to populate its per-128-line
+    // checkpoints. The tokenizer is stateful and sequential, so without warmed checkpoints the first scroll
+    // into a region must replay from the nearest earlier checkpoint - a visible delay on a big document when
+    // the scrollbar jumps far. Each chunk acquires and releases the tokenizer gate on its own and yields
+    // between chunks, so a live scroll request never waits behind more than one small chunk. Idempotent.
+    public async Task WarmCheckpointsAsync(
+        IReadOnlyDictionary<string, SymbolId?>? symbolLinks,
+        IReadOnlyDictionary<string, string>? typeKinds,
+        IReadOnlyList<ReferenceSpan>? references,
+        IReadOnlyList<ClassifiedSpan>? semanticSpans,
+        CancellationToken cancellationToken = default)
+    {
+        if (checkpointsWarmed) return;
+        const int chunk = 512;
+        for (var start = 0; start < LineCount; start += chunk)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await TokenizeLinesAsync(start, Math.Min(chunk, LineCount - start), symbolLinks, typeKinds, references, semanticSpans, cancellationToken);
+            await Task.Yield();
+        }
+        checkpointsWarmed = true;
     }
 
     // Repaints each word token with the classification the decompiler resolved for that exact position,
@@ -210,6 +243,28 @@ public sealed partial class SourceDocumentModel
         "local" => SourceTokenKind.Identifier,
         _ => null
     };
+
+    // Groups references by the line(s) they cover so a rendered line only inspects references that actually
+    // touch it. Built once per reference list (they are stable for a document) under the tokenizer gate.
+    private Dictionary<int, List<ReferenceSpan>> ReferenceBucketsByLine(IReadOnlyList<ReferenceSpan> references)
+    {
+        if (ReferenceEquals(bucketedReferenceSource, references) && referenceBucketsByLine is not null) return referenceBucketsByLine;
+        var buckets = new Dictionary<int, List<ReferenceSpan>>();
+        foreach (var reference in references)
+        {
+            if (reference.StartOffset < 0 || reference.StartOffset > Text.Length) continue;
+            var firstLine = GetPosition(reference.StartOffset).Line;
+            var lastLine = GetPosition(Math.Min(Text.Length, reference.StartOffset + Math.Max(0, reference.Length))).Line;
+            for (var line = firstLine; line <= lastLine; line++)
+            {
+                if (!buckets.TryGetValue(line, out var list)) buckets[line] = list = [];
+                list.Add(reference);
+            }
+        }
+        referenceBucketsByLine = buckets;
+        bucketedReferenceSource = references;
+        return buckets;
+    }
 
     private static IReadOnlyList<SourceToken> ApplyReferences(IReadOnlyList<SourceToken> tokens, int lineOffset, IReadOnlyList<ReferenceSpan>? references)
     {

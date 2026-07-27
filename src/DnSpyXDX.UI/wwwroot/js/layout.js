@@ -182,6 +182,46 @@ window.dnSpyXdx.initSourceFind = function (source, dotNet) {
 window.dnSpyXdx.disposeSourceFind = function (source) {
   if (window.dnSpyXdx.sourceFindTarget?.source === source) window.dnSpyXdx.sourceFindTarget = null;
 };
+// Highlights every occurrence of the symbol under the cursor, entirely in the DOM. This used to be driven
+// from .NET (a mouseenter/mouseleave callback per token that re-rendered the whole source view); during a
+// scroll the cursor sweeps across many tokens and that flooded the WebView bridge until it locked up. A
+// single delegated listener toggling a class avoids any round-trip or Blazor re-render.
+window.dnSpyXdx.initSourceHover = function (viewport) {
+  if (!viewport || viewport._dnSpyXdxHover) return;
+  let highlighted = [];
+  let current = null;
+  const clear = () => {
+    for (const element of highlighted) element.classList.remove("code-link-active");
+    highlighted = [];
+    current = null;
+  };
+  const apply = symbol => {
+    if (symbol === current) return;
+    clear();
+    if (!symbol) return;
+    current = symbol;
+    const selector = "[data-symbol=\"" + (window.CSS && CSS.escape ? CSS.escape(symbol) : symbol) + "\"]";
+    highlighted = Array.from(viewport.querySelectorAll(selector));
+    for (const element of highlighted) element.classList.add("code-link-active");
+  };
+  const over = event => {
+    const element = event.target?.closest?.("[data-symbol]");
+    apply(element && viewport.contains(element) ? element.getAttribute("data-symbol") : null);
+  };
+  viewport.addEventListener("mouseover", over, { passive: true });
+  viewport.addEventListener("mouseleave", clear, { passive: true });
+  // Virtualize recycles line elements as they scroll out; drop any highlight so a class never lingers on a
+  // node that has since been reused for a different line.
+  viewport.addEventListener("scroll", clear, { passive: true });
+  viewport._dnSpyXdxHover = { over, clear };
+};
+window.dnSpyXdx.disposeSourceHover = function (viewport) {
+  if (!viewport?._dnSpyXdxHover) return;
+  viewport.removeEventListener("mouseover", viewport._dnSpyXdxHover.over);
+  viewport.removeEventListener("mouseleave", viewport._dnSpyXdxHover.clear);
+  viewport.removeEventListener("scroll", viewport._dnSpyXdxHover.clear);
+  delete viewport._dnSpyXdxHover;
+};
 window.dnSpyXdx.initHexView = function (viewport, dotNet) {
   if (!viewport) return;
   window.dnSpyXdx.disposeHexView(viewport);

@@ -30,13 +30,21 @@ else
       {
         @foreach (var line in wrappedLines)
         {
-          <SourceLineView @key="line.Number" Line="line" LineHeight="LineHeight" WrapLines="true" Matches="FindSpans(line.Number)" ActiveMatchOffset="ActiveMatchOffset" FocusedLine="focusedLine" HoveredSymbol="hoveredSymbol" OnHoverSymbol="HighlightSymbol" OnNavigate="NavigateAsync" OnNavigateOffset="NavigateOffsetAsync" OnAnalyze="OnAnalyze" />
+          <SourceLineView @key="line.Number" Line="line" LineHeight="LineHeight" WrapLines="true" Matches="FindSpans(line.Number)" ActiveMatchOffset="ActiveMatchOffset" FocusedLine="focusedLine" OnNavigate="NavigateAsync" OnNavigateOffset="NavigateOffsetAsync" OnAnalyze="OnAnalyze" />
         }
       }
       else
       {
-        <Virtualize @key="model.Key" @ref="virtualizer" Context="line" ItemsProvider="LoadLinesAsync" ItemSize="LineHeight" OverscanCount="Overscan">
-          <SourceLineView @key="line.Number" Line="line" LineHeight="LineHeight" Matches="FindSpans(line.Number)" ActiveMatchOffset="ActiveMatchOffset" FocusedLine="focusedLine" HoveredSymbol="hoveredSymbol" OnHoverSymbol="HighlightSymbol" OnNavigate="NavigateAsync" OnNavigateOffset="NavigateOffsetAsync" OnAnalyze="OnAnalyze" />
+        <Virtualize @key="model.Key" @ref="virtualizer" ItemsProvider="LoadLinesAsync" ItemSize="LineHeight" OverscanCount="Overscan">
+          <ItemContent Context="line">
+            <SourceLineView @key="line.Number" Line="line" LineHeight="LineHeight" Matches="FindSpans(line.Number)" ActiveMatchOffset="ActiveMatchOffset" FocusedLine="focusedLine" OnNavigate="NavigateAsync" OnNavigateOffset="NavigateOffsetAsync" OnAnalyze="OnAnalyze" />
+          </ItemContent>
+          <Placeholder Context="placeholder">
+            <div class="source-line source-line-placeholder" style="height:@(LineHeight)px" aria-hidden="true">
+              <span class="source-line-number">@(placeholder.Index + 1)</span>
+              <code><span class="source-placeholder-bar" style="width:@PlaceholderWidth(placeholder.Index)ch"></span></code>
+            </div>
+          </Placeholder>
         </Virtualize>
       }
     </div>
@@ -76,7 +84,6 @@ else
   private bool revealFocus;
   private (SourceDocumentKey Document, SymbolId Symbol)? revealedFocus;
   private int focusedLine = -1;
-  private string? hoveredSymbol;
   private bool modelWrapLines;
   private IReadOnlyList<SourceTokenizedLine> wrappedLines = [];
 
@@ -124,6 +131,10 @@ else
       modelLease = Cache.Activate(key);
       initializeBrowser = true;
       revealFocus = Document.FocusSymbol is { } focus && revealedFocus != (key, focus);
+      // Warm the tokenizer checkpoints in the background so scrollbar jumps into unseen regions fill their
+      // placeholder rows quickly instead of replaying the tokenizer from far back. Wrap mode already tokenizes
+      // the whole document up front, so it needs no warming.
+      if (!WrapLines && !prepared.CheckpointsWarmed) _ = WarmCheckpointsSafeAsync(prepared, Document, token);
     }
     catch (OperationCanceledException) { }
     catch (Exception ex)
@@ -141,6 +152,7 @@ else
     {
       initializeBrowser = false;
       await JS.InvokeVoidAsync("dnSpyXdx.initSourceFind", viewport, selfReference);
+      await JS.InvokeVoidAsync("dnSpyXdx.initSourceHover", viewport);
       var state = ViewStates.TryGet(TabId, model.Key, out var saved) ? saved : new SourceViewState(0, 0);
       await JS.InvokeVoidAsync("dnSpyXdx.setSourceScroll", viewport, state.ScrollTop, state.ScrollLeft);
     }
@@ -176,12 +188,37 @@ else
   private async ValueTask<ItemsProviderResult<SourceTokenizedLine>> LoadLinesAsync(ItemsProviderRequest request)
   {
     if (model is null) return new ItemsProviderResult<SourceTokenizedLine>([], 0);
-    var lines = await Cache.GetLinesAsync(model, request.StartIndex, request.Count, Document.SymbolLinks, Document.TypeClassifications, Document.References, Document.SemanticSpans, request.CancellationToken);
-    return new ItemsProviderResult<SourceTokenizedLine>(lines, model.LineCount);
+    try
+    {
+      var lines = await Cache.GetLinesAsync(model, request.StartIndex, request.Count, Document.SymbolLinks, Document.TypeClassifications, Document.References, Document.SemanticSpans, request.CancellationToken);
+      return new ItemsProviderResult<SourceTokenizedLine>(lines, model.LineCount);
+    }
+    catch (OperationCanceledException)
+    {
+      // A fast scrollbar drag supersedes in-flight windows, cancelling their requests. Virtualize only
+      // suppresses a cancellation that carries its own request token, but the cache links that token with an
+      // eviction token before handing it to the tokenizer, so the exception surfaces with the linked token and
+      // Virtualize would rethrow it straight into BuildRenderTree and tear down the view. Re-throw against the
+      // request's own token so Virtualize recognises and swallows it; if the cancellation came from elsewhere
+      // (eviction), yield nothing gracefully instead of letting it escape.
+      request.CancellationToken.ThrowIfCancellationRequested();
+      return new ItemsProviderResult<SourceTokenizedLine>([], model?.LineCount ?? 0);
+    }
   }
 
   private Task<IReadOnlyList<SourceTokenizedLine>> LoadWrappedLinesAsync(SourceDocumentModel document, CancellationToken token) =>
     document.TokenizeLinesAsync(0, document.LineCount, Document.SymbolLinks, Document.TypeClassifications, Document.References, Document.SemanticSpans, token);
+
+  private static async Task WarmCheckpointsSafeAsync(SourceDocumentModel document, DecompilerDocument source, CancellationToken token)
+  {
+    try { await document.WarmCheckpointsAsync(source.SymbolLinks, source.TypeClassifications, source.References, source.SemanticSpans, token); }
+    catch (OperationCanceledException) { }
+    catch { /* best-effort; the only cost of failure is a slower first jump into a cold region */ }
+  }
+
+  // A deterministic but varied width for a loading row's shimmer bar, so a screenful of placeholders reads
+  // like code lines of differing lengths rather than identical blocks. Cosmetic only.
+  private static int PlaceholderWidth(int index) => 8 + index * 37 % 48;
 
   [JSInvokable]
   public void OpenFind()
@@ -278,13 +315,6 @@ else
     await InvokeAsync(StateHasChanged);
   }
 
-  private void HighlightSymbol(string? symbol)
-  {
-    if (hoveredSymbol == symbol) return;
-    hoveredSymbol = symbol;
-    StateHasChanged();
-  }
-
   private Task NavigateAsync(NavigationRequest request) =>
     request.Symbol == Document.Symbol && !request.NewTab ? Task.CompletedTask : OnNavigate.InvokeAsync(request);
 
@@ -352,7 +382,7 @@ else
     findDelay?.Dispose();
     focusDelay?.Cancel();
     focusDelay?.Dispose();
-    try { await JS.InvokeVoidAsync("dnSpyXdx.disposeSourceFind", viewport); }
+    try { await JS.InvokeVoidAsync("dnSpyXdx.disposeSourceFind", viewport); await JS.InvokeVoidAsync("dnSpyXdx.disposeSourceHover", viewport); }
     catch (JSDisconnectedException) { }
     selfReference?.Dispose();
     modelLease?.Dispose();

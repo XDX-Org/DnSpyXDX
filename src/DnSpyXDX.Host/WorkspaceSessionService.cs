@@ -54,9 +54,14 @@ public sealed class WorkspaceSessionService(IDecompilerBackend backend, Workspac
             documents.Add((saved, tabId));
             lock (restoreGate) pendingDocumentTabs.Add(tabId);
         }
-        if (workspace.Tabs.ElementAtOrDefault(snapshot.ActiveIndex) is { } active) workspace.Activate(active.Id);
+        string? activeTabId = null;
+        if (workspace.Tabs.ElementAtOrDefault(snapshot.ActiveIndex) is { } active) { workspace.Activate(active.Id); activeTabId = active.Id; }
 
-        foreach (var (saved, tabId) in documents)
+        // Decompile the tab the user is actually looking at first, so the visible document appears without
+        // waiting behind the other restored tabs. OrderByDescending is stable, so the rest keep their saved
+        // order. This matters most for a heavy type like EFT.Player, whose decompile dominates the restore.
+        var ordered = activeTabId is null ? documents : documents.OrderByDescending(entry => entry.TabId == activeTabId).ToList();
+        foreach (var (saved, tabId) in ordered)
         {
             cancellationToken.ThrowIfCancellationRequested();
             CancellationTokenSource restore;
