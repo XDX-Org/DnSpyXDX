@@ -36,6 +36,9 @@ public sealed class DecompilerBackend : IDecompilerBackend
             if (!File.Exists(fullPath)) throw new FileNotFoundException("Assembly not found.", fullPath);
             var session = AssemblySession.Open(fullPath, displaySettings);
             if (!sessions.TryAdd(session.Descriptor.SessionId, session)) { session.Dispose(); throw new InvalidOperationException("Could not add assembly session."); }
+            // The reverse-reference index gates cross-assembly matches on the set of open assemblies, so
+            // every index becomes stale when that set changes; drop them all and let them rebuild lazily.
+            foreach (var other in sessions.Values) other.InvalidateAnalyzerIndex();
             return session.Descriptor;
         }, cancellationToken);
     }
@@ -88,6 +91,7 @@ public sealed class DecompilerBackend : IDecompilerBackend
     public Task CloseAsync(Guid sessionId)
     {
         if (sessions.TryRemove(sessionId, out var session)) session.Dispose();
+        foreach (var other in sessions.Values) other.InvalidateAnalyzerIndex();
         return Task.CompletedTask;
     }
 
@@ -137,6 +141,67 @@ public sealed class DecompilerBackend : IDecompilerBackend
         return found;
     }, cancellationToken);
 
+    public Task<IReadOnlyList<AnalyzerRelation>> GetAnalyzerRelationsAsync(SymbolId symbol, CancellationToken cancellationToken = default)
+    {
+        var session = sessions.Values.FirstOrDefault(s => s.Descriptor.ModuleMvid == symbol.ModuleMvid);
+        return Task.FromResult(session?.GetAnalyzerRelations(symbol) ?? []);
+    }
+
+    public Task<AnalyzerResult?> DescribeSymbolAsync(SymbolId symbol, CancellationToken cancellationToken = default)
+    {
+        var session = sessions.Values.FirstOrDefault(s => s.Descriptor.ModuleMvid == symbol.ModuleMvid);
+        return Task.FromResult(session?.DescribeSymbol(symbol));
+    }
+
+    public Task<IReadOnlyList<AnalyzerResult>> AnalyzeAsync(SymbolId symbol, AnalyzerRelation relation, CancellationToken cancellationToken = default, IProgress<IReadOnlyList<AnalyzerResult>>? progress = null) => Task.Run<IReadOnlyList<AnalyzerResult>>(() =>
+    {
+        var owning = sessions.Values.FirstOrDefault(s => s.Descriptor.ModuleMvid == symbol.ModuleMvid)
+            ?? throw new KeyNotFoundException("The symbol's assembly is no longer open.");
+        var openNames = sessions.Values.Select(s => s.Descriptor.Name).ToHashSet(StringComparer.Ordinal);
+        var byName = new Dictionary<string, AssemblySession>(StringComparer.Ordinal);
+        foreach (var s in sessions.Values) byName[s.Descriptor.Name] = s;
+
+        // Relations computed from the target alone (its callees, the members it overrides, or the methods
+        // that raise it) run only on the owning session, resolving each target into an open assembly.
+        if (relation is AnalyzerRelation.Uses or AnalyzerRelation.Overrides or AnalyzerRelation.EventFiredBy)
+        {
+            AssemblySession? Resolve(string name) => byName.GetValueOrDefault(name);
+            var direct = (relation switch
+            {
+                AnalyzerRelation.Uses => owning.AnalyzeUses(symbol, openNames, Resolve, cancellationToken),
+                AnalyzerRelation.Overrides => owning.AnalyzeOverrides(symbol, openNames, Resolve, cancellationToken),
+                _ => owning.FindEventRaisers(symbol, cancellationToken)
+            }).ToArray();
+            progress?.Report(direct);
+            return direct;
+        }
+
+        if (!owning.TryGetAnalysisTarget(symbol, relation, out var keys, out var global)) return [];
+        var targetKind = MetadataTokens.EntityHandle(symbol.MetadataToken).Kind;
+        var scope = global ? (IEnumerable<AssemblySession>)sessions.Values : [owning];
+        var results = new List<AnalyzerResult>();
+        var seen = new HashSet<(Guid, int)>();
+        foreach (var session in scope)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var found = relation switch
+            {
+                AnalyzerRelation.DerivedTypes => session.FindDerivedTypes(keys, openNames, cancellationToken),
+                AnalyzerRelation.OverriddenBy or AnalyzerRelation.ImplementedBy => session.FindImplementors(keys[0], relation, targetKind, openNames, cancellationToken),
+                AnalyzerRelation.ExposedBy => session.FindExposingMembers(keys[0], openNames, cancellationToken),
+                _ => keys.SelectMany(key => session.FindCallers(key, openNames, cancellationToken))
+            };
+            foreach (var result in found)
+            {
+                if (!seen.Add((result.Symbol.ModuleMvid, result.Symbol.MetadataToken))) continue;
+                results.Add(result);
+                if (results.Count % 50 == 0) progress?.Report(results.ToArray());
+            }
+        }
+        progress?.Report(results.ToArray());
+        return results;
+    }, cancellationToken);
+
     public bool TryGetAssembly(Guid sessionId, out AssemblyDescriptor? assembly)
     {
         if (sessions.TryGetValue(sessionId, out var session)) { assembly = session.Descriptor; return true; }
@@ -165,6 +230,11 @@ internal sealed class AssemblySession : IDisposable
     private IReadOnlyList<BinaryRegion>? binaryRegions;
     private IReadOnlyDictionary<string, SymbolId>? typeLinks;
     private IReadOnlyDictionary<string, string>? typeClassifications;
+    // Reverse-reference index (target member -> the methods in this module that reference it), built
+    // lazily on first analysis and dropped when the set of open assemblies changes. The lock guards the
+    // field swap only; the (immutable once built) dictionary is read without locking afterwards.
+    private Dictionary<RefKey, List<(int Caller, int Offset)>>? referenceIndex;
+    private readonly object indexLock = new();
     public AssemblyDescriptor Descriptor { get; }
 
     private AssemblySession(PEFile module, CSharpDecompiler decompiler, DecompilerSettings settings, AssemblyDescriptor descriptor, RuntimeDisplaySettings displaySettings)
@@ -1395,6 +1465,500 @@ internal sealed class AssemblySession : IDisposable
         return separator > 0 && int.TryParse(name.AsSpan(separator + 1), out _) ? name[..separator] : name;
     }
     private static int ParseToken(NodeId node) => Convert.ToInt32(node.Value[(node.Value.IndexOf(':') + 1)..], 16);
+
+    // ---- Analyzer (dnSpy-style Used By / Uses) --------------------------------------------------
+
+    public void InvalidateAnalyzerIndex() { lock (indexLock) referenceIndex = null; }
+
+    public IReadOnlyList<AnalyzerRelation> GetAnalyzerRelations(SymbolId symbol)
+    {
+        EntityHandle handle;
+        try { handle = MetadataTokens.EntityHandle(symbol.MetadataToken); }
+        catch (ArgumentException) { return []; }
+        if (handle.Kind == HandleKind.FieldDefinition) return [AnalyzerRelation.UsedBy];
+        if (handle.Kind == HandleKind.MethodDefinition)
+        {
+            var methodRelations = new List<AnalyzerRelation> { AnalyzerRelation.UsedBy, AnalyzerRelation.Uses };
+            var method = metadata.GetMethodDefinition((MethodDefinitionHandle)handle);
+            var attributes = method.Attributes;
+            var isVirtual = attributes.HasFlag(MethodAttributes.Virtual);
+            var declaringType = metadata.GetTypeDefinition(method.GetDeclaringType());
+            if (declaringType.Attributes.HasFlag(TypeAttributes.Interface))
+            {
+                if (isVirtual) methodRelations.Add(AnalyzerRelation.ImplementedBy);
+            }
+            else if (isVirtual)
+            {
+                // A virtual method reusing a base slot (not NewSlot) overrides a base method.
+                if (!attributes.HasFlag(MethodAttributes.NewSlot)) methodRelations.Add(AnalyzerRelation.Overrides);
+                // A non-final virtual on a non-sealed type can itself be overridden by subclasses.
+                if (!attributes.HasFlag(MethodAttributes.Final) && !declaringType.Attributes.HasFlag(TypeAttributes.Sealed)) methodRelations.Add(AnalyzerRelation.OverriddenBy);
+            }
+            return methodRelations;
+        }
+        if (handle.Kind is HandleKind.PropertyDefinition or HandleKind.EventDefinition)
+        {
+            // A property/event is used through its accessor methods, and its virtual-ness (for override
+            // relations) is carried by those accessors, so we read the flags off the primary accessor.
+            var memberRelations = new List<AnalyzerRelation> { AnalyzerRelation.UsedBy };
+            var accessor = PrimaryAccessor(handle);
+            if (!accessor.IsNil)
+            {
+                var attributes = metadata.GetMethodDefinition(accessor).Attributes;
+                if (attributes.HasFlag(MethodAttributes.Virtual))
+                {
+                    var declaringType = metadata.GetTypeDefinition(DeclaringTypeOf(handle));
+                    if (declaringType.Attributes.HasFlag(TypeAttributes.Interface)) memberRelations.Add(AnalyzerRelation.ImplementedBy);
+                    else
+                    {
+                        if (!attributes.HasFlag(MethodAttributes.NewSlot)) memberRelations.Add(AnalyzerRelation.Overrides);
+                        if (!attributes.HasFlag(MethodAttributes.Final) && !declaringType.Attributes.HasFlag(TypeAttributes.Sealed)) memberRelations.Add(AnalyzerRelation.OverriddenBy);
+                    }
+                }
+            }
+            // Event Fired By can only be shown when the event has a locatable backing field to look for.
+            if (handle.Kind == HandleKind.EventDefinition && !EventBackingField((EventDefinitionHandle)handle).IsNil) memberRelations.Add(AnalyzerRelation.EventFiredBy);
+            return memberRelations;
+        }
+        if (handle.Kind != HandleKind.TypeDefinition) return [];
+
+        var type = metadata.GetTypeDefinition((TypeDefinitionHandle)handle);
+        var relations = new List<AnalyzerRelation> { AnalyzerRelation.UsedBy };
+        var isInterface = type.Attributes.HasFlag(TypeAttributes.Interface);
+        // Sealed value types and enums can't be a base type, but classes and interfaces can be derived from.
+        if (isInterface || (!type.Attributes.HasFlag(TypeAttributes.Sealed) && !IsEnum(type) && !IsValueType(type))) relations.Add(AnalyzerRelation.DerivedTypes);
+        // Only concrete reference types are instantiated with newobj; abstract/static classes and interfaces are not.
+        if (!isInterface && !type.Attributes.HasFlag(TypeAttributes.Abstract) && HasConstructors((TypeDefinitionHandle)handle)) relations.Add(AnalyzerRelation.InstantiatedBy);
+        // Any type can appear in another member's signature (field type, parameter, return type).
+        relations.Add(AnalyzerRelation.ExposedBy);
+        return relations;
+    }
+
+    /// <summary>Resolves the reference key(s) an analysis relation searches for and whether the search
+    /// spans every open assembly. Used By searches the target itself; Instantiated By searches the type's
+    /// constructors; Derived Types searches the type itself (matched against other types' base/interfaces).</summary>
+    public bool TryGetAnalysisTarget(SymbolId symbol, AnalyzerRelation relation, out IReadOnlyList<RefKey> keys, out bool global)
+    {
+        keys = [];
+        global = false;
+        EntityHandle handle;
+        try { handle = MetadataTokens.EntityHandle(symbol.MetadataToken); }
+        catch (ArgumentException) { return false; }
+
+        if (relation is AnalyzerRelation.DerivedTypes or AnalyzerRelation.InstantiatedBy or AnalyzerRelation.ExposedBy)
+        {
+            if (handle.Kind != HandleKind.TypeDefinition) return false;
+            global = IsExternallyVisible(TypeVisibility(metadata.GetTypeDefinition((TypeDefinitionHandle)handle).Attributes));
+            keys = relation == AnalyzerRelation.InstantiatedBy
+                ? ConstructorTokens((TypeDefinitionHandle)handle).Select(token => new RefKey(Descriptor.Name, token)).ToArray()
+                : [new RefKey(Descriptor.Name, symbol.MetadataToken)];
+            return keys.Count > 0;
+        }
+
+        // Used By of a property or event follows its accessor methods (IL calls get_/set_/add_/remove_);
+        // the override relations key on the property/event member itself.
+        if (handle.Kind is HandleKind.PropertyDefinition or HandleKind.EventDefinition)
+        {
+            var accessors = AccessorHandles(handle).ToArray();
+            global = IsExternallyVisible(AccessorVisibility(accessors));
+            keys = relation == AnalyzerRelation.UsedBy
+                ? accessors.Select(accessor => new RefKey(Descriptor.Name, MetadataTokens.GetToken(accessor))).ToArray()
+                : [new RefKey(Descriptor.Name, symbol.MetadataToken)];
+            return keys.Count > 0;
+        }
+
+        if (handle.Kind is not (HandleKind.MethodDefinition or HandleKind.FieldDefinition or HandleKind.TypeDefinition)) return false;
+        keys = [new RefKey(Descriptor.Name, symbol.MetadataToken)];
+        global = handle.Kind switch
+        {
+            HandleKind.MethodDefinition => IsExternallyVisible(MemberVisibility(metadata.GetMethodDefinition((MethodDefinitionHandle)handle).Attributes)),
+            HandleKind.FieldDefinition => IsExternallyVisible(MemberVisibility(metadata.GetFieldDefinition((FieldDefinitionHandle)handle).Attributes)),
+            _ => IsExternallyVisible(TypeVisibility(metadata.GetTypeDefinition((TypeDefinitionHandle)handle).Attributes))
+        };
+        return true;
+    }
+
+    private bool HasConstructors(TypeDefinitionHandle handle) => ConstructorTokens(handle).Any();
+
+    private IEnumerable<int> ConstructorTokens(TypeDefinitionHandle handle) =>
+        metadata.GetTypeDefinition(handle).GetMethods()
+            .Where(method => metadata.GetString(metadata.GetMethodDefinition(method).Name) == ".ctor")
+            .Select(method => MetadataTokens.GetToken(method));
+
+    // The accessor methods of a property (get/set) or event (add/remove/raise), plus any custom accessors.
+    private IEnumerable<MethodDefinitionHandle> AccessorHandles(EntityHandle handle)
+    {
+        if (handle.Kind == HandleKind.PropertyDefinition)
+        {
+            var accessors = metadata.GetPropertyDefinition((PropertyDefinitionHandle)handle).GetAccessors();
+            return new[] { accessors.Getter, accessors.Setter }.Concat(accessors.Others).Where(accessor => !accessor.IsNil);
+        }
+        if (handle.Kind == HandleKind.EventDefinition)
+        {
+            var accessors = metadata.GetEventDefinition((EventDefinitionHandle)handle).GetAccessors();
+            return new[] { accessors.Adder, accessors.Remover, accessors.Raiser }.Concat(accessors.Others).Where(accessor => !accessor.IsNil);
+        }
+        return [];
+    }
+
+    // The accessor whose flags represent the member for override analysis (the getter/adder if present).
+    private MethodDefinitionHandle PrimaryAccessor(EntityHandle handle) => AccessorHandles(handle).FirstOrDefault();
+
+    /// <summary>Types in this module that directly extend or implement the target type.</summary>
+    public IEnumerable<AnalyzerResult> FindDerivedTypes(IReadOnlyList<RefKey> keys, IReadOnlySet<string> openAssemblies, CancellationToken ct)
+    {
+        var target = keys[0];
+        foreach (var typeHandle in metadata.TypeDefinitions)
+        {
+            ct.ThrowIfCancellationRequested();
+            var type = metadata.GetTypeDefinition(typeHandle);
+            var matches = !type.BaseType.IsNil && TryResolveKey(MetadataTokens.GetToken(type.BaseType), openAssemblies, out var baseKey) && baseKey == target;
+            if (!matches)
+                matches = type.GetInterfaceImplementations()
+                    .Select(metadata.GetInterfaceImplementation)
+                    .Any(impl => TryResolveKey(MetadataTokens.GetToken(impl.Interface), openAssemblies, out var ifaceKey) && ifaceKey == target);
+            if (matches && DescribeMember(typeHandle, null) is { } result) yield return result;
+        }
+    }
+
+    private ICSharpCode.Decompiler.TypeSystem.MetadataModule MainModule => (ICSharpCode.Decompiler.TypeSystem.MetadataModule)decompiler.TypeSystem.MainModule;
+
+    // The reference key of a resolved type-system member, from the assembly that declares it. Mirrors the
+    // RefKey the IL index uses, so members resolved through the type system compare against IL targets.
+    private static bool TryMemberKey(ICSharpCode.Decompiler.TypeSystem.IEntity entity, out RefKey key)
+    {
+        key = default;
+        if (entity.MetadataToken.IsNil || entity.ParentModule is not { AssemblyName: { Length: > 0 } assembly }) return false;
+        key = new RefKey(assembly, MetadataTokens.GetToken(entity.MetadataToken));
+        return true;
+    }
+
+    /// <summary>The base-class and interface members the target member (method, property, or event)
+    /// overrides or implements.</summary>
+    public IEnumerable<AnalyzerResult> AnalyzeOverrides(SymbolId member, IReadOnlySet<string> openAssemblies, Func<string, AssemblySession?> resolveSession, CancellationToken ct)
+    {
+        if (ResolveMember(MetadataTokens.EntityHandle(member.MetadataToken)) is not { } resolved) yield break;
+        var seen = new HashSet<RefKey>();
+        foreach (var baseMember in ICSharpCode.Decompiler.TypeSystem.InheritanceHelper.GetBaseMembers(resolved, includeImplementedInterfaces: true))
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!TryMemberKey(baseMember, out var key) || !openAssemblies.Contains(key.Assembly) || !seen.Add(key)) continue;
+            if (resolveSession(key.Assembly)?.DescribeMember(MetadataTokens.EntityHandle(key.Token), null) is { } result) yield return result;
+        }
+    }
+
+    /// <summary>Members in this module that override (or, for interfaces, implement) the target member.
+    /// <paramref name="targetKind"/> selects which member table (methods, properties, events) to scan.</summary>
+    public IEnumerable<AnalyzerResult> FindImplementors(RefKey target, AnalyzerRelation relation, HandleKind targetKind, IReadOnlySet<string> openAssemblies, CancellationToken ct)
+    {
+        var includeInterfaces = relation == AnalyzerRelation.ImplementedBy;
+        foreach (var typeHandle in metadata.TypeDefinitions)
+        {
+            foreach (var candidateHandle in MemberHandles(metadata.GetTypeDefinition(typeHandle), targetKind))
+            {
+                ct.ThrowIfCancellationRequested();
+                // Only virtual members can override a base member or implement an interface member.
+                if (!IsVirtualMember(candidateHandle) || ResolveMember(candidateHandle) is not { } candidate) continue;
+                var overrides = ICSharpCode.Decompiler.TypeSystem.InheritanceHelper.GetBaseMembers(candidate, includeInterfaces)
+                    .Any(baseMember => TryMemberKey(baseMember, out var key) && key == target);
+                if (overrides && DescribeMember(candidateHandle, null) is { } result) yield return result;
+            }
+        }
+    }
+
+    private static IEnumerable<EntityHandle> MemberHandles(TypeDefinition type, HandleKind kind) => kind switch
+    {
+        HandleKind.PropertyDefinition => type.GetProperties().Select(handle => (EntityHandle)handle),
+        HandleKind.EventDefinition => type.GetEvents().Select(handle => (EntityHandle)handle),
+        _ => type.GetMethods().Select(handle => (EntityHandle)handle)
+    };
+
+    private ICSharpCode.Decompiler.TypeSystem.IMember? ResolveMember(EntityHandle handle) => handle.Kind switch
+    {
+        HandleKind.MethodDefinition => MainModule.GetDefinition((MethodDefinitionHandle)handle),
+        HandleKind.PropertyDefinition => MainModule.GetDefinition((PropertyDefinitionHandle)handle),
+        HandleKind.EventDefinition => MainModule.GetDefinition((EventDefinitionHandle)handle),
+        _ => null
+    };
+
+    private bool IsVirtualMember(EntityHandle handle) => handle.Kind == HandleKind.MethodDefinition
+        ? metadata.GetMethodDefinition((MethodDefinitionHandle)handle).Attributes.HasFlag(MethodAttributes.Virtual)
+        : AccessorHandles(handle).Any(accessor => metadata.GetMethodDefinition(accessor).Attributes.HasFlag(MethodAttributes.Virtual));
+
+    /// <summary>Members in this module whose signature (field type, parameter, or return type) references
+    /// the target type.</summary>
+    public IEnumerable<AnalyzerResult> FindExposingMembers(RefKey target, IReadOnlySet<string> openAssemblies, CancellationToken ct)
+    {
+        foreach (var typeHandle in metadata.TypeDefinitions)
+        {
+            ct.ThrowIfCancellationRequested();
+            var type = metadata.GetTypeDefinition(typeHandle);
+            foreach (var fieldHandle in type.GetFields())
+                if (MainModule.GetDefinition(fieldHandle) is { } field && Exposes(field.Type, target) && DescribeMember(fieldHandle, null) is { } result) yield return result;
+            foreach (var propertyHandle in type.GetProperties())
+                if (MainModule.GetDefinition(propertyHandle) is { } property && SignatureExposes(property.ReturnType, property.Parameters, target) && DescribeMember(propertyHandle, null) is { } result) yield return result;
+            foreach (var eventHandle in type.GetEvents())
+                if (MainModule.GetDefinition(eventHandle) is { } declaredEvent && Exposes(declaredEvent.ReturnType, target) && DescribeMember(eventHandle, null) is { } result) yield return result;
+            foreach (var methodHandle in type.GetMethods())
+                if (MainModule.GetDefinition(methodHandle) is { } method && SignatureExposes(method.ReturnType, method.Parameters, target) && DescribeMember(methodHandle, null) is { } result) yield return result;
+        }
+    }
+
+    private static readonly HashSet<int> FieldLoadOpcodes = [0x7B, 0x7C, 0x7E, 0x7F, 0xD0]; // ldfld, ldflda, ldsfld, ldsflda, ldtoken
+
+    /// <summary>Methods that raise the given event. Uses dnSpy's heuristic: a method fires the event when
+    /// it loads the event's backing field and immediately invokes the delegate (<c>Invoke</c>). The backing
+    /// field is private, so only the declaring type and its nested types are scanned.</summary>
+    public IEnumerable<AnalyzerResult> FindEventRaisers(SymbolId eventSymbol, CancellationToken ct)
+    {
+        if (MetadataTokens.EntityHandle(eventSymbol.MetadataToken) is not { Kind: HandleKind.EventDefinition } handle) yield break;
+        var backing = EventBackingField((EventDefinitionHandle)handle);
+        if (backing.IsNil) yield break;
+        var backingToken = MetadataTokens.GetToken(backing);
+        var declaringType = DeclaringTypeOf(handle);
+        if (declaringType.IsNil) yield break;
+
+        foreach (var methodHandle in MethodsWithBodies(declaringType))
+        {
+            ct.ThrowIfCancellationRequested();
+            var definition = metadata.GetMethodDefinition(methodHandle);
+            if (definition.RelativeVirtualAddress == 0) continue;
+            byte[] il;
+            try { il = module.Reader.GetMethodBody(definition.RelativeVirtualAddress).GetILBytes() ?? []; }
+            catch (Exception ex) when (ex is BadImageFormatException or InvalidOperationException) { continue; }
+
+            var instructions = new List<(int Offset, int Token, int Code)>();
+            IlReferenceScanner.Scan(il, (offset, token, code) => instructions.Add((offset, token, code)));
+            for (var index = 0; index < instructions.Count - 1; index++)
+            {
+                // A field load of the backing field followed immediately by a delegate Invoke call = a raise.
+                if (!FieldLoadOpcodes.Contains(instructions[index].Code) || instructions[index].Token != backingToken) continue;
+                var next = instructions[index + 1];
+                if (next.Code is 0x28 or 0x6F && ReferencedMethodName(next.Token) == "Invoke")
+                {
+                    if (DescribeMember(methodHandle, instructions[index].Offset) is { } result) yield return result;
+                    break;
+                }
+            }
+        }
+    }
+
+    // The field-like event's compiler-generated backing field: same name as the event (or "{name}Event"
+    // for VB), declared on the event's own type.
+    private FieldDefinitionHandle EventBackingField(EventDefinitionHandle handle)
+    {
+        var declaringType = DeclaringTypeOf(handle);
+        if (declaringType.IsNil) return default;
+        var name = metadata.GetString(metadata.GetEventDefinition(handle).Name);
+        foreach (var fieldHandle in metadata.GetTypeDefinition(declaringType).GetFields())
+        {
+            var fieldName = metadata.GetString(metadata.GetFieldDefinition(fieldHandle).Name);
+            if (fieldName == name || fieldName == name + "Event") return fieldHandle;
+        }
+        return default;
+    }
+
+    private IEnumerable<MethodDefinitionHandle> MethodsWithBodies(TypeDefinitionHandle typeHandle)
+    {
+        var type = metadata.GetTypeDefinition(typeHandle);
+        foreach (var methodHandle in type.GetMethods()) yield return methodHandle;
+        foreach (var nested in type.GetNestedTypes())
+            foreach (var methodHandle in MethodsWithBodies(nested)) yield return methodHandle;
+    }
+
+    private string? ReferencedMethodName(int token)
+    {
+        EntityHandle handle;
+        try { handle = MetadataTokens.EntityHandle(token); }
+        catch (ArgumentException) { return null; }
+        if (handle.Kind == HandleKind.MethodSpecification) handle = metadata.GetMethodSpecification((MethodSpecificationHandle)handle).Method;
+        return handle.Kind switch
+        {
+            HandleKind.MethodDefinition => metadata.GetString(metadata.GetMethodDefinition((MethodDefinitionHandle)handle).Name),
+            HandleKind.MemberReference => metadata.GetString(metadata.GetMemberReference((MemberReferenceHandle)handle).Name),
+            _ => null
+        };
+    }
+
+    private static bool SignatureExposes(ICSharpCode.Decompiler.TypeSystem.IType returnType, IReadOnlyList<ICSharpCode.Decompiler.TypeSystem.IParameter> parameters, RefKey target) =>
+        Exposes(returnType, target) || parameters.Any(parameter => Exposes(parameter.Type, target));
+
+    private static bool Exposes(ICSharpCode.Decompiler.TypeSystem.IType type, RefKey target)
+    {
+        foreach (var definition in TypeDefinitions(type))
+            if (TryMemberKey(definition, out var key) && key == target) return true;
+        return false;
+    }
+
+    // Every type definition mentioned by a type, unwrapping arrays/pointers/by-ref and generic arguments
+    // (so Dictionary<int, Target>[] is seen to reference Target).
+    private static IEnumerable<ICSharpCode.Decompiler.TypeSystem.ITypeDefinition> TypeDefinitions(ICSharpCode.Decompiler.TypeSystem.IType type)
+    {
+        if (type is ICSharpCode.Decompiler.TypeSystem.Implementation.TypeWithElementType withElement)
+        {
+            foreach (var definition in TypeDefinitions(withElement.ElementType)) yield return definition;
+            yield break;
+        }
+        if (type.GetDefinition() is { } self) yield return self;
+        foreach (var argument in type.TypeArguments)
+            foreach (var definition in TypeDefinitions(argument)) yield return definition;
+    }
+
+    // Internal and private members can only be referenced from their own assembly; public and protected
+    // members can be referenced from other assemblies (protected via derived types), so their callers are
+    // searched across every open assembly. Friend (InternalsVisibleTo) assemblies are treated as internal.
+    private static bool IsExternallyVisible(string visibility) => visibility == "public" || visibility.StartsWith("protected", StringComparison.Ordinal);
+
+    public IEnumerable<AnalyzerResult> FindCallers(RefKey key, IReadOnlySet<string> openAssemblies, CancellationToken ct)
+    {
+        var index = EnsureIndex(openAssemblies, ct);
+        if (!index.TryGetValue(key, out var callers)) yield break;
+        var reported = new HashSet<int>();
+        foreach (var (caller, offset) in callers)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!reported.Add(caller)) continue;
+            if (DescribeMember(MetadataTokens.EntityHandle(caller), offset) is { } result) yield return result;
+        }
+    }
+
+    public IEnumerable<AnalyzerResult> AnalyzeUses(SymbolId method, IReadOnlySet<string> openAssemblies, Func<string, AssemblySession?> resolveSession, CancellationToken ct)
+    {
+        EntityHandle handle;
+        try { handle = MetadataTokens.EntityHandle(method.MetadataToken); }
+        catch (ArgumentException) { yield break; }
+        if (handle.Kind != HandleKind.MethodDefinition) yield break;
+        var definition = metadata.GetMethodDefinition((MethodDefinitionHandle)handle);
+        if (definition.RelativeVirtualAddress == 0) yield break;
+
+        byte[] il;
+        try { il = module.Reader.GetMethodBody(definition.RelativeVirtualAddress).GetILBytes() ?? []; }
+        catch (Exception ex) when (ex is BadImageFormatException or InvalidOperationException) { yield break; }
+
+        var uses = new List<(RefKey Key, int Offset)>();
+        var seen = new HashSet<RefKey>();
+        IlReferenceScanner.Scan(il, (offset, token, _) =>
+        {
+            if (TryResolveKey(token, openAssemblies, out var refKey) && refKey != new RefKey(Descriptor.Name, method.MetadataToken) && seen.Add(refKey))
+                uses.Add((refKey, offset));
+        });
+
+        foreach (var (refKey, offset) in uses)
+        {
+            ct.ThrowIfCancellationRequested();
+            var target = resolveSession(refKey.Assembly);
+            if (target?.DescribeMember(MetadataTokens.EntityHandle(refKey.Token), offset) is { } result) yield return result;
+        }
+    }
+
+    private Dictionary<RefKey, List<(int Caller, int Offset)>> EnsureIndex(IReadOnlySet<string> openAssemblies, CancellationToken ct)
+    {
+        lock (indexLock) if (referenceIndex is { } existing) return existing;
+        var built = BuildIndex(openAssemblies, ct);
+        lock (indexLock) return referenceIndex ??= built;
+    }
+
+    private Dictionary<RefKey, List<(int Caller, int Offset)>> BuildIndex(IReadOnlySet<string> openAssemblies, CancellationToken ct)
+    {
+        var index = new Dictionary<RefKey, List<(int, int)>>();
+        foreach (var typeHandle in metadata.TypeDefinitions)
+        {
+            foreach (var methodHandle in metadata.GetTypeDefinition(typeHandle).GetMethods())
+            {
+                ct.ThrowIfCancellationRequested();
+                var definition = metadata.GetMethodDefinition(methodHandle);
+                if (definition.RelativeVirtualAddress == 0) continue;
+                byte[] il;
+                try { il = module.Reader.GetMethodBody(definition.RelativeVirtualAddress).GetILBytes() ?? []; }
+                catch (Exception ex) when (ex is BadImageFormatException or InvalidOperationException) { continue; }
+                var caller = MetadataTokens.GetToken(methodHandle);
+                IlReferenceScanner.Scan(il, (offset, token, _) =>
+                {
+                    if (!TryResolveKey(token, openAssemblies, out var key)) return;
+                    if (!index.TryGetValue(key, out var list)) index[key] = list = [];
+                    list.Add((caller, offset));
+                });
+            }
+        }
+        return index;
+    }
+
+    /// <summary>Maps an IL operand token to the reference key of the definition it targets, resolving
+    /// cross-assembly member/type references through the type system but only when the target assembly is
+    /// open (so building the index never drags closed framework assemblies in from disk).</summary>
+    private bool TryResolveKey(int token, IReadOnlySet<string> openAssemblies, out RefKey key)
+    {
+        key = default;
+        EntityHandle handle;
+        try { handle = MetadataTokens.EntityHandle(token); }
+        catch (ArgumentException) { return false; }
+        if (handle.Kind == HandleKind.MethodSpecification) handle = metadata.GetMethodSpecification((MethodSpecificationHandle)handle).Method;
+
+        if (handle.Kind is HandleKind.TypeDefinition or HandleKind.MethodDefinition or HandleKind.FieldDefinition)
+        {
+            key = new RefKey(Descriptor.Name, MetadataTokens.GetToken(handle));
+            return true;
+        }
+        if (handle.Kind is not (HandleKind.MemberReference or HandleKind.TypeReference)) return false;
+        if (TargetAssemblyName(handle) is not { } assembly || !openAssemblies.Contains(assembly)) return false;
+
+        var entity = ((ICSharpCode.Decompiler.TypeSystem.MetadataModule)decompiler.TypeSystem.MainModule).ResolveEntity(handle, default);
+        if (entity is null || entity.MetadataToken.IsNil || entity.ParentModule is not { } parent) return false;
+        var name = parent.AssemblyName;
+        if (string.IsNullOrEmpty(name)) return false;
+        key = new RefKey(name, MetadataTokens.GetToken(entity.MetadataToken));
+        return true;
+    }
+
+    // The simple name of the assembly a reference points into, read from metadata alone so the index
+    // build can skip references to unopened assemblies without paying to resolve them.
+    private string? TargetAssemblyName(EntityHandle handle) => handle.Kind switch
+    {
+        HandleKind.TypeDefinition or HandleKind.MethodDefinition or HandleKind.FieldDefinition
+            or HandleKind.PropertyDefinition or HandleKind.EventDefinition or HandleKind.ModuleDefinition => Descriptor.Name,
+        HandleKind.MemberReference => TargetAssemblyName(metadata.GetMemberReference((MemberReferenceHandle)handle).Parent),
+        HandleKind.TypeReference => TargetAssemblyName(metadata.GetTypeReference((TypeReferenceHandle)handle).ResolutionScope),
+        HandleKind.AssemblyReference => metadata.GetString(metadata.GetAssemblyReference((AssemblyReferenceHandle)handle).Name),
+        _ => handle.IsNil ? Descriptor.Name : null
+    };
+
+    public AnalyzerResult? DescribeSymbol(SymbolId symbol)
+    {
+        try { return DescribeMember(MetadataTokens.EntityHandle(symbol.MetadataToken), null); }
+        catch (ArgumentException) { return null; }
+    }
+
+    private AnalyzerResult? DescribeMember(EntityHandle handle, int? ilOffset)
+    {
+        var kind = handle.Kind switch
+        {
+            HandleKind.TypeDefinition => TreeNodeKind.Type,
+            HandleKind.FieldDefinition => TreeNodeKind.Field,
+            HandleKind.PropertyDefinition => TreeNodeKind.Property,
+            HandleKind.EventDefinition => TreeNodeKind.Event,
+            HandleKind.MethodDefinition => metadata.GetString(metadata.GetMethodDefinition((MethodDefinitionHandle)handle).Name) is ".ctor" or ".cctor" ? TreeNodeKind.Constructor : TreeNodeKind.Method,
+            _ => (TreeNodeKind?)null
+        };
+        if (kind is not { } nodeKind) return null;
+
+        var declaringType = DeclaringTypeOf(handle);
+        var name = handle.Kind switch
+        {
+            HandleKind.TypeDefinition => TypeDisplayName(metadata.GetTypeDefinition((TypeDefinitionHandle)handle)),
+            _ when nodeKind == TreeNodeKind.Constructor && !declaringType.IsNil => TypeIdentifier(metadata.GetTypeDefinition(declaringType)),
+            _ => GetEntityName(handle)
+        };
+        var symbol = new SymbolId(Descriptor.ModuleMvid, MetadataTokens.GetToken(handle));
+        var declaringSymbol = declaringType.IsNil ? symbol : new SymbolId(Descriptor.ModuleMvid, MetadataTokens.GetToken(declaringType));
+        var qualifiedName = handle.Kind == HandleKind.TypeDefinition
+            ? QualifiedTypeName((TypeDefinitionHandle)handle)
+            : declaringType.IsNil ? name : $"{QualifiedTypeName(declaringType)}.{name}";
+        var outer = declaringType;
+        while (!outer.IsNil && !metadata.GetTypeDefinition(outer).GetDeclaringType().IsNil) outer = metadata.GetTypeDefinition(outer).GetDeclaringType();
+        var ns = outer.IsNil ? "" : metadata.GetString(metadata.GetTypeDefinition(outer).Namespace);
+        return new AnalyzerResult(symbol, name, nodeKind, Descriptor.Name, ns, declaringSymbol, qualifiedName, ilOffset);
+    }
+
     public void Dispose() { gate.Dispose(); module.Dispose(); }
 }
 

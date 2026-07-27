@@ -80,8 +80,7 @@ public sealed class DecompilerBackendTests
     [Fact]
     public async Task Metadata_token_setting_updates_decompiled_output()
     {
-        var displaySettings = new RuntimeDisplaySettings();
-        displaySettings.ShowMetadataTokens = true;
+        var displaySettings = new RuntimeDisplaySettings { ShowMetadataTokens = true };
         await using var backend = new DecompilerBackend(displaySettings);
         await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
         var type = Assert.Single(await backend.SearchAsync(nameof(SampleMembers)), result =>
@@ -155,8 +154,7 @@ public sealed class DecompilerBackendTests
     [Fact]
     public async Task Decompiles_csharp_il_sequence_point_annotated_il_and_hex_independently()
     {
-        var displaySettings = new RuntimeDisplaySettings { ShowMetadataTokens = true };
-        await using var backend = new DecompilerBackend(displaySettings);
+        await using var backend = new DecompilerBackend(new RuntimeDisplaySettings { ShowMetadataTokens = true });
         await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
         var type = (await backend.SearchAsync(nameof(SampleMembers))).First(result =>
             result.Kind == "Type" && result.QualifiedName == "DnSpyXDX.Tests.SampleMembers");
@@ -472,8 +470,7 @@ public sealed class DecompilerBackendTests
     [Fact]
     public async Task Token_comments_are_attached_to_declarations_and_include_method_locations()
     {
-        var displaySettings = new RuntimeDisplaySettings { ShowMetadataTokens = true };
-        await using var backend = new DecompilerBackend(displaySettings);
+        await using var backend = new DecompilerBackend(new RuntimeDisplaySettings { ShowMetadataTokens = true });
         var assembly = await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
         var namespaces = (await backend.GetChildrenAsync(assembly.RootNode)).Single(n => n.Name == "Namespaces");
         var ownNamespace = (await backend.GetChildrenAsync(namespaces.Id)).Single(n => n.Name == "DnSpyXDX.Tests");
@@ -603,6 +600,56 @@ public sealed class CrossAssemblyReferenceSample
 }
 
 public delegate int SampleDelegate(int value);
+
+public abstract class AnalyzerBase
+{
+    public virtual void Run() { }
+}
+
+public sealed class AnalyzerDerived : AnalyzerBase
+{
+    public override void Run() { }
+}
+
+public sealed class AnalyzerFactory
+{
+    public AnalyzerBase Make() => new AnalyzerDerived();
+}
+
+public interface IAnalyzerService
+{
+    void Serve();
+}
+
+public sealed class AnalyzerService : IAnalyzerService
+{
+    public void Serve() { }
+}
+
+public class AnalyzerPropertyHost
+{
+    public virtual int Level { get; set; }
+    public event Action? Pinged;
+    public int ReadLevel() => Level;                 // calls get_Level
+    public void SetLevel(int value) => Level = value; // calls set_Level
+    public void Subscribe(Action handler) => Pinged += handler; // calls add_Pinged
+    public void Raise() => Pinged?.Invoke();          // loads the Pinged field and invokes it
+}
+
+public sealed class AnalyzerPropertyOverride : AnalyzerPropertyHost
+{
+    public override int Level { get; set; }
+}
+
+public interface IAnalyzerProperty
+{
+    int Count { get; }
+}
+
+public sealed class AnalyzerPropertyImpl : IAnalyzerProperty
+{
+    public int Count => 0;
+}
 
 public sealed class SwitchFormattingSample
 {

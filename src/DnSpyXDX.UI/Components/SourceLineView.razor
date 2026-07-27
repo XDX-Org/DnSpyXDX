@@ -11,7 +11,7 @@
       var matchClass = segment.IsActiveMatch ? "source-find-match active" : segment.IsMatch ? "source-find-match" : null;
       if (segment.Token.Target is { } target)
       {
-        <button type="button" class="source-token @CssClass(segment.Token) code-link @matchClass @(IsHovered(segment.Token) ? "code-link-active" : null)" title="@(segment.Token.Tooltip ?? $"Go to {segment.Token.SymbolName}")" @onclick="e => NavigateAsync(target, e)" @onmouseenter="() => HoverAsync(segment.Token.SymbolName)" @onmouseleave="() => HoverAsync(null)">@text</button>
+        <button type="button" class="source-token @CssClass(segment.Token) code-link @matchClass @(IsHovered(segment.Token) ? "code-link-active" : null)" title="@(segment.Token.Tooltip ?? $"Go to {segment.Token.SymbolName}")" @onclick="e => NavigateAsync(target, e)" @oncontextmenu="e => AnalyzeAsync(target, segment.Token, e)" @oncontextmenu:preventDefault="@(AnalyzableKind(segment.Token.Kind) is not null)" @onmouseenter="() => HoverAsync(segment.Token.SymbolName)" @onmouseleave="() => HoverAsync(null)">@text</button>
       }
       else if (segment.Token.DocumentOffset is { } offset)
       {
@@ -31,6 +31,7 @@
   [Parameter, EditorRequired] public SourceTokenizedLine Line { get; set; } = null!;
   [Parameter] public EventCallback<NavigationRequest> OnNavigate { get; set; }
   [Parameter] public EventCallback<int> OnNavigateOffset { get; set; }
+  [Parameter] public EventCallback<AnalyzeRequest> OnAnalyze { get; set; }
   [Parameter] public IReadOnlyList<SourceFindSpan> Matches { get; set; } = [];
   [Parameter] public int ActiveMatchOffset { get; set; } = -1;
   [Parameter] public int FocusedLine { get; set; } = -1;
@@ -60,6 +61,22 @@
     e.AltKey || e.ShiftKey ? Task.CompletedTask : OnNavigate.InvokeAsync(new NavigationRequest(target, e.CtrlKey || e.MetaKey));
   private Task NavigateOffsetAsync(int offset, MouseEventArgs e) =>
     e.AltKey || e.ShiftKey ? Task.CompletedTask : OnNavigateOffset.InvokeAsync(offset);
+
+  private Task AnalyzeAsync(SymbolId target, SourceToken token, MouseEventArgs e) =>
+    AnalyzableKind(token.Kind) is { } kind
+      ? OnAnalyze.InvokeAsync(new AnalyzeRequest(target, token.SymbolName ?? "", kind, e.ClientX, e.ClientY))
+      : Task.CompletedTask;
+
+  // References the analyzer can act on (types and members) get an Analyze context menu.
+  private static TreeNodeKind? AnalyzableKind(SourceTokenKind kind) => kind switch
+  {
+    SourceTokenKind.Type or SourceTokenKind.StaticType or SourceTokenKind.Interface or SourceTokenKind.Enum or SourceTokenKind.Struct or SourceTokenKind.Delegate => TreeNodeKind.Type,
+    SourceTokenKind.Method => TreeNodeKind.Method,
+    SourceTokenKind.Field => TreeNodeKind.Field,
+    SourceTokenKind.Property => TreeNodeKind.Property,
+    SourceTokenKind.Event => TreeNodeKind.Event,
+    _ => null
+  };
 
   private IEnumerable<SourceBrace> VisibleGuides()
   {

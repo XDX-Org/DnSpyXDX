@@ -222,3 +222,22 @@ button.source-token.code-link{text-decoration:none}
 .meta-delegate{color:var(--theme-syntax-delegate)}
 .meta-typeparam{color:var(--theme-syntax-typeparam)}
 .meta-generic-punctuation{color:var(--theme-syntax-variable)}
+.bottom-panel{position:relative;height:230px;min-height:120px;max-height:65vh;overflow:hidden;display:flex;flex-direction:column;background:var(--theme-color-11161f);border-top:2px solid var(--theme-color-39445a)}
+.bottom-tabs{display:flex;align-items:center;gap:3px;height:30px;padding:0 6px;background:var(--theme-color-171d28);border-bottom:1px solid var(--theme-color-2b3444)}
+.bottom-tab{height:23px;padding:0 13px;border:0;background:transparent;color:var(--theme-color-8da0bf);font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;border-radius:4px}
+.bottom-tab:hover{background:var(--theme-color-222b3a)}
+.bottom-tab.active{background:var(--theme-color-222b3a);color:var(--theme-color-e4ebf7)}
+.bottom-close{margin-left:auto;width:26px;height:24px;border:0;background:transparent;color:var(--theme-color-9ba8bc);font-size:18px;border-radius:4px}
+.bottom-close:hover{background:var(--theme-color-293246);color:var(--theme-color-fff)}
+.search-embedded{flex:1;min-height:0;height:auto;max-height:none;border-top:0}
+.analyzer-tree{flex:1;min-height:0;overflow:auto;padding-bottom:12px}
+.analyzer-row{align-items:center}
+.analyzer-row .node-icon.analyzer-category{color:var(--theme-color-7f8ca4)}
+.analyzer-category-label{color:var(--theme-color-c8d2e2);font-weight:600}
+.analyzer-symbol{display:flex;align-items:center;gap:6px;min-width:0;flex:1;border:0;background:transparent;color:inherit;text-align:left;padding:0}
+.analyzer-symbol .analyzer-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.analyzer-symbol small{color:var(--theme-color-66738a);margin-left:8px}
+.analyzer-remove{width:20px;border:0;background:transparent;color:var(--theme-color-66738a);font-size:15px;border-radius:4px}
+.analyzer-remove:hover{background:var(--theme-color-293246);color:var(--theme-color-fff)}
+.analyzer-body{flex:1;min-height:0;display:flex;flex-direction:column}
+.panel-hidden{display:none!important}

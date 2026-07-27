@@ -13,6 +13,14 @@ public interface IDecompilerBackend : IAsyncDisposable
     Task<SymbolId> GetDeclaringTypeAsync(SymbolId symbol, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<NodeId>> GetPathAsync(SymbolId symbol, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<SearchResult>> SearchAsync(string query, CancellationToken cancellationToken = default, IProgress<IReadOnlyList<SearchResult>>? progress = null);
+    /// <summary>The analysis relations (Used By, Uses, …) that apply to the given symbol's kind.</summary>
+    Task<IReadOnlyList<AnalyzerRelation>> GetAnalyzerRelationsAsync(SymbolId symbol, CancellationToken cancellationToken = default);
+    /// <summary>The analyzer descriptor (name, kind, qualified name) for a single symbol, used to label an
+    /// analyzer root with the same canonical name its results use. Null if the symbol can't be resolved.</summary>
+    Task<AnalyzerResult?> DescribeSymbolAsync(SymbolId symbol, CancellationToken cancellationToken = default);
+    /// <summary>Resolves one analyzer relation for a symbol, scanning IL across the visibility-scoped
+    /// set of open assemblies. Results stream through <paramref name="progress"/> like search.</summary>
+    Task<IReadOnlyList<AnalyzerResult>> AnalyzeAsync(SymbolId symbol, AnalyzerRelation relation, CancellationToken cancellationToken = default, IProgress<IReadOnlyList<AnalyzerResult>>? progress = null);
     bool TryGetAssembly(Guid sessionId, out AssemblyDescriptor? assembly);
 }
 
