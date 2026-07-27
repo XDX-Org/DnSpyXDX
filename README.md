@@ -4,7 +4,7 @@
   <img src="src/DnSpyXDX.UI/wwwroot/images/xdding.webp" width="400" alt="DnSpyXDX animation">
 </p>
 
-DnSpyXDX is a cross-platform assembly browser and debugger for Windows and Linux. It combines a native Photino window, a Blazor interface, and the ILSpy decompiler engine to provide a compact desktop workflow for understanding compiled C# applications and libraries. Debugger foundation now includes CoreCLR launch/attach, execution control, stack/locals/output panels, and decompiled-source breakpoint UI. Real IL-native binding still requires the planned NetCoreDbg fork.
+DnSpyXDX is a cross-platform assembly browser and debugger for Windows and Linux. It combines a native Photino window, a Blazor interface, and the ILSpy decompiler engine to provide a compact desktop workflow for understanding compiled C# applications and libraries. Debugger foundation now includes CoreCLR launch/attach, execution control, stack/locals/output panels, and decompiled-source breakpoints backed by the bundled XDX NetCoreDbg fork.
 
 ## Highlights
 
@@ -52,8 +52,9 @@ dotnet build DnSpyXDX.slnx
 dotnet test DnSpyXDX.slnx
 ```
 
-Host build downloads pinned NetCoreDbg `3.2.0-1092` once, verifies its SHA-256 checksum, caches it
-under `src/DnSpyXDX.Host/obj/netcoredbg`, and copies the current RID payload into
+Host build downloads XDX NetCoreDbg release `xdx-3.2.0-1092.1`, pinned to backend commit
+`8b8c59e8168f46a6dee486958cafd9bb4cffeeec`, once, verifies its SHA-256 checksum, caches it under
+`src/DnSpyXDX.Host/obj/netcoredbg`, and copies the current RID payload into
 `debuggers/netcoredbg/<RID>` beside the application. Set `-p:BundleNetCoreDbg=false` only when
 building offline with an externally managed adapter.
 

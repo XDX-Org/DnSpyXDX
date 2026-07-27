@@ -1,9 +1,9 @@
 # Cross-platform debugger architecture
 
 > Status: architecture, shared lifecycle, decompiled C# sequence maps, correlated DAP connection,
-> worker supervision, stock NetCoreDbg CoreCLR engine, IL-breakpoint client protocol, source
-> gutter, first debugger UI slice, and pinned stock-NetCoreDbg packaging are implemented. Native
-> NetCoreDbg IL binding, Mono/Unity engines, persistence, and full debugger UI remain.
+> worker supervision, NetCoreDbg CoreCLR engine, native IL-breakpoint binding, source gutter,
+> first debugger UI slice, and pinned dual-platform adapter packaging are implemented. Mono/Unity
+> engines, persistence, and full debugger UI remain.
 
 ## Goals
 
@@ -113,12 +113,13 @@ entire adapter process tree. Tests use a real child process for normal exit, cra
 
 ## CoreCLR engine
 
-Use a pinned, reproducible fork of
-[NetCoreDbg](https://github.com/Samsung/netcoredbg), built for `win-x64` and `linux-x64`.
-NetCoreDbg is MIT-licensed, supports DAP, and already owns the difficult ICorDebug callback and
-runtime-loading machinery.
+Use the pinned, reproducible
+[XDX NetCoreDbg fork](https://github.com/XDX-Org/netcoredbg), based on
+[Samsung NetCoreDbg](https://github.com/Samsung/netcoredbg) and built for `win-x64` and
+`linux-x64`. NetCoreDbg is MIT-licensed, supports DAP, and already owns the difficult ICorDebug
+callback and runtime-loading machinery.
 
-The current stock adapter provider supports:
+The CoreCLR adapter provider supports:
 
 - executable discovery from explicit configuration, `DNSPYXDX_NETCOREDBG_PATH`, packaged
   RID-specific directories, or `PATH`;
@@ -128,13 +129,14 @@ The current stock adapter provider supports:
 - continue, pause, step into/over/out;
 - threads, PDB-backed stack frames, scopes, variables, and evaluation;
 - stopped, continued, output, process, exit, termination, protocol-fault, and worker-fault events;
-- capability projection without claiming decompiled-code breakpoint support.
+- capability projection, including negotiated decompiled-code breakpoint support.
 
 The provider is registered in the desktop host even when NetCoreDbg is absent. Host build/publish
-downloads pinned `3.2.0-1092` payload for `win-x64` or `linux-x64`, verifies SHA-256, caches it
-under `obj`, and copies it into the provider's RID-specific discovery path. NetCoreDbg binaries
-are never downloaded at application runtime. Bundling can be disabled for offline or externally
-packaged builds.
+downloads XDX release `xdx-3.2.0-1092.1`, pinned to backend commit
+`8b8c59e8168f46a6dee486958cafd9bb4cffeeec`, for `win-x64` or `linux-x64`, verifies SHA-256,
+caches it under `obj`, and copies it into the provider's RID-specific discovery path. NetCoreDbg
+binaries are never downloaded at application runtime. Bundling can be disabled for offline or
+externally packaged builds.
 
 The fork adds IL breakpoint commands backed by `ICorDebugFunction`,
 `ICorDebugCode`, and `ICorDebugFunctionBreakpoint`. It must:
@@ -151,15 +153,14 @@ Microsoft's `dbgshim` API loads a runtime-matching `ICorDebug` implementation. R
 `mscordbi` and DAC versions must match the debuggee. The adapter must never assume the debugger
 application's .NET runtime matches the target runtime.
 
-The stock CoreCLR milestone is implemented and was live-smoke-tested on Windows x64 against
-official NetCoreDbg `3.2.0-1092` and a .NET 10 target for launch, stop-at-entry, attach, pause,
-threads, stack frames, and termination. Conditional integration tests run whenever
-`DNSPYXDX_NETCOREDBG_PATH` is set. Stock adapters keep
-`SupportsDecompiledCodeBreakpoints` false and receive no custom request. An extended adapter must
-advertise `supportsXdxIlBreakpoints`; the client then sends the complete IL-breakpoint set through
-`xdx/setIlBreakpoints`, validates one binding per UUID, and reads `xdxLocation` from stopped events
-and stack frames. Initial breakpoints bind before `configurationDone`. The contract and test
-adapter are implemented; native ICorDebug binding in a pinned NetCoreDbg fork remains. See
+The CoreCLR milestone was live-smoke-tested on Windows x64 against a .NET 10 target for launch,
+stop-at-entry, attach, pause, threads, stack frames, termination, and a PDB-independent IL
+breakpoint hit. Conditional integration tests run whenever `DNSPYXDX_NETCOREDBG_PATH` is set.
+Stock adapters keep `SupportsDecompiledCodeBreakpoints` false and receive no custom request. The
+XDX adapter advertises `supportsXdxIlBreakpoints`; the client sends the complete IL-breakpoint set
+through `xdx/setIlBreakpoints`, validates one binding per UUID, handles later binding events, and
+reads `xdxLocation` from stopped events and stack frames. Initial breakpoints bind before
+`configurationDone`. See
 [NetCoreDbg IL-breakpoint extension](netcoredbg-il-breakpoint-protocol.md).
 
 ## Mono and Unity engine
@@ -318,16 +319,17 @@ Release matrix:
 4. **Complete:** integrate stock NetCoreDbg for CoreCLR launch/attach, execution control,
    PDB-backed stack frames, variables, evaluation, capability discovery, and live conditional
    integration tests.
-5. **Partial:** client protocol, test adapter, and UI binding are complete; add native
-   `ICorDebugFunctionBreakpoint` backend to pinned NetCoreDbg fork.
+5. **Complete:** client protocol, test adapter, UI binding, and native
+   `ICorDebugFunctionBreakpoint` backend in the pinned NetCoreDbg fork.
 6. Add Mono soft-debugger direct attach.
 7. Add Unity discovery, capability negotiation, and supported-version fixtures.
-8. **Partial:** first debugger panels and stock-adapter packaging exist; add watches, exceptions,
-   modules, persistence, fork packaging, and dual-platform integration CI.
+8. **Partial:** first debugger panels and XDX-adapter packaging exist; add watches, exceptions,
+   modules, persistence, and dual-platform runtime integration CI.
 
 ## Primary references
 
-- [NetCoreDbg](https://github.com/Samsung/netcoredbg)
+- [XDX NetCoreDbg fork](https://github.com/XDX-Org/netcoredbg)
+- [Samsung NetCoreDbg upstream](https://github.com/Samsung/netcoredbg)
 - [.NET `CreateDebuggingInterfaceFromVersion3`](https://learn.microsoft.com/en-us/dotnet/core/unmanaged-api/debugging/createdebugginginterfacefromversion3-function)
 - [Mono `Mono.Debugger.Soft`](https://github.com/mono/mono/tree/main/mcs/class/Mono.Debugger.Soft)
 - [Unity soft-debugger client](https://github.com/Unity-Technologies/MonoDevelop.Debugger.Soft.Unity)

@@ -47,6 +47,7 @@ static async Task<int> RunNetCoreDbgAsync(string mode)
     int? startSequence = null;
     string? startCommand = null;
     var stopAtEntry = false;
+    JsonObject? pendingIlBinding = null;
 
     async ValueTask SendAsync(JsonObject message)
     {
@@ -109,7 +110,7 @@ static async Task<int> RunNetCoreDbgAsync(string mode)
                         ["supportsConditionalBreakpoints"] = true,
                         ["supportsSetVariable"] = true,
                         ["supportsXdxIlBreakpoints"] =
-                            mode == "netcoredbg-il",
+                            mode.StartsWith("netcoredbg-il", StringComparison.Ordinal),
                         ["supportsExceptionFilterOptions"] = true,
                         ["exceptionBreakpointFilters"] = new JsonArray(
                             new JsonObject
@@ -120,7 +121,7 @@ static async Task<int> RunNetCoreDbgAsync(string mode)
                     });
                 break;
             case "xdx/setIlBreakpoints":
-                if (mode != "netcoredbg-il")
+                if (!mode.StartsWith("netcoredbg-il", StringComparison.Ordinal))
                 {
                     await RespondAsync(
                         sequence,
@@ -134,16 +135,28 @@ static async Task<int> RunNetCoreDbgAsync(string mode)
                     .EnumerateArray())
                 {
                     var enabled = breakpoint.GetProperty("enabled").GetBoolean();
-                    breakpointBindings.Add(
-                        new JsonObject
-                        {
-                            ["id"] = breakpoint.GetProperty("id").GetString(),
-                            ["verified"] = enabled,
-                            ["message"] = enabled ? null : "Breakpoint is disabled.",
-                            ["moduleMvid"] = breakpoint.GetProperty("moduleMvid").GetString(),
-                            ["methodToken"] = breakpoint.GetProperty("methodToken").GetInt32(),
-                            ["ilOffset"] = breakpoint.GetProperty("ilOffset").GetInt32()
-                        });
+                    var binding = new JsonObject
+                    {
+                        ["id"] = breakpoint.GetProperty("id").GetString(),
+                        ["verified"] = enabled &&
+                                mode != "netcoredbg-il-rebind",
+                        ["message"] = enabled &&
+                                mode == "netcoredbg-il-rebind"
+                                    ? "Pending: module is not loaded."
+                                    : enabled
+                                        ? null
+                                        : "Breakpoint is disabled.",
+                        ["moduleMvid"] = breakpoint.GetProperty("moduleMvid").GetString(),
+                        ["methodToken"] = breakpoint.GetProperty("methodToken").GetInt32(),
+                        ["ilOffset"] = breakpoint.GetProperty("ilOffset").GetInt32()
+                    };
+                    breakpointBindings.Add(binding);
+                    if (enabled && mode == "netcoredbg-il-rebind")
+                    {
+                        pendingIlBinding = binding.DeepClone().AsObject();
+                        pendingIlBinding["verified"] = true;
+                        pendingIlBinding.Remove("message");
+                    }
                 }
                 await RespondAsync(
                     sequence,
@@ -189,6 +202,11 @@ static async Task<int> RunNetCoreDbgAsync(string mode)
                             ["threadId"] = 7,
                             ["allThreadsStopped"] = true
                         });
+                }
+                if (pendingIlBinding is not null)
+                {
+                    await EventAsync("xdx/ilBreakpoint", pendingIlBinding);
+                    pendingIlBinding = null;
                 }
                 break;
             case "threads":

@@ -135,6 +135,11 @@ internal sealed class NetCoreDbgEngine(
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource<DebugStopInfo> initialStop =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly object breakpointsGate = new();
+    private IReadOnlyDictionary<Guid, DebugBreakpoint> requestedBreakpoints =
+        new Dictionary<Guid, DebugBreakpoint>();
+    private IReadOnlyList<Guid> breakpointOrder = [];
+    private Dictionary<Guid, DebugBreakpointBinding> breakpointBindings = [];
     private DebuggerWorker? worker;
     private DebuggerCapabilities capabilities = DebuggerCapabilitySets.None;
     private DebugThreadId? lastStoppedThread;
@@ -309,9 +314,18 @@ internal sealed class NetCoreDbgEngine(
     {
         ArgumentNullException.ThrowIfNull(breakpoints);
         cancellationToken.ThrowIfCancellationRequested();
+        var requestedById = breakpoints.ToDictionary(breakpoint => breakpoint.Id);
+        lock (breakpointsGate)
+        {
+            requestedBreakpoints = requestedById;
+            breakpointOrder = breakpoints.Select(value => value.Id).ToArray();
+            breakpointBindings = breakpointBindings
+                .Where(value => requestedById.ContainsKey(value.Key))
+                .ToDictionary();
+        }
         if (!capabilities.SupportsDecompiledCodeBreakpoints)
         {
-            return breakpoints
+            var unsupported = breakpoints
                 .Select(breakpoint => new DebugBreakpointBinding(
                     breakpoint.Id,
                     IsVerified: false,
@@ -319,9 +333,10 @@ internal sealed class NetCoreDbgEngine(
                         ? DecompiledBreakpointMessage
                         : "Breakpoint is disabled."))
                 .ToArray();
+            RememberBreakpointBindings(unsupported);
+            return unsupported;
         }
 
-        var requestedById = breakpoints.ToDictionary(breakpoint => breakpoint.Id);
         var request = new JsonObject
         {
             ["breakpoints"] = new JsonArray(
@@ -342,6 +357,7 @@ internal sealed class NetCoreDbgEngine(
             throw new InvalidDataException(
                 "NetCoreDbg xdx/setIlBreakpoints response must contain one unique binding " +
                 "for every requested breakpoint.");
+        RememberBreakpointBindings(bindings);
         return bindings;
     }
 
@@ -547,6 +563,9 @@ internal sealed class NetCoreDbgEngine(
                 case "stopped":
                     HandleStopped(value.Body);
                     break;
+                case "xdx/ilBreakpoint":
+                    HandleIlBreakpoint(value.Body);
+                    break;
                 case "continued":
                     MarkRunning();
                     Emit(new DebugEngineContinued());
@@ -601,6 +620,39 @@ internal sealed class NetCoreDbgEngine(
         Emit(new DebugEngineOutput(new(
             OptionalString(body, "category") ?? "console",
             output)));
+    }
+
+    private void HandleIlBreakpoint(JsonElement? optionalBody)
+    {
+        if (optionalBody is not { } body)
+            throw new InvalidDataException(
+                "NetCoreDbg xdx/ilBreakpoint event has no body.");
+
+        IReadOnlyDictionary<Guid, DebugBreakpoint> requested;
+        lock (breakpointsGate)
+            requested = requestedBreakpoints;
+
+        var binding = ParseIlBreakpointBinding(body, requested);
+        IReadOnlyList<DebugBreakpointBinding> allBindings;
+        lock (breakpointsGate)
+        {
+            if (!requestedBreakpoints.ContainsKey(binding.BreakpointId))
+                return;
+            breakpointBindings[binding.BreakpointId] = binding;
+            allBindings = breakpointOrder
+                .Where(breakpointBindings.ContainsKey)
+                .Select(id => breakpointBindings[id])
+                .ToArray();
+        }
+        Emit(new DebugEngineBreakpointsChanged(allBindings));
+    }
+
+    private void RememberBreakpointBindings(
+        IReadOnlyList<DebugBreakpointBinding> bindings)
+    {
+        lock (breakpointsGate)
+            breakpointBindings = bindings.ToDictionary(
+                value => value.BreakpointId);
     }
 
     private void MarkRunning()

@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using System.Threading.Channels;
 using DnSpyXDX.Application;
 using DnSpyXDX.Debugging;
@@ -326,6 +328,106 @@ public sealed class NetCoreDbgEngineTests
     }
 
     [Fact]
+    public async Task Pending_il_breakpoint_updates_when_module_loads()
+    {
+        var provider = new NetCoreDbgEngineProvider(
+            new CoreClrDebuggerOptions(
+                DotnetHost(),
+                [TestWorkerPath(), "netcoredbg-il-rebind"],
+                TimeSpan.FromSeconds(2)));
+        await using var engine = await provider.CreateAsync(CancellationToken.None);
+        var events = Channel.CreateUnbounded<DebugEngineEvent>();
+        engine.EventReceived += value => events.Writer.TryWrite(value);
+        var location = new DebugCodeLocation(
+            new DebugMethodId(
+                Guid.Parse("11111111-2222-3333-4444-555555555555"),
+                0x06000001),
+            4);
+        var breakpoint = new DebugBreakpoint(Guid.NewGuid(), location);
+
+        await engine.StartAsync(
+            new DebugAttachRequest(
+                DebugRuntimeKind.CoreClr,
+                ProcessId: 2468)
+            {
+                InitialBreakpoints = [breakpoint]
+            },
+            CancellationToken.None);
+
+        DebugBreakpointBinding? verified = null;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (verified is null &&
+               await events.Reader.WaitToReadAsync(timeout.Token))
+        {
+            while (events.Reader.TryRead(out var value))
+            {
+                if (value is not DebugEngineBreakpointsChanged changed)
+                    continue;
+                var binding = Assert.Single(changed.Breakpoints);
+                if (binding.IsVerified) verified = binding;
+            }
+        }
+
+        Assert.NotNull(verified);
+        Assert.Equal(location, verified.BoundLocation);
+        await engine.TerminateAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Live_extended_netcoredbg_binds_and_hits_il_breakpoint()
+    {
+        var adapter = Environment.GetEnvironmentVariable(
+            NetCoreDbgEngineProvider.PathEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(adapter)) return;
+
+        var worker = TestWorkerPath();
+        var location = EntryPointLocation(worker);
+        var requested = new DebugBreakpoint(Guid.NewGuid(), location);
+        var provider = new NetCoreDbgEngineProvider(
+            new CoreClrDebuggerOptions(
+                adapter,
+                GracefulShutdownTimeout: TimeSpan.FromSeconds(5)));
+        await using var engine = await provider.CreateAsync(CancellationToken.None);
+        var events = Channel.CreateUnbounded<DebugEngineEvent>();
+        engine.EventReceived += value => events.Writer.TryWrite(value);
+
+        var result = await engine.StartAsync(
+            new DebugLaunchRequest(
+                DebugRuntimeKind.CoreClr,
+                worker,
+                ["target"])
+            {
+                InitialBreakpoints = [requested]
+            },
+            CancellationToken.None);
+
+        Assert.True(result.Capabilities.SupportsDecompiledCodeBreakpoints);
+        DebugBreakpointBinding? binding = null;
+        DebugStopInfo? stop = null;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while ((binding is null || stop is null) &&
+               await events.Reader.WaitToReadAsync(timeout.Token))
+        {
+            while (events.Reader.TryRead(out var value))
+            {
+                if (value is DebugEngineBreakpointsChanged changed)
+                    binding = Assert.Single(changed.Breakpoints);
+                else if (value is DebugEngineStopped stopped)
+                    stop = stopped.Stop;
+            }
+        }
+
+        Assert.NotNull(binding);
+        Assert.True(binding.IsVerified, binding.Message);
+        Assert.Equal(location, binding.BoundLocation);
+        Assert.NotNull(stop);
+        Assert.Equal(DebugStopReason.Breakpoint, stop.Reason);
+        Assert.Equal(location, stop.Location);
+
+        await engine.TerminateAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task Live_netcoredbg_attaches_to_running_process_when_configured()
     {
         var adapter = Environment.GetEnvironmentVariable(
@@ -391,6 +493,18 @@ public sealed class NetCoreDbgEngineTests
     private static string DotnetHost() =>
         Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ??
         (OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
+
+    private static DebugCodeLocation EntryPointLocation(string assemblyPath)
+    {
+        using var stream = File.OpenRead(assemblyPath);
+        using var peReader = new PEReader(stream);
+        var metadata = peReader.GetMetadataReader();
+        var mvid = metadata.GetGuid(metadata.GetModuleDefinition().Mvid);
+        var token = peReader.PEHeaders.CorHeader?
+            .EntryPointTokenOrRelativeVirtualAddress ?? 0;
+        Assert.Equal(0x06, token >> 24);
+        return new DebugCodeLocation(new DebugMethodId(mvid, token), 0);
+    }
 
     private static async Task<T> ReadEventAsync<T>(
         ChannelReader<DebugEngineEvent> events)

@@ -67,6 +67,12 @@ Response order is not significant. It must contain one unique result for every r
 state. A verified result may report a moved `ilOffset`; this becomes the binding's actual runtime
 location.
 
+## Binding events
+
+When a pending breakpoint binds, becomes pending again after module unload, or moves after a
+hot-reload rebind, the adapter emits `xdx/ilBreakpoint`. Its body is one breakpoint binding in
+the same shape used by the response above. The client merges the update by UUID.
+
 ## Runtime locations
 
 Extended adapters may add `xdxLocation` to `stopped` event bodies and DAP stack frames:
@@ -86,8 +92,11 @@ DnSpyXDX maps this identity back to the smallest containing decompiler sequence 
 ## Implementation status
 
 Client negotiation, validation, request/response translation, pre-`configurationDone`
-configuration, runtime-location parsing, and protocol integration tests are implemented.
+configuration, binding-event updates, runtime-location parsing, and protocol integration tests
+are implemented.
 The repository test adapter implements the contract.
 
-Official stock NetCoreDbg still lacks the native `ICorDebugFunctionBreakpoint` backend. A pinned
-DnSpyXDX fork and packaged binaries are required before real decompiled breakpoints can verify.
+The [XDX NetCoreDbg fork](https://github.com/XDX-Org/netcoredbg) implements the native
+`ICorDebugFunctionBreakpoint` backend. DnSpyXDX pins backend commit
+`8b8c59e8168f46a6dee486958cafd9bb4cffeeec` and verifies the packaged Windows/Linux assets before
+including them in build and publish output.
