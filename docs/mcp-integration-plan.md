@@ -209,11 +209,11 @@ These are protocol requirements and recommendations in the [Streamable HTTP tran
 
 ### Phase 0 — compatibility spike
 
-**Status: Functionally demonstrated; exit verification incomplete.** The endpoint, Settings control, initial tools, authentication, origin checks, and activity panel exist. MCP Inspector, two-host verification, full lifecycle/security automation, and Windows verification remain.
+**Status: Functionally demonstrated; external-host verification incomplete.** The endpoint, controls, initial tools, authentication, Origin checks, activity interception/logging, and initial lifecycle/security automation exist. MCP Inspector, two-host verification, and Windows verification remain.
 
 - [x] Pin a stable official C# SDK version centrally.
 - [x] Build the activity-panel-controlled loopback endpoint with `list_assemblies` and `open_assembly`.
-- [ ] **Partial:** Add the minimal activity panel and structured activity/log pipeline. The panel logs implemented handlers; interception, queued/running entries, client identity, and structured logging remain.
+- [x] Add the minimal activity panel and structured activity/log pipeline, including protocol interception, running/completed rows, client identity, bounded retention, and scoped event logging.
 - [ ] Verify protocol initialization/capability negotiation with MCP Inspector and at least two real hosts.
 - [ ] **Partial:** Confirm authentication, origin rejection, capability negotiation, and sanitized logging in normal, debug, cancellation, and failure paths. Happy-path manual HTTP coverage exists; the full matrix does not.
 - [ ] Record the supported MCP protocol version and SDK compatibility policy.
@@ -222,10 +222,10 @@ Exit: switching MCP on starts a protected loopback endpoint, a host can connect 
 
 ### Phase 1 — read-only inspection MVP
 
-**Status: In progress.** Initial assembly/symbol tools and source resources exist. Configured roots are absolute, snapshot-based, link-resolved, and revalidated after open; roots-capable clients are intersected with configured roots; assembly size/open-count/open-timeout/concurrent-open limits and stable coded errors are present. Complete resources, `list_children`, pagination, endpoint-wide limits, and integration/security tests remain.
+**Status: In progress.** Initial tools, assembly/symbol/source resources, paginated tree browsing, shared desktop/MCP lifecycle, configured/client root enforcement, initial limits, coded errors, and integration/security tests exist. Embedded-resource reads, search/reference pagination, endpoint-wide limits, richer symbol descriptors, and broader adversarial coverage remain.
 
-- [ ] **Partial:** Implement all initial tools and resource templates. `list_children`, assembly/symbol descriptors, and embedded-text resources remain.
-- [ ] **Partial:** Add roots enforcement, limits, cursor pagination, structured errors, cancellation, and safe logging. Configured/client root enforcement, initial open limits, and stable coded errors are implemented; full limits, pagination, cursor errors, and wire-level error tests remain.
+- [ ] **Partial:** Implement all initial tools and resource templates. Initial tools plus assembly, symbol, and source templates are implemented; embedded-text resources remain.
+- [ ] **Partial:** Add roots enforcement, limits, cursor pagination, structured errors, cancellation, and safe logging. Root enforcement, initial open limits, tree cursors, coded cursor errors, cancellation, and safe logging are implemented; full limits plus search/reference pagination remain.
 - [x] Return resource links from search/symbol tools and fetch decompilation only on demand.
 - [x] Reuse exact cross-assembly MVID/token resolution.
 - [x] Generate example host configuration from the live endpoint settings.

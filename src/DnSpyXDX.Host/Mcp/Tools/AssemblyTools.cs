@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using DnSpyXDX.Application;
+using DnSpyXDX.UI;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
@@ -9,15 +10,15 @@ namespace DnSpyXDX.Host.Mcp.Tools;
 public sealed class AssemblyTools
 {
     private readonly IDecompilerBackend backend;
-    private readonly WorkspaceState workspace;
+    private readonly WorkspaceAssemblyService assemblies;
     private readonly McpServerSettings settings;
     private readonly McpActivityLog activity;
     private readonly SemaphoreSlim openConcurrency;
 
-    public AssemblyTools(IDecompilerBackend backend, WorkspaceState workspace, McpServerSettings settings, McpActivityLog activity)
+    public AssemblyTools(IDecompilerBackend backend, WorkspaceAssemblyService assemblies, McpServerSettings settings, McpActivityLog activity)
     {
         this.backend = backend;
-        this.workspace = workspace;
+        this.assemblies = assemblies;
         this.settings = settings;
         this.activity = activity;
         openConcurrency = new(Math.Max(1, settings.MaximumConcurrentRequests));
@@ -28,7 +29,7 @@ public sealed class AssemblyTools
     public IReadOnlyList<McpAssemblyDescriptor> ListAssemblies()
     {
         var started = DateTimeOffset.UtcNow;
-        activity.Begin();
+        activity.Begin("list_assemblies", countRequest: false);
         var assemblies = backend.Assemblies.Select(ToDescriptor).ToArray();
         activity.Add(new(started, "list_assemblies", null, "succeeded", DateTimeOffset.UtcNow - started));
         return assemblies;
@@ -39,7 +40,7 @@ public sealed class AssemblyTools
     public async Task<CloseAssemblyResult> CloseAssemblyAsync(Guid moduleMvid, CancellationToken cancellationToken)
     {
         var started = DateTimeOffset.UtcNow;
-        activity.Begin();
+        activity.Begin("close_assembly", moduleMvid.ToString("D"), countRequest: false);
         var assembly = backend.Assemblies.FirstOrDefault(candidate => candidate.ModuleMvid == moduleMvid);
         if (assembly is null)
         {
@@ -48,9 +49,7 @@ public sealed class AssemblyTools
         }
         try
         {
-            await backend.CloseAsync(assembly.SessionId);
-            workspace.CloseAssembly(moduleMvid);
-            workspace.SetBusy(false, $"Unloaded {assembly.Name} through MCP");
+            await assemblies.CloseAsync(moduleMvid, "MCP", cancellationToken);
             activity.Add(new(started, "close_assembly", moduleMvid.ToString("D"), "succeeded", DateTimeOffset.UtcNow - started));
             return new(moduleMvid, true);
         }
@@ -72,7 +71,7 @@ public sealed class AssemblyTools
     {
         var started = DateTimeOffset.UtcNow;
         var safeTarget = Path.GetFileName(path);
-        activity.Begin();
+        activity.Begin("open_assembly", safeTarget, countRequest: false);
         try
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -90,7 +89,7 @@ public sealed class AssemblyTools
                 var length = new FileInfo(canonicalPath).Length;
                 if (length > settings.MaximumAssemblyBytes)
                     throw new InvalidOperationException("The assembly exceeds the configured file size limit.");
-                var opened = await backend.OpenAsync(canonicalPath, timeout.Token);
+                var opened = await assemblies.OpenAsync(canonicalPath, "MCP", timeout.Token);
                 try
                 {
                     ValidatePath(canonicalPath, roots);
@@ -98,12 +97,11 @@ public sealed class AssemblyTools
                 }
                 catch
                 {
-                    await backend.CloseAsync(opened.SessionId);
+                    await assemblies.CloseAsync(opened.ModuleMvid, "MCP rollback", CancellationToken.None);
                     throw;
                 }
             }
             finally { openConcurrency.Release(); }
-            workspace.SetBusy(false, $"Opened {result.Name} through MCP");
             activity.Add(new(started, "open_assembly", safeTarget, "succeeded", DateTimeOffset.UtcNow - started));
             return result;
         }
@@ -178,8 +176,8 @@ public sealed class AssemblyTools
 
     private static McpAssemblyDescriptor ToDescriptor(AssemblyDescriptor assembly) => new(
         assembly.ModuleMvid, assembly.Name, assembly.TargetFramework, assembly.Architecture,
-        $"dnspyxdx://assembly/{assembly.ModuleMvid:D}");
+        $"dnspyxdx://assembly/{assembly.ModuleMvid:D}", McpNodeIds.Encode(assembly.ModuleMvid, assembly.RootNode.Value));
 }
 
-public sealed record McpAssemblyDescriptor(Guid ModuleMvid, string Name, string TargetFramework, string Architecture, string ResourceUri);
+public sealed record McpAssemblyDescriptor(Guid ModuleMvid, string Name, string TargetFramework, string Architecture, string ResourceUri, string RootNodeId);
 public sealed record CloseAssemblyResult(Guid ModuleMvid, bool Closed);

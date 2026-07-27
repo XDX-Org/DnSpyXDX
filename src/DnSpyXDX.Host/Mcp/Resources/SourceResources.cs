@@ -18,7 +18,7 @@ public sealed class SourceResources(IDecompilerBackend backend, McpActivityLog a
     {
         var started = DateTimeOffset.UtcNow;
         var target = $"{moduleMvid:D}/0x{metadataToken:X8}/{language}";
-        activity.Begin();
+        activity.Begin("resources/read", target, countRequest: false);
         try
         {
             if (metadataToken <= 0) throw McpErrors.InvalidToken();

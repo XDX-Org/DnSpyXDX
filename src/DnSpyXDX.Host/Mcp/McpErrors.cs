@@ -31,6 +31,8 @@ internal static class McpErrors
     };
 
     public static McpException InvalidToken() => Create("invalid_token", "The metadata token must be positive.");
+    public static McpException InvalidNode() => Create("invalid_node", "The node ID is invalid.");
+    public static McpException StaleCursor() => Create("stale_cursor", "The cursor is invalid or no longer applies to this node.");
 
     private static McpException Create(string code, string message, Exception? inner = null) =>
         inner is null ? new($"{code}: {message}") : new($"{code}: {message}", inner);

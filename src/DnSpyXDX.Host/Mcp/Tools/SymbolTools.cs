@@ -17,7 +17,7 @@ public sealed class SymbolTools(IDecompilerBackend backend, McpActivityLog activ
         CancellationToken cancellationToken = default)
     {
         var started = DateTimeOffset.UtcNow;
-        activity.Begin();
+        activity.Begin("search_symbols", query, countRequest: false);
         try
         {
             if (string.IsNullOrWhiteSpace(query)) throw new ArgumentException("A search query is required.", nameof(query));
@@ -46,7 +46,7 @@ public sealed class SymbolTools(IDecompilerBackend backend, McpActivityLog activ
     {
         var started = DateTimeOffset.UtcNow;
         var target = $"{moduleMvid:D}/0x{metadataToken:X8}";
-        activity.Begin();
+        activity.Begin("get_symbol", target, countRequest: false);
         try
         {
             if (metadataToken <= 0) throw McpErrors.InvalidToken();
@@ -70,7 +70,7 @@ public sealed class SymbolTools(IDecompilerBackend backend, McpActivityLog activ
     {
         var started = DateTimeOffset.UtcNow;
         var target = $"{moduleMvid:D}/0x{metadataToken:X8}";
-        activity.Begin();
+        activity.Begin("get_references", target, countRequest: false);
         try
         {
             if (metadataToken <= 0) throw McpErrors.InvalidToken();

@@ -31,6 +31,7 @@ internal static class Program
         builder.Services.AddSingleton<WorkspaceState>();
         builder.Services.AddSingleton<SourceViewStateStore>();
         builder.Services.AddSingleton<SourcePresentationCache>();
+        builder.Services.AddSingleton<WorkspaceAssemblyService>();
         builder.Services.AddSingleton<IFileDialogService, PhotinoFileDialogService>();
         builder.Services.AddSingleton<IWorkspaceSessionService, WorkspaceSessionService>();
         builder.Services.AddSingleton<McpServerSettings>();

@@ -16,13 +16,14 @@ The MCP implementation is a working compatibility spike, but it does not yet sat
 | `open_assembly`, `close_assembly`, `list_assemblies` | Complete |
 | `search_symbols`, `get_symbol`, `get_references` | Functional, incomplete |
 | C#, IL, and IL-with-C# resources | Complete |
-| Shared desktop/MCP workspace | Mostly complete |
-| Activity panel | Partial |
+| Assembly and symbol descriptor resources | Complete |
+| Shared desktop/MCP workspace lifecycle | Complete |
+| Activity interception and logging | Complete for current protocol surface |
 | Roots enforcement | Configured/client root intersection implemented |
 | Limits and concurrency controls | Partial |
-| Cursor pagination | Missing |
+| Cursor pagination | Implemented for `list_children` |
 | Structured MCP errors | Partial; stable coded MCP errors implemented |
-| Automated MCP tests | Started; settings/root snapshot coverage only |
+| Automated MCP tests | Integration/security suite started |
 | Host/platform compatibility verification | Partial, manual only |
 
 ## Highest-priority gaps
@@ -39,7 +40,7 @@ The MCP implementation is a working compatibility spike, but it does not yet sat
 
 Clients without roots capability remain constrained by configured roots. A roots-capable client returning no usable file roots cannot open a path. Path-based opening cannot completely eliminate filesystem time-of-check/time-of-use races; hardened deployments still need a handle-based or isolated-worker boundary.
 
-### 2. Implement every advertised resource
+### 2. Implement every advertised resource — complete
 
 Assembly descriptors advertise:
 
@@ -53,18 +54,16 @@ Symbol descriptors advertise:
 dnspyxdx://assembly/{mvid}/symbol/{token}
 ```
 
-Neither URI has a registered resource template. Only `/source/{language}` works. Add assembly-summary and symbol-descriptor resources or stop returning the unavailable links.
+Both URIs now have `application/json` resource templates. Assembly summaries include identity, platform, references, and an opaque browse-root ID. Symbol descriptors include exact identity, declaring type, and C#/IL/IL-with-C# resource links.
 
-### 3. Add resource and tree enumeration
+### 3. Add resource and tree enumeration — partial
 
-The planned `list_children` tool is missing. A host cannot browse namespaces, types, references, or embedded resources without knowing a search term.
+`list_children` now browses namespaces, types, members, references, and resource nodes through bounded pages with opaque node IDs and node-scoped cursors. Invalid or mismatched cursors return `stale_cursor`.
 
 Also missing:
 
-- assembly summary resources;
-- symbol descriptor resources;
 - embedded safe-text resources;
-- reference and resource enumeration.
+- direct embedded-resource reads.
 
 ### 4. Add operational limits
 
@@ -79,7 +78,7 @@ Still add:
 
 - endpoint-wide/per-client concurrency for every handler;
 - maximum embedded-resource size;
-- page size and cursor limits;
+- pagination for symbol search and reference results;
 - aggregate cache budget.
 
 Without these, a large or hostile assembly can consume excessive CPU, memory, or file handles.
@@ -99,11 +98,11 @@ An error occurred invoking 'open_assembly'.
 - `limit_exceeded`;
 - `invalid_language`.
 
-Cancellation continues through protocol cancellation rather than being rewritten. Cursor support must add `stale_cursor`, and coded errors still need integration tests confirming the exact wire representation and structured client consumption.
+Cancellation continues through protocol cancellation rather than being rewritten. `list_children` adds `invalid_node` and `stale_cursor`; coded errors still need broader wire-level coverage.
 
 ## Protocol-surface gaps
 
-- `list_children` is absent.
+- `list_children` is implemented; search and reference results still need cursors.
 - `search_symbols` has no cursor and scans the full workspace before truncating.
 - Search results are not explicitly ranked.
 - `get_symbol` lacks signature and visibility information.
@@ -121,45 +120,40 @@ Cancellation continues through protocol cancellation rather than being rewritten
 - The endpoint path is predictable (`/mcp`).
 - Port changes cannot restart only the MCP endpoint because there is no port control.
 
-## Activity-panel gaps
+## Activity panel and logging
 
-The panel covers endpoint status, counts, completed operations, and clearing. It does not yet show or capture:
+The panel and protocol interceptor now capture:
 
-- client name;
-- initialize and `tools/list` requests;
-- queued/running rows;
-- cancellation notifications;
-- per-row structured details;
-- logging event IDs and scopes;
-- tool activity through `Microsoft.Extensions.Logging`.
+- client name from initialization and subsequent session requests;
+- initialize, listing, tool, resource, notification, and cancellation envelopes;
+- live running rows and completed duration/state;
+- exact authorized-request counts;
+- bounded retention that evicts completed rows first;
+- scoped structured logging with event ID `4100`.
 
-The current request count covers implemented handlers rather than every MCP request.
+Richer expandable per-row details remain deferred; source, secrets, bodies, and full paths are not captured.
 
-## Workspace-integration gaps
+## Workspace integration
 
-MCP open operations notify the UI. MCP close removes tabs through `WorkspaceState`, but does not use the complete desktop unload path:
+Desktop and MCP assembly operations now use `WorkspaceAssemblyService`. Closing through either path:
 
-- active decompilations are not explicitly cancelled;
-- `SourceViewStateStore` is not cleared;
-- `SourcePresentationCache` is not cleared;
-- search selections and results can remain stale.
-
-Move workspace open/unload coordination into a shared application service used by UI and MCP.
+- notifies desktop consumers to cancel active decompilations;
+- removes tabs and history for the module;
+- clears source view state and presentation cache entries;
+- removes stale search results and selections.
 
 ## Testing status
 
-Automated coverage now verifies absolute configured roots and immutable root snapshots. The broader planned `tests/DnSpyXDX.Tests/Mcp/` integration/security suite is still missing. All 92 current tests pass, and manual HTTP testing covered the happy path, authentication, resource reads, invalid paths, and clean session deletion.
+The automated MCP suite now covers absolute/snapshotted roots, live endpoint authentication and Origin rejection, protocol initialization, activity/client capture, assembly and symbol descriptor reads, paginated tree traversal, stale cursors, stale resources after close, and shared workspace close cleanup. All 95 current tests pass. Manual HTTP testing also covered tool discovery, live assembly/search/source reads, coded errors, and clean session deletion.
 
 Still untested:
 
 - malformed JSON-RPC and negotiation failures;
-- token and Origin rejection combinations;
 - root traversal and symlinks;
 - symlink escape and path replacement races;
 - cancellation during open, search, decompilation, and resource reads;
 - endpoint restart and port conflicts;
 - open-assembly and response limits;
-- stale resources after close;
 - duplicate assemblies and MVIDs;
 - Windows behavior;
 - MCP Inspector and two production hosts;
@@ -170,13 +164,13 @@ Still untested:
 1. [x] Require absolute configured roots, resolve links, snapshot roots, and revalidate after opening.
 2. [x] Add assembly file-size, open-count, open-timeout, and concurrent-open limits.
 3. [x] Support client-provided MCP roots and intersect them with configured roots.
-4. [ ] **Partial:** Stable sanitized MCP error codes are implemented; wire-level integration coverage and cursor errors remain.
-5. [ ] Add assembly and symbol resources so every returned URI works.
-6. [ ] Implement paginated `list_children`.
-7. [ ] Extract shared workspace open/unload coordination.
-8. [ ] Add the full MCP integration and security test suite.
-9. [ ] Complete activity interception and logging.
+4. [ ] **Partial:** Stable sanitized MCP error codes and cursor errors are implemented; broader wire-level coverage remains.
+5. [x] Add assembly and symbol resources so every returned URI works.
+6. [x] Implement paginated `list_children`.
+7. [x] Extract shared workspace open/unload coordination.
+8. [x] Establish the MCP integration and security test suite; continue expanding the matrix.
+9. [x] Complete activity interception and scoped structured logging for the current protocol surface.
 10. [ ] Add configurable port and protected token persistence.
 11. [ ] Add richer analysis operations and shared indexing.
 
-Phase 0 is functionally demonstrated, but its formal exit criteria still require automated security and lifecycle coverage, Windows verification, MCP Inspector, and two real hosts. Phase 1 remains partial: configured/client root enforcement, initial assembly-open limits, and stable coded errors are implemented, while resources, enumeration, pagination, complete limits, and integration tests remain.
+Phase 0 is functionally demonstrated with initial automated security and lifecycle coverage; Windows verification, MCP Inspector, and two real hosts remain. Phase 1 is substantially implemented: exact descriptor/source resources, tree browsing, configured/client roots, initial limits, coded errors, shared lifecycle, activity interception, and integration tests are present. Embedded-resource reads, search/reference cursors, complete limits, richer symbol data, and broader adversarial coverage remain.

@@ -51,35 +51,53 @@ public sealed record McpActivityEntry(
     string? Target,
     string State,
     TimeSpan Duration,
-    string? Error = null);
+    string? Error = null,
+    Guid Id = default,
+    string? ClientName = null);
 
 public sealed class McpActivityLog(int capacity = 500)
 {
     private readonly object gate = new();
-    private readonly Queue<McpActivityEntry> entries = new();
+    private readonly List<McpActivityEntry> entries = [];
+    private readonly AsyncLocal<Stack<Guid>?> current = new();
+    private readonly AsyncLocal<string?> currentClient = new();
     private int requestCount;
     private int activeCalls;
 
     public event Action? Changed;
+    public event Action<McpActivityEntry>? Completed;
     public IReadOnlyList<McpActivityEntry> Entries { get { lock (gate) return entries.ToArray(); } }
     public int RequestCount => Volatile.Read(ref requestCount);
     public int ActiveCalls => Volatile.Read(ref activeCalls);
 
-    public void Begin()
+    public void Begin(string operation, string? target = null, string? clientName = null, bool countRequest = true)
     {
-        Interlocked.Increment(ref requestCount);
+        var id = Guid.NewGuid();
+        (current.Value ??= new()).Push(id);
+        lock (gate)
+        {
+            entries.Add(new(DateTimeOffset.UtcNow, operation, target, "running", TimeSpan.Zero, Id: id, ClientName: clientName ?? currentClient.Value));
+            Trim();
+        }
+        if (countRequest) Interlocked.Increment(ref requestCount);
         Interlocked.Increment(ref activeCalls);
         Changed?.Invoke();
     }
 
     public void Add(McpActivityEntry entry)
     {
+        McpActivityEntry completed;
         lock (gate)
         {
-            entries.Enqueue(entry);
-            while (entries.Count > capacity) entries.Dequeue();
+            var id = current.Value is { Count: > 0 } pending ? pending.Pop() : (Guid?)null;
+            var index = id is null ? -1 : entries.FindIndex(candidate => candidate.Id == id);
+            completed = entry with { Id = id ?? entry.Id, ClientName = index >= 0 ? entries[index].ClientName : entry.ClientName };
+            if (index >= 0) entries[index] = completed;
+            else entries.Add(completed);
+            Trim();
         }
         Interlocked.Decrement(ref activeCalls);
+        Completed?.Invoke(completed);
         Changed?.Invoke();
     }
 
@@ -88,5 +106,27 @@ public sealed class McpActivityLog(int capacity = 500)
         lock (gate) entries.Clear();
         Interlocked.Exchange(ref requestCount, 0);
         Changed?.Invoke();
+    }
+
+    public IDisposable UseClient(string? clientName)
+    {
+        var previous = currentClient.Value;
+        currentClient.Value = clientName;
+        return new ClientScope(() => currentClient.Value = previous);
+    }
+
+    private void Trim()
+    {
+        while (entries.Count > capacity)
+        {
+            var completed = entries.FindIndex(entry => entry.State != "running");
+            entries.RemoveAt(completed >= 0 ? completed : 0);
+        }
+    }
+
+    private sealed class ClientScope(Action dispose) : IDisposable
+    {
+        private Action? callback = dispose;
+        public void Dispose() => Interlocked.Exchange(ref callback, null)?.Invoke();
     }
 }

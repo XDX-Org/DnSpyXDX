@@ -20,11 +20,11 @@
   @if (Settings.AllowedRoots.Count == 0) {
     <div class="mcp-warning"><strong>No MCP allowed roots configured.</strong><span>Add an absolute directory in Settings before clients can use <code>open_assembly</code>. Assemblies opened in the desktop app remain available.</span></div>
   }
-  <div class="mcp-activity-head"><span>Time</span><span>Operation</span><span>Target</span><span>Status</span><span>Duration</span></div>
+  <div class="mcp-activity-head"><span>Time</span><span>Client</span><span>Operation</span><span>Target</span><span>Status</span><span>Duration</span></div>
   <div class="mcp-activity-rows">
     @if (Activity.Entries.Count == 0) { <div class="no-results">@(Server.Status == McpServerStatus.Listening ? "Waiting for MCP requests." : "Enable the MCP server in Settings to accept requests.")</div> }
     else @foreach (var entry in Activity.Entries.Reverse()) {
-      <div class="mcp-activity-row" title="@entry.Error"><time>@entry.Timestamp.ToLocalTime().ToString("HH:mm:ss")</time><span>@entry.Operation</span><span>@entry.Target</span><span class="mcp-entry-@entry.State">@entry.State</span><span>@entry.Duration.TotalMilliseconds.ToString("0") ms</span></div>
+      <div class="mcp-activity-row" title="@entry.Error"><time>@entry.Timestamp.ToLocalTime().ToString("HH:mm:ss")</time><span>@(entry.ClientName ?? "—")</span><span>@entry.Operation</span><span>@entry.Target</span><span class="mcp-entry-@entry.State">@entry.State</span><span>@(entry.State == "running" ? "—" : $"{entry.Duration.TotalMilliseconds:0} ms")</span></div>
     }
   </div>
 </div>
