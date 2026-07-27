@@ -54,15 +54,14 @@ jobs:
   publish:
     name: Publish (${{ matrix.rid }})
     needs: build-test
-    runs-on: ${{ matrix.os }}
+    # Both RIDs cross-publish from Linux: the win-x64 runtime pack and Photino's
+    # win-x64 native lib arrive as NuGet packages and the SDK embeds the icon
+    # without Windows tooling, so a Windows runner isn't needed here.
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: windows-latest
-            rid: win-x64
-          - os: ubuntu-latest
-            rid: linux-x64
+        rid: [win-x64, linux-x64]
     steps:
       - uses: actions/checkout@v7
 
