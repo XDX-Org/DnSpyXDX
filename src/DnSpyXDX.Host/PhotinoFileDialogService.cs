@@ -5,10 +5,11 @@ namespace DnSpyXDX.Host;
 
 public sealed class PhotinoFileDialogService(PhotinoWindow window) : IFileDialogService
 {
-    public Task<string?> OpenAssemblyAsync()
+    public Task<string?> OpenAssemblyAsync(string? initialDirectory = null)
     {
         var files = window.ShowOpenFile(
             "Open .NET assembly",
+            defaultPath: string.IsNullOrEmpty(initialDirectory) || !Directory.Exists(initialDirectory) ? null : initialDirectory,
             multiSelect: false,
             filters:
             [

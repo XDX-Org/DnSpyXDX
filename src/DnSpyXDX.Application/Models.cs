@@ -146,4 +146,5 @@ public sealed record UiSessionState(
     string BottomTab = "search",
     IReadOnlyList<AnalyzerRootState>? AnalyzerRoots = null,
     bool McpEnabled = false,
-    IReadOnlyList<string>? McpAllowedRoots = null);
+    IReadOnlyList<string>? McpAllowedRoots = null,
+    string LastOpenDirectory = "");

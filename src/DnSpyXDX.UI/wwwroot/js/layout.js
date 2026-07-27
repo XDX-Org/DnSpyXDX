@@ -122,6 +122,37 @@ window.dnSpyXdx.initPanelHorizontalWheel = function () {
     panel.scrollLeft += (event.deltaY || event.deltaX) * 0.5;
   }, { passive: false });
 };
+// Ctrl/Cmd+A selects every assembly and Delete unloads the current selection, but only while focus is inside
+// the assembly tree — so these never steal select-all or delete from the source view, search box, or elsewhere.
+window.dnSpyXdx.initExplorerKeys = function (dotNet) {
+  window.dnSpyXdx.explorerKeysTarget = dotNet;
+  if (window.dnSpyXdx.explorerKeysReady) return;
+  window.dnSpyXdx.explorerKeysReady = true;
+  // The tree only takes keyboard focus once a row is clicked, but dnSpy lets Ctrl+A / Delete act on the
+  // assembly list whenever the pointer is over it. Track hover so hovering the tree is enough — every
+  // mouseover recomputes whether the cursor is inside it.
+  window.addEventListener("mouseover", event => { window.dnSpyXdx.explorerHovered = !!event.target?.closest?.(".explorer-tree"); });
+  window.addEventListener("keydown", event => {
+    const target = window.dnSpyXdx.explorerKeysTarget;
+    if (!target) return;
+    const active = document.activeElement;
+    // Never steal these keys while typing in a field (e.g. the search box), even if the cursor is over the tree.
+    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable)) return;
+    if (!active?.closest?.(".explorer-tree") && !window.dnSpyXdx.explorerHovered) return;
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "a") {
+      event.preventDefault();
+      event.stopPropagation();
+      // Selecting assemblies must not also select the page text: cancel the browser's select-all and drop any
+      // selection that formed anyway.
+      window.getSelection?.()?.removeAllRanges();
+      target.invokeMethodAsync("SelectAllAssemblies");
+    } else if (event.key === "Delete" && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      target.invokeMethodAsync("UnloadSelectedAssemblies");
+    }
+  });
+};
 window.dnSpyXdx.setSourceScroll = async function (source, top, left) {
   if (!source) return;
   top = Math.max(0, top || 0);
@@ -257,6 +288,19 @@ window.dnSpyXdx.scrollHexToRow = function (viewport, row, totalRows, rowHeight) 
   const maximumRow = Math.max(0, totalRows - visibleRows);
   const ratio = Math.min(Math.max(row, 0), maximumRow) / Math.max(1, maximumRow);
   viewport.scrollTop = ratio * Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+};
+// Driven by the native drag-drop handler (which took over WebView2's drop target, so the page no longer sees
+// HTML drag events). Native fires this repeatedly with `on=true` while a file hovers; the timeout hides the
+// overlay shortly after the hover stops, and `on=false` (a drop, or leaving) clears it at once.
+window.dnSpyXdx.setDropOverlay = function (on) {
+  const body = document.body;
+  clearTimeout(window.dnSpyXdx.dropOverlayTimer);
+  if (on) {
+    body.classList.add("app-drag-over");
+    window.dnSpyXdx.dropOverlayTimer = setTimeout(() => body.classList.remove("app-drag-over"), 400);
+  } else {
+    body.classList.remove("app-drag-over");
+  }
 };
 window.dnSpyXdx.initFileDrop = function (dotNet) {
   if (window.dnSpyXdx.fileDropReady) return;

@@ -3,10 +3,16 @@ namespace DnSpyXDX.Application;
 public interface IDecompilerBackend : IAsyncDisposable
 {
     IReadOnlyList<AssemblyDescriptor> Assemblies { get; }
+    /// <summary>Raised whenever the set of open assemblies changes, including neighbors opened in the
+    /// background by on-demand reference loading. Handlers must marshal to the UI thread themselves.</summary>
+    event Action? AssembliesChanged;
     Task<AssemblyDescriptor> OpenAsync(string path, CancellationToken cancellationToken = default);
     Task<AssemblyDescriptor> OpenReferenceAsync(NodeId reference, CancellationToken cancellationToken = default);
     Task<AssemblyDescriptor> OpenAssemblyForSymbolAsync(SymbolId symbol, CancellationToken cancellationToken = default);
     Task CloseAsync(Guid sessionId);
+    /// <summary>Unloads every open assembly at once. Cheaper and non-freezing versus closing one at a time
+    /// when many are open (a whole folder): clears the set immediately and releases modules off-thread.</summary>
+    Task CloseAllAsync();
     Task<IReadOnlyList<TreeNodeDescriptor>> GetChildrenAsync(NodeId parent, CancellationToken cancellationToken = default);
     Task<ResourceDocument> GetResourceAsync(NodeId resource, CancellationToken cancellationToken = default);
     Task<DecompilerDocument> DecompileAsync(SymbolId symbol, DecompilerLanguage language, CancellationToken cancellationToken = default);
@@ -31,7 +37,7 @@ public interface IProjectExportService
 
 public interface IFileDialogService
 {
-    Task<string?> OpenAssemblyAsync();
+    Task<string?> OpenAssemblyAsync(string? initialDirectory = null);
     Task<string?> SelectExportFolderAsync();
 }
 
@@ -65,6 +71,15 @@ public sealed class RuntimeLoggingSettings
         get => Volatile.Read(ref debugEnabled) != 0;
         set => Volatile.Write(ref debugEnabled, value ? 1 : 0);
     }
+}
+
+/// <summary>Controls dnSpy-style on-demand loading of referenced assemblies. When enabled, any assembly
+/// the decompiler resolves out of a directory the workspace has already opened is promoted to its own
+/// session in the background, so cross-assembly analysis and navigation see the whole app. Framework and
+/// GAC assemblies (resolved from the shared runtime or NuGet packs) are deliberately left out.</summary>
+public sealed class NeighborLoadingSettings
+{
+    public bool AutoLoadReferencedAssemblies { get; init; }
 }
 
 public sealed class RuntimeDisplaySettings
