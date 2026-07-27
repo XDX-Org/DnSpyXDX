@@ -30,13 +30,13 @@ else
       {
         @foreach (var line in wrappedLines)
         {
-          <SourceLineView @key="line.Number" Line="line" LineHeight="LineHeight" WrapLines="true" Matches="FindSpans(line.Number)" ActiveMatchOffset="ActiveMatchOffset" FocusedLine="focusedLine" HoveredSymbol="hoveredSymbol" OnHoverSymbol="HighlightSymbol" OnNavigate="NavigateAsync" OnNavigateOffset="NavigateOffsetAsync" />
+          <SourceLineView @key="line.Number" Line="line" LineHeight="LineHeight" WrapLines="true" Matches="FindSpans(line.Number)" ActiveMatchOffset="ActiveMatchOffset" FocusedLine="focusedLine" HoveredSymbol="hoveredSymbol" OnHoverSymbol="HighlightSymbol" OnNavigate="NavigateAsync" OnNavigateOffset="NavigateOffsetAsync" OnAnalyze="OnAnalyze" />
         }
       }
       else
       {
         <Virtualize @key="model.Key" @ref="virtualizer" Context="line" ItemsProvider="LoadLinesAsync" ItemSize="LineHeight" OverscanCount="Overscan">
-          <SourceLineView @key="line.Number" Line="line" LineHeight="LineHeight" Matches="FindSpans(line.Number)" ActiveMatchOffset="ActiveMatchOffset" FocusedLine="focusedLine" HoveredSymbol="hoveredSymbol" OnHoverSymbol="HighlightSymbol" OnNavigate="NavigateAsync" OnNavigateOffset="NavigateOffsetAsync" />
+          <SourceLineView @key="line.Number" Line="line" LineHeight="LineHeight" Matches="FindSpans(line.Number)" ActiveMatchOffset="ActiveMatchOffset" FocusedLine="focusedLine" HoveredSymbol="hoveredSymbol" OnHoverSymbol="HighlightSymbol" OnNavigate="NavigateAsync" OnNavigateOffset="NavigateOffsetAsync" OnAnalyze="OnAnalyze" />
         </Virtualize>
       }
     </div>
@@ -51,6 +51,7 @@ else
   [Parameter, EditorRequired] public DecompilerDocument Document { get; set; } = null!;
   [Parameter, EditorRequired] public string TabId { get; set; } = "";
   [Parameter] public EventCallback<NavigationRequest> OnNavigate { get; set; }
+  [Parameter] public EventCallback<AnalyzeRequest> OnAnalyze { get; set; }
   [Parameter] public bool WrapLines { get; set; }
 
   private ElementReference viewport;

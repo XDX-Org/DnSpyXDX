@@ -53,6 +53,9 @@ public sealed class ProjectExportServiceTests
         public Task<SymbolId> GetDeclaringTypeAsync(SymbolId symbol, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<NodeId>> GetPathAsync(SymbolId symbol, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyList<SearchResult>> SearchAsync(string query, CancellationToken cancellationToken = default, IProgress<IReadOnlyList<SearchResult>>? progress = null) => throw new NotSupportedException();
+        public Task<IReadOnlyList<AnalyzerRelation>> GetAnalyzerRelationsAsync(SymbolId symbol, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<AnalyzerResult?> DescribeSymbolAsync(SymbolId symbol, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<AnalyzerResult>> AnalyzeAsync(SymbolId symbol, AnalyzerRelation relation, CancellationToken cancellationToken = default, IProgress<IReadOnlyList<AnalyzerResult>>? progress = null) => throw new NotSupportedException();
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }

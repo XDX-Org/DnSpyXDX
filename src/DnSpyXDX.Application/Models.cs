@@ -90,12 +90,45 @@ public sealed record DecompilerDocument(
 
 public sealed record SearchResult(SymbolId Symbol, string Name, string Kind, string AssemblyName, string Namespace, SymbolId DeclaringType, string? QualifiedName = null);
 
+/// <summary>A dnSpy-style analysis relation. <see cref="UsedBy"/> and <see cref="Uses"/> are the
+/// callers/callees pair behind the Analyzer's Used By / Uses nodes; the rest mirror dnSpy's other
+/// relation nodes and are added in later phases.</summary>
+public enum AnalyzerRelation
+{
+    UsedBy,
+    Uses,
+    DerivedTypes,
+    Overrides,
+    OverriddenBy,
+    ImplementedBy,
+    InstantiatedBy,
+    ExposedBy,
+    EventFiredBy
+}
+
+/// <summary>One row under an analyzer relation: a symbol that participates in the relation (a caller,
+/// a callee, a derived type, …). <paramref name="ILOffset"/> is the byte offset of the referencing
+/// instruction when the result came from an IL scan, so navigation can land on the exact use.</summary>
+public sealed record AnalyzerResult(
+    SymbolId Symbol,
+    string Name,
+    TreeNodeKind Kind,
+    string AssemblyName,
+    string Namespace,
+    SymbolId DeclaringType,
+    string? QualifiedName = null,
+    int? ILOffset = null);
+
 /// <summary>A request to show a symbol; <paramref name="NewTab"/> mirrors dnSpy's Ctrl+click.</summary>
 public readonly record struct NavigationRequest(SymbolId Symbol, bool NewTab, TreeNodeKind? Kind = null, string? DisplayName = null);
 
 public sealed record ExportRequest(IReadOnlyList<Guid> SessionIds, string Destination, bool ValidateBuild = false);
 public sealed record ExportProgress(int Completed, int Total, string Message);
 public sealed record ExportReport(bool Success, string Destination, IReadOnlyList<string> Projects, IReadOnlyList<string> Warnings, string? BuildOutput = null);
+
+/// <summary>A persisted analyzer root: the symbol the user chose to analyze, kept by module MVID and
+/// token so it can be rehydrated after the assembly is reopened in a later session.</summary>
+public sealed record AnalyzerRootState(Guid ModuleMvid, int MetadataToken, string Name, TreeNodeKind Kind);
 
 public sealed record UiSessionState(
     double ExplorerWidth = 300,
@@ -107,6 +140,8 @@ public sealed record UiSessionState(
     string ThemeId = "default",
     bool DebugLogging = false,
     DecompilerLanguage Language = DecompilerLanguage.CSharp,
-    bool ShowMetadataTokens = true,
+    bool ShowMetadataTokens = false,
     bool WrapLines = false,
-    string CodeFontFamily = "");
+    string CodeFontFamily = "",
+    string BottomTab = "search",
+    IReadOnlyList<AnalyzerRootState>? AnalyzerRoots = null);

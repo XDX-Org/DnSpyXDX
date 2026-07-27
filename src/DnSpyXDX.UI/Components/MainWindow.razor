@@ -33,7 +33,7 @@
       <button class="toolbar-icon" title="Back (Alt+Left)" aria-label="Back" disabled="@(Workspace.ActiveTab?.CanGoBack != true)" @onclick="() => NavigateHistory(false)">←</button>
       <button class="toolbar-icon" title="Forward (Alt+Right)" aria-label="Forward" disabled="@(Workspace.ActiveTab?.CanGoForward != true)" @onclick="() => NavigateHistory(true)">→</button>
     </div>
-    <button class="toolbar-icon search-toolbar-button @(searchOpen ? "active" : null)" title="@(searchOpen ? "Close search" : "Open search")" aria-label="@(searchOpen ? "Close search" : "Open search")" aria-pressed="@searchOpen" disabled="@(Backend.Assemblies.Count == 0)" @onclick="ToggleSearchPanel">
+    <button class="toolbar-icon search-toolbar-button @(bottomOpen && bottomTab == "search" ? "active" : null)" title="@(bottomOpen && bottomTab == "search" ? "Close search" : "Open search")" aria-label="@(bottomOpen && bottomTab == "search" ? "Close search" : "Open search")" aria-pressed="@(bottomOpen && bottomTab == "search")" disabled="@(Backend.Assemblies.Count == 0)" @onclick="ToggleSearchPanel">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m15.5 15.5 5 5"></path></svg>
     </button>
     <label class="language-selector"><span>Language</span><select value="@language" @onchange="LanguageChangedAsync"><option value="@DecompilerLanguage.CSharp">C#</option><option value="@DecompilerLanguage.IL">IL</option><option value="@DecompilerLanguage.ILWithCSharp">IL with C#</option><option value="@DecompilerLanguage.Hex">Hex</option></select></label>
@@ -63,22 +63,32 @@
         else if (Workspace.ActiveTab is { Error: not null } failed) { <div class="decompiling-panel error"><strong>Decompilation failed</strong><small>@failed.Error</small></div> }
         else if (Workspace.ActiveTab is { Document.Resource: { } resource }) { <ResourceView Resource="resource" WrapLines="wrapLines" /> }
         else if (Workspace.ActiveTab is { Document.Language: "hex", Document.Binary: { } binary } hex) { <HexView Data="binary" SelectionOffset="hex.Document.BinarySelectionOffset" SelectionLength="hex.Document.BinarySelectionLength" Regions="hex.Document.BinaryRegions ?? []" /> }
-        else if (Workspace.ActiveTab is { } active) { <SourceView TabId="active.Id" Document="active.Document" WrapLines="wrapLines" OnNavigate="NavigateFromSourceAsync" /> }
+        else if (Workspace.ActiveTab is { } active) { <SourceView TabId="active.Id" Document="active.Document" WrapLines="wrapLines" OnNavigate="NavigateFromSourceAsync" OnAnalyze="OpenSourceAnalyzeMenu" /> }
       </div>
-      @if (searchOpen) {
-        <section class="search-panel" @ref="searchPanel" style="height:@($"{searchPanelHeight}px")">
-          <div class="search-resizer" title="Drag to resize search results"></div>
-          <header><strong>Search</strong><input @ref="searchInput" @bind="query" @bind:event="oninput" @bind:after="QueueSearch" @onkeydown="SearchKey" placeholder="Type or member name…" /><select @bind="searchKind" @bind:after="SearchFilterChanged" title="Member type"><option value="All">All members</option><option value="Type">Types</option><option value="Method">Methods</option><option value="Field">Fields</option><option value="Property">Properties</option><option value="Event">Events</option></select><select @bind="searchScope" @bind:after="SearchFilterChanged" title="Assembly scope"><option value="All">All assemblies</option><option value="Selected" disabled="@(SelectedAssemblyMvid is null)">Selected assembly</option></select><button class="run-search" @onclick="SearchAsync">Search</button><small>@results.Count result@(results.Count == 1 ? "" : "s")</small><button class="close-search" title="Close search" @onclick="CloseSearch">×</button></header>
-          <div class="search-results-header" role="row">
-            <span role="columnheader">Type</span><span role="columnheader">Name</span><span role="columnheader">Assembly</span>
+      @if (bottomOpen) {
+        <section class="bottom-panel" @ref="searchPanel" style="height:@($"{searchPanelHeight}px")">
+          <div class="search-resizer" title="Drag to resize the panel"></div>
+          <div class="bottom-tabs" role="tablist">
+            <button class="bottom-tab @(bottomTab == "search" ? "active" : null)" role="tab" aria-selected="@(bottomTab == "search")" @onclick='() => SwitchBottomTab("search")'>Search</button>
+            <button class="bottom-tab @(bottomTab == "analyzer" ? "active" : null)" role="tab" aria-selected="@(bottomTab == "analyzer")" @onclick='() => SwitchBottomTab("analyzer")'>Analyzer</button>
+            <button class="bottom-close" title="Close panel" aria-label="Close panel" @onclick="CloseBottom">×</button>
           </div>
-          <div class="search-results">
-            @if (results.Count == 0) { <div class="no-results">@(string.IsNullOrWhiteSpace(query) ? "Type a name to search across open assemblies." : "No matching types or members.")</div> }
-            else { <Virtualize Items="results" Context="result" ItemSize="28" OverscanCount="10">
-              <button @key="result.Symbol" class="search-result" @onclick="e => OpenSearchResultAsync(result, e.CtrlKey)">
-                <span class="result-kind result-@result.Kind.ToLowerInvariant()">@result.Kind</span><span class="result-name">@(result.QualifiedName ?? result.Name)</span><span class="result-assembly">@result.AssemblyName</span>
-              </button>
-            </Virtualize> }
+          <div class="search-panel search-embedded @(bottomTab == "search" ? null : "panel-hidden")">
+            <header><input @ref="searchInput" @bind="query" @bind:event="oninput" @bind:after="QueueSearch" @onkeydown="SearchKey" placeholder="Type or member name…" /><select @bind="searchKind" @bind:after="SearchFilterChanged" title="Member type"><option value="All">All members</option><option value="Type">Types</option><option value="Method">Methods</option><option value="Field">Fields</option><option value="Property">Properties</option><option value="Event">Events</option></select><select @bind="searchScope" @bind:after="SearchFilterChanged" title="Assembly scope"><option value="All">All assemblies</option><option value="Selected" disabled="@(SelectedAssemblyMvid is null)">Selected assembly</option></select><button class="run-search" @onclick="SearchAsync">Search</button><small>@results.Count result@(results.Count == 1 ? "" : "s")</small></header>
+            <div class="search-results-header" role="row">
+              <span role="columnheader">Type</span><span role="columnheader">Name</span><span role="columnheader">Assembly</span>
+            </div>
+            <div class="search-results">
+              @if (results.Count == 0) { <div class="no-results">@(string.IsNullOrWhiteSpace(query) ? "Type a name to search across open assemblies." : "No matching types or members.")</div> }
+              else { <Virtualize Items="results" Context="result" ItemSize="28" OverscanCount="10">
+                <button @key="result.Symbol" class="search-result" @onclick="e => OpenSearchResultAsync(result, e.CtrlKey)">
+                  <span class="result-kind result-@result.Kind.ToLowerInvariant()">@result.Kind</span><span class="result-name">@(result.QualifiedName ?? result.Name)</span><span class="result-assembly">@result.AssemblyName</span>
+                </button>
+              </Virtualize> }
+            </div>
+          </div>
+          <div class="analyzer-body @(bottomTab == "analyzer" ? null : "panel-hidden")">
+            <AnalyzerView @ref="analyzerView" OnNavigate="NavigateFromSourceAsync" InitialRoots="analyzerRoots" OnRootsChanged="AnalyzerRootsChanged" />
           </div>
         </section>
       }
@@ -91,6 +101,14 @@
     <div class="assembly-context-menu" style="--context-x:@(contextMenuX)px;--context-y:@(contextMenuY)px" @onclick:stopPropagation @oncontextmenu:preventDefault>
       <div class="context-menu-identity" title="@contextAssembly.Path"><strong>@contextAssembly.Name</strong><small>@Path.GetDirectoryName(contextAssembly.Path)</small></div>
       <button disabled="@Workspace.IsBusy" @onclick="UnloadContextAssemblyAsync"><span>Unload assembly</span></button>
+    </div>
+  }
+  @if (contextSymbol is { } analyzeSymbol)
+  {
+    <div class="context-menu-dismiss" @onclick="CloseSymbolContextMenu" @oncontextmenu:preventDefault></div>
+    <div class="assembly-context-menu" style="--context-x:@(contextMenuX)px;--context-y:@(contextMenuY)px" @onclick:stopPropagation @oncontextmenu:preventDefault>
+      <div class="context-menu-identity"><strong>@contextSymbolName</strong><small>@contextSymbolKind</small></div>
+      <button @onclick="() => AnalyzeSymbolAsync(analyzeSymbol)"><span>Analyze</span></button>
     </div>
   }
   @if (settingsOpen)
@@ -122,7 +140,8 @@
   private bool restoring;
   private ICollection<SearchResult> results = Array.Empty<SearchResult>();
   private IReadOnlyList<SearchResult> searchMatches = [];
-  private bool searchOpen;
+  private bool bottomOpen;
+  private string bottomTab = "search";
   private string searchKind = "All";
   private string searchScope = "All";
   private bool menuOpen;
@@ -140,7 +159,7 @@
   private int zoomPercent = 100;
   private string themeId = Themes.DefaultId;
   private bool debugLogging;
-  private bool showMetadataTokens = true;
+  private bool showMetadataTokens = false;
   private bool wrapLines;
   private string codeFontFamily = "DejaVu Sans Mono";
   private string[] systemFonts = [];
@@ -151,6 +170,11 @@
     .Distinct(StringComparer.OrdinalIgnoreCase);
   private DecompilerLanguage language = DecompilerLanguage.CSharp;
   private AssemblyDescriptor? contextAssembly;
+  private SymbolId? contextSymbol;
+  private string contextSymbolName = "";
+  private TreeNodeKind contextSymbolKind;
+  private AnalyzerView? analyzerView;
+  private List<AnalyzerRootState> analyzerRoots = [];
   private int contextMenuX;
   private int contextMenuY;
   private DotNetObjectReference<MainWindow>? selfReference;
@@ -166,7 +190,9 @@
       var ui = Session.UiState;
       explorerWidth = Math.Clamp(ui.ExplorerWidth, 190, 1200);
       searchPanelHeight = Math.Clamp(ui.SearchPanelHeight, 120, 900);
-      searchOpen = ui.SearchOpen;
+      bottomOpen = ui.SearchOpen;
+      bottomTab = ui.BottomTab is "search" or "analyzer" ? ui.BottomTab : "search";
+      analyzerRoots = ui.AnalyzerRoots?.ToList() ?? [];
       searchKind = ui.SearchKind;
       searchScope = ui.SearchScope;
       zoomPercent = ui.ZoomPercent <= 0 ? 100 : Math.Clamp(ui.ZoomPercent, MinimumZoom, MaximumZoom);
@@ -203,7 +229,7 @@
         if (restoredFromStorage) { Session.UiState = CaptureUiState(); ScheduleSave(); StateHasChanged(); }
         if (restoring && !sessionRestoreStarted) { sessionRestoreStarted = true; _ = RestoreWorkspaceAsync(); }
       }
-      if (searchOpen) await JS.InvokeVoidAsync("dnSpyXdx.initSearchResize", searchPanel, selfReference);
+      if (bottomOpen) await JS.InvokeVoidAsync("dnSpyXdx.initSearchResize", searchPanel, selfReference);
       if (focusSearch) { focusSearch = false; await searchInput.FocusAsync(); }
     }
     catch (Exception ex) { uiInitializationFailed = true; Workspace.SetBusy(false, $"UI initialization warning: {ex.Message}"); }
@@ -234,7 +260,8 @@
     }
   }
   private void ScheduleSave() { saveDelay?.Cancel(); saveDelay?.Dispose(); saveDelay = new CancellationTokenSource(); var token = saveDelay.Token; _ = SaveAfterDelayAsync(token); }
-  private UiSessionState CaptureUiState() => new(explorerWidth, searchPanelHeight, searchOpen, searchKind, searchScope, zoomPercent, themeId, debugLogging, language, showMetadataTokens, wrapLines, codeFontFamily);
+  private UiSessionState CaptureUiState() => new(explorerWidth, searchPanelHeight, bottomOpen, searchKind, searchScope, zoomPercent, themeId, debugLogging, language, showMetadataTokens, wrapLines, codeFontFamily, bottomTab, analyzerRoots);
+  private void AnalyzerRootsChanged(IReadOnlyList<AnalyzerRootState> updated) { analyzerRoots = updated.ToList(); ScheduleSave(); }
   private async Task SaveAfterDelayAsync(CancellationToken token) { try { await Task.Delay(350, token); Session.UiState = CaptureUiState(); await Session.SaveAsync(token); } catch (OperationCanceledException) { } }
   private async Task OpenAsync() { var path = await Dialogs.OpenAssemblyAsync(); if (path is null) return; Workspace.SetBusy(true, "Opening assembly…"); try { await Backend.OpenAsync(path); Workspace.SetBusy(false, $"Opened {Path.GetFileName(path)}"); } catch (Exception ex) { Workspace.SetBusy(false, ex.Message); } }
   private void ToggleMenu() => menuOpen = !menuOpen;
@@ -250,9 +277,11 @@
   }
   private async Task OpenFromMenuAsync() { menuOpen = false; await OpenAsync(); }
   private async Task ExportFromMenuAsync() { menuOpen = false; await ExportAsync(); }
-  private void OpenSearchPanel() { menuOpen = false; searchOpen = true; focusSearch = true; ScheduleSave(); StateHasChanged(); }
-  private void ToggleSearchPanel() { if (searchOpen) CloseSearch(); else OpenSearchPanel(); }
-  private async Task UnloadAllAsync() { menuOpen = false; CancelAllDecompilations(); Workspace.SetBusy(true, "Unloading assemblies…"); foreach (var assembly in Backend.Assemblies.ToArray()) await Backend.CloseAsync(assembly.SessionId); Workspace.Clear(); SourceViewStates.Clear(); SourceCache.Clear(); searchMatches = []; results = []; query = ""; searchOpen = false; selectedSymbol = null; selectedNode = null; revealedPath = new HashSet<NodeId>(); Workspace.SetBusy(false, "All assemblies unloaded"); }
+  private void OpenSearchPanel() { menuOpen = false; bottomOpen = true; bottomTab = "search"; focusSearch = true; ScheduleSave(); StateHasChanged(); }
+  private void ToggleSearchPanel() { if (bottomOpen && bottomTab == "search") CloseBottom(); else OpenSearchPanel(); }
+  private void SwitchBottomTab(string tab) { if (tab == "search") { OpenSearchPanel(); return; } bottomTab = tab; bottomOpen = true; ScheduleSave(); StateHasChanged(); }
+  private void CloseBottom() { bottomOpen = false; ScheduleSave(); StateHasChanged(); }
+  private async Task UnloadAllAsync() { menuOpen = false; CancelAllDecompilations(); Workspace.SetBusy(true, "Unloading assemblies…"); foreach (var assembly in Backend.Assemblies.ToArray()) await Backend.CloseAsync(assembly.SessionId); Workspace.Clear(); SourceViewStates.Clear(); SourceCache.Clear(); searchMatches = []; results = []; query = ""; bottomOpen = false; selectedSymbol = null; selectedNode = null; revealedPath = new HashSet<NodeId>(); Workspace.SetBusy(false, "All assemblies unloaded"); }
   private void OpenAssemblyContextMenu(MouseEventArgs e, AssemblyDescriptor assembly)
   {
     menuOpen = false;
@@ -260,12 +289,49 @@
     contextMenuX = (int)Math.Round(e.ClientX);
     contextMenuY = (int)Math.Round(e.ClientY);
   }
-  private void OpenTreeContextMenu((MouseEventArgs Event, NodeId Node) request)
+  private void OpenTreeContextMenu((MouseEventArgs Event, TreeNodeDescriptor Node) request)
   {
-    var assembly = Backend.Assemblies.FirstOrDefault(candidate => candidate.SessionId == request.Node.SessionId);
-    if (assembly is not null) OpenAssemblyContextMenu(request.Event, assembly);
+    if (request.Node.Kind == TreeNodeKind.Assembly)
+    {
+      var assembly = Backend.Assemblies.FirstOrDefault(candidate => candidate.SessionId == request.Node.Id.SessionId);
+      if (assembly is not null) OpenAssemblyContextMenu(request.Event, assembly);
+      return;
+    }
+    if (request.Node.Symbol is not { } symbol || !CanAnalyze(request.Node.Kind)) return;
+    menuOpen = false;
+    contextAssembly = null;
+    contextSymbol = symbol;
+    contextSymbolName = request.Node.Name;
+    contextSymbolKind = request.Node.Kind;
+    contextMenuX = (int)Math.Round(request.Event.ClientX);
+    contextMenuY = (int)Math.Round(request.Event.ClientY);
   }
+  // Types and every member kind can be analyzed; groups, namespaces, and references cannot.
+  private static bool CanAnalyze(TreeNodeKind kind) => kind is TreeNodeKind.Type or TreeNodeKind.Method or TreeNodeKind.Constructor or TreeNodeKind.Field or TreeNodeKind.Property or TreeNodeKind.Event;
   private void CloseAssemblyContextMenu() => contextAssembly = null;
+  private void CloseSymbolContextMenu() => contextSymbol = null;
+  private void OpenSourceAnalyzeMenu(AnalyzeRequest request)
+  {
+    if (!CanAnalyze(request.Kind)) return;
+    menuOpen = false;
+    contextAssembly = null;
+    contextSymbol = request.Symbol;
+    contextSymbolName = request.Name;
+    contextSymbolKind = request.Kind;
+    contextMenuX = (int)Math.Round(request.ClientX);
+    contextMenuY = (int)Math.Round(request.ClientY);
+  }
+  private async Task AnalyzeSymbolAsync(SymbolId symbol)
+  {
+    var name = contextSymbolName;
+    var kind = contextSymbolKind;
+    contextSymbol = null;
+    bottomOpen = true;
+    bottomTab = "analyzer";
+    ScheduleSave();
+    StateHasChanged();
+    if (analyzerView is not null) await analyzerView.AnalyzeAsync(symbol, name, kind);
+  }
   private async Task UnloadContextAssemblyAsync()
   {
     if (contextAssembly is not { } assembly || Workspace.IsBusy) return;
@@ -464,14 +530,14 @@
       if (token.IsCancellationRequested) return;
       searchMatches = found;
       ApplySearchFilters(searchedQuery);
-      searchOpen = true;
+      bottomOpen = true;
       StateHasChanged();
     });
     var completed = await Backend.SearchAsync(searchedQuery, token, progress);
     token.ThrowIfCancellationRequested();
     searchMatches = completed;
     ApplySearchFilters(searchedQuery);
-    searchOpen = true;
+    bottomOpen = true;
     StateHasChanged();
   }
   private void SearchFilterChanged()
@@ -494,7 +560,7 @@
     result.QualifiedName?.Equals(query, StringComparison.OrdinalIgnoreCase) == true ? 0 :
     result.Name.StartsWith(query, StringComparison.OrdinalIgnoreCase) ? 1 :
     result.QualifiedName?.StartsWith(query, StringComparison.OrdinalIgnoreCase) == true ? 1 : 2;
-  private void CloseSearch() { searchOpen = false; ScheduleSave(); StateHasChanged(); }
+  private void CloseSearch() { bottomOpen = false; ScheduleSave(); StateHasChanged(); }
   private async Task DebugLoggingChanged(ChangeEventArgs e)
   {
     debugLogging = e.Value is true;

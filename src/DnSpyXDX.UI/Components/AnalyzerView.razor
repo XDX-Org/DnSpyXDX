@@ -1,0 +1,234 @@
+@inject IDecompilerBackend Backend
+
+<div class="analyzer-tree">
+  @if (roots.Count == 0)
+  {
+    <div class="empty">Right-click a type or member in the tree and choose <strong>Analyze</strong> to see what uses it.</div>
+  }
+  else
+  {
+    <Virtualize Items="visible" Context="item" ItemSize="22" OverscanCount="12">
+      <div class="tree-row analyzer-row" style="--depth:@item.Depth" @oncontextmenu="e => OpenMenu(item, e)" @oncontextmenu:preventDefault>
+        <span class="chevron" role="button" @onclick="() => ToggleAsync(item)">@(item.CanExpand ? (item.Expanded ? "▾" : "▸") : "")</span>
+        @if (item.IsCategory)
+        {
+          <span class="node-icon analyzer-category">@(item.Loading ? "…" : "⌕")</span><span class="analyzer-category-label">@item.Label</span>@if (item.Loaded && !item.Loading) { <small>@item.Children.Count</small> }
+        }
+        else
+        {
+          <button class="analyzer-symbol" @onclick="() => NavigateAsync(item)">
+            <span class="node-icon @(item.Kind?.ToString().ToLowerInvariant())">@Icon(item.Kind)</span><span class="meta-@(item.Kind?.ToString().ToLowerInvariant()) analyzer-name">@item.Label</span><small>@item.Detail</small>
+          </button>
+          @if (item.IsRoot) { <button class="analyzer-remove" title="Remove from analyzer" @onclick="() => RemoveRoot(item)">×</button> }
+        }
+      </div>
+    </Virtualize>
+  }
+</div>
+@if (menuNode is { } menu)
+{
+  <div class="context-menu-dismiss" @onclick="CloseMenu" @oncontextmenu:preventDefault @oncontextmenu:stopPropagation></div>
+  <div class="assembly-context-menu" style="--context-x:@(menuX)px;--context-y:@(menuY)px" @onclick:stopPropagation @oncontextmenu:preventDefault>
+    @if (!menu.IsRoot && menu.Symbol.MetadataToken != 0 && menu.Kind is not null)
+    {
+      <button @onclick="() => AnalyzeResult(menu)"><span>Analyze</span></button>
+    }
+    @if (menu.IsRoot)
+    {
+      <button @onclick="() => RemoveRoot(menu)"><span>Remove</span></button>
+    }
+    <button @onclick="RemoveAll"><span>Remove All Analyzers</span></button>
+  </div>
+}
+
+@code {
+  [Parameter] public EventCallback<NavigationRequest> OnNavigate { get; set; }
+  [Parameter] public IReadOnlyList<AnalyzerRootState>? InitialRoots { get; set; }
+  [Parameter] public EventCallback<IReadOnlyList<AnalyzerRootState>> OnRootsChanged { get; set; }
+
+  private readonly List<Node> roots = [];
+  private List<Node> visible = [];
+
+  protected override void OnInitialized()
+  {
+    // Rehydrate the roots saved from a previous session (collapsed; the user re-expands to rescan).
+    foreach (var state in InitialRoots ?? [])
+      roots.Add(new Node { Symbol = new SymbolId(state.ModuleMvid, state.MetadataToken), Label = state.Name, Kind = state.Kind, Depth = 0, IsRoot = true, CanExpand = true });
+    Rebuild();
+  }
+
+  public async Task AnalyzeAsync(SymbolId symbol, string name, TreeNodeKind kind)
+  {
+    // Re-analyzing the same symbol just re-selects its existing root rather than stacking duplicates.
+    var existing = roots.FirstOrDefault(root => root.Symbol == symbol);
+    if (existing is null)
+    {
+      // Prefer the backend's canonical name so the root reads the same as its results (and never the
+      // "Go to …" tooltip that a source-view reference carries as its symbol name).
+      var described = await Backend.DescribeSymbolAsync(symbol);
+      var node = new Node { Symbol = symbol, Label = described?.QualifiedName ?? described?.Name ?? name, Kind = described?.Kind ?? kind, Depth = 0, IsRoot = true, CanExpand = true };
+      roots.Add(node);
+      await ReportRootsAsync();
+      Rebuild();
+      await ToggleAsync(node);
+    }
+    else
+    {
+      Rebuild();
+      if (!existing.Expanded) await ToggleAsync(existing);
+      else StateHasChanged();
+    }
+  }
+
+  public bool HasRoots => roots.Count > 0;
+
+  private Task ReportRootsAsync() => OnRootsChanged.InvokeAsync(
+    roots.Select(root => new AnalyzerRootState(root.Symbol.ModuleMvid, root.Symbol.MetadataToken, root.Label, root.Kind ?? TreeNodeKind.Type)).ToArray());
+
+  private async Task ToggleAsync(Node node)
+  {
+    if (!node.CanExpand) return;
+    if (node.Expanded) { node.Expanded = false; Rebuild(); return; }
+    if (!node.Loaded) await LoadChildrenAsync(node);
+    node.Expanded = true;
+    Rebuild();
+  }
+
+  private async Task LoadChildrenAsync(Node node)
+  {
+    node.Loading = true;
+    Rebuild();
+    try
+    {
+      if (node.IsCategory)
+      {
+        var results = await Backend.AnalyzeAsync(node.Symbol, node.Relation!.Value);
+        foreach (var result in results) node.Children.Add(ResultNode(result, node.Depth + 1));
+      }
+      else
+      {
+        var relations = await Backend.GetAnalyzerRelationsAsync(node.Symbol);
+        foreach (var relation in relations) node.Children.Add(CategoryNode(node.Symbol, relation, node.Depth + 1));
+      }
+    }
+    catch (Exception ex) { node.Children.Add(new Node { Label = ex.Message, Depth = node.Depth + 1, Kind = null }); }
+    node.Loaded = true;
+    node.Loading = false;
+  }
+
+  private static Node CategoryNode(SymbolId parent, AnalyzerRelation relation, int depth) => new()
+  {
+    Symbol = parent,
+    Relation = relation,
+    Label = Label(relation),
+    IsCategory = true,
+    CanExpand = true,
+    Depth = depth
+  };
+
+  private static Node ResultNode(AnalyzerResult result, int depth) => new()
+  {
+    Symbol = result.Symbol,
+    Label = result.QualifiedName ?? result.Name,
+    Detail = result.AssemblyName,
+    Kind = result.Kind,
+    Depth = depth,
+    // Only kinds the analyzer can drill into again get a chevron; the rest are leaves.
+    CanExpand = result.Kind is TreeNodeKind.Method or TreeNodeKind.Constructor or TreeNodeKind.Field or TreeNodeKind.Type or TreeNodeKind.Property or TreeNodeKind.Event
+  };
+
+  private Task NavigateAsync(Node node) =>
+    node.Symbol is { } symbol && node.Kind is not null ? OnNavigate.InvokeAsync(new NavigationRequest(symbol, false, node.Kind, node.Label)) : Task.CompletedTask;
+
+  private Node? menuNode;
+  private int menuX;
+  private int menuY;
+
+  private void OpenMenu(Node node, MouseEventArgs e)
+  {
+    menuNode = node;
+    menuX = (int)Math.Round(e.ClientX);
+    menuY = (int)Math.Round(e.ClientY);
+  }
+
+  private void CloseMenu() => menuNode = null;
+
+  private async Task RemoveRoot(Node node)
+  {
+    menuNode = null;
+    roots.Remove(node);
+    await ReportRootsAsync();
+    Rebuild();
+  }
+
+  private async Task RemoveAll()
+  {
+    menuNode = null;
+    roots.Clear();
+    await ReportRootsAsync();
+    Rebuild();
+  }
+
+  // Promote a result node into its own top-level analyzer root, mirroring dnSpy's "Analyze".
+  private async Task AnalyzeResult(Node node)
+  {
+    menuNode = null;
+    if (node.Symbol.MetadataToken != 0 && node.Kind is { } kind) await AnalyzeAsync(node.Symbol, node.Label, kind);
+  }
+
+  private void Rebuild()
+  {
+    var flattened = new List<Node>();
+    foreach (var root in roots) Append(root, flattened);
+    visible = flattened;
+    StateHasChanged();
+  }
+
+  private static void Append(Node node, List<Node> flattened)
+  {
+    flattened.Add(node);
+    if (!node.Expanded) return;
+    foreach (var child in node.Children) Append(child, flattened);
+  }
+
+  private static string Label(AnalyzerRelation relation) => relation switch
+  {
+    AnalyzerRelation.UsedBy => "Used By",
+    AnalyzerRelation.Uses => "Uses",
+    AnalyzerRelation.DerivedTypes => "Derived Types",
+    AnalyzerRelation.Overrides => "Overrides",
+    AnalyzerRelation.OverriddenBy => "Overridden By",
+    AnalyzerRelation.ImplementedBy => "Implemented By",
+    AnalyzerRelation.InstantiatedBy => "Instantiated By",
+    AnalyzerRelation.ExposedBy => "Exposed By",
+    AnalyzerRelation.EventFiredBy => "Event Fired By",
+    _ => relation.ToString()
+  };
+
+  private static string Icon(TreeNodeKind? kind) => kind switch
+  {
+    TreeNodeKind.Type => "C",
+    TreeNodeKind.Method or TreeNodeKind.Constructor => "M",
+    TreeNodeKind.Property => "P",
+    TreeNodeKind.Field => "F",
+    TreeNodeKind.Event => "E",
+    _ => "•"
+  };
+
+  private sealed class Node
+  {
+    public SymbolId Symbol { get; set; }
+    public AnalyzerRelation? Relation { get; set; }
+    public string Label { get; set; } = "";
+    public string? Detail { get; set; }
+    public TreeNodeKind? Kind { get; set; }
+    public int Depth { get; set; }
+    public bool IsRoot { get; set; }
+    public bool IsCategory { get; set; }
+    public bool CanExpand { get; set; }
+    public bool Expanded { get; set; }
+    public bool Loaded { get; set; }
+    public bool Loading { get; set; }
+    public List<Node> Children { get; } = [];
+  }
+}
