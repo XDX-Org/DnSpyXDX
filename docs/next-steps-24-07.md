@@ -126,12 +126,11 @@ Release follow-up:
 
 ## Ordered backlog after language selection
 
-1. Exact semantic navigation.
-2. Indexed workspace search.
-3. Reliable multi-project export and project-reference remapping.
-4. Hardening: input limits, adversarial fixtures, cancellation, recovery, and cache limits.
-5. Release automation, packaging, and licenses.
-6. Decompilation performance measurement and optimization.
+1. Indexed workspace search.
+2. Reliable multi-project export and project-reference remapping.
+3. Hardening: input limits, adversarial fixtures, cancellation, recovery, and cache limits.
+4. Release automation, packaging, and licenses.
+5. Decompilation performance measurement and optimization.
 
 The deferred performance phase should still separate cold/warm assembly resolution, ILSpy transforms, source generation, link construction, presentation indexing/tokenization, and first viewport render. Optimize only from measured evidence.
 

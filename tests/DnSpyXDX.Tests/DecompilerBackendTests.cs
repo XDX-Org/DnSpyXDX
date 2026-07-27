@@ -126,6 +126,32 @@ public sealed class DecompilerBackendTests
     }
 
     [Fact]
+    public async Task Decompiled_documents_link_exact_symbols_in_other_open_assemblies()
+    {
+        await using var backend = new DecompilerBackend();
+        var tests = await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
+        var testType = Assert.Single(await backend.SearchAsync(nameof(CrossAssemblyReferenceSample)), result =>
+            result.Kind == "Type" && result.Name == nameof(CrossAssemblyReferenceSample) && result.Symbol.ModuleMvid == tests.ModuleMvid);
+
+        var closedDocument = await backend.DecompileAsync(testType.Symbol, DecompilerLanguage.CSharp);
+        var closedReference = Assert.Single(closedDocument.References, reference =>
+            closedDocument.Text.AsSpan(reference.StartOffset, reference.Length).SequenceEqual(nameof(DecompilerBackend)));
+        Assert.NotNull(closedReference.LocalTarget);
+        Assert.Equal("DnSpyXDX.Decompilation", closedReference.ExternalAssembly);
+
+        var dependency = await backend.OpenAssemblyForSymbolAsync(closedReference.LocalTarget!.Value);
+        var openDocument = await backend.DecompileAsync(testType.Symbol, DecompilerLanguage.CSharp);
+        var openReference = Assert.Single(openDocument.References, reference =>
+            openDocument.Text.AsSpan(reference.StartOffset, reference.Length).SequenceEqual(nameof(DecompilerBackend)));
+        Assert.Equal(dependency.ModuleMvid, openReference.LocalTarget?.ModuleMvid);
+        Assert.Equal(openReference.LocalTarget, await backend.GetDeclaringTypeAsync(openReference.LocalTarget!.Value));
+
+        await backend.CloseAsync(dependency.SessionId);
+        var reopened = await backend.OpenAssemblyForSymbolAsync(openReference.LocalTarget!.Value);
+        Assert.Equal(dependency.ModuleMvid, reopened.ModuleMvid);
+    }
+
+    [Fact]
     public async Task Decompiles_csharp_il_sequence_point_annotated_il_and_hex_independently()
     {
         await using var backend = new DecompilerBackend();
@@ -566,6 +592,11 @@ public sealed class ExtensionConsumer
         member.SampleMethod();
         return member.Doubled();
     }
+}
+
+public sealed class CrossAssemblyReferenceSample
+{
+    public DecompilerBackend? Backend { get; set; }
 }
 
 public delegate int SampleDelegate(int value);

@@ -19,11 +19,11 @@ namespace DnSpyXDX.Decompilation;
 /// </summary>
 internal static class SemanticHighlighter
 {
-    public static (string Text, IReadOnlyList<ClassifiedSpan> Spans, IReadOnlyList<ReferenceSpan> References) Highlight(SyntaxTree tree, CSharpFormattingOptions formatting, Guid moduleMvid)
+    public static (string Text, IReadOnlyList<ClassifiedSpan> Spans, IReadOnlyList<ReferenceSpan> References) Highlight(SyntaxTree tree, CSharpFormattingOptions formatting)
     {
         var buffer = new StringWriter { NewLine = "\n" };
         var inner = new TextWriterTokenWriter(buffer) { IndentationString = "\t" };
-        var writer = new HighlightingTokenWriter(inner, buffer.GetStringBuilder(), moduleMvid);
+        var writer = new HighlightingTokenWriter(inner, buffer.GetStringBuilder());
         tree.AcceptVisitor(new CSharpOutputVisitor(writer, formatting));
         return (buffer.ToString(), writer.Spans, writer.References);
     }
@@ -31,7 +31,7 @@ internal static class SemanticHighlighter
     private static readonly HashSet<string> ControlKeywords =
         ["break", "case", "catch", "continue", "do", "else", "finally", "for", "foreach", "goto", "if", "in", "lock", "return", "switch", "throw", "try", "when", "while", "yield"];
 
-    private sealed class HighlightingTokenWriter(TextWriterTokenWriter inner, StringBuilder buffer, Guid moduleMvid) : DecoratingTokenWriter(inner)
+    private sealed class HighlightingTokenWriter(TextWriterTokenWriter inner, StringBuilder buffer) : DecoratingTokenWriter(inner)
     {
         private readonly List<ClassifiedSpan> spans = [];
         private readonly List<ReferenceSpan> references = [];
@@ -56,7 +56,7 @@ internal static class SemanticHighlighter
         // navigable link, targeting the exact symbol it resolved to. This is how extension methods and any
         // cross-type member become clickable: a purely name-based map can only reach the current type's own
         // members, whereas the bound symbol knows precisely which method, field, or type each token means.
-        // Targets in other modules are left alone so a click never lands in an assembly that isn't open.
+        // The backend enables targets only when the exact defining module is open.
         private void RecordReference(Identifier identifier, int start)
         {
             var end = buffer.Length;
@@ -75,15 +75,17 @@ internal static class SemanticHighlighter
             if (symbol is null && node is MemberReferenceExpression or IdentifierExpression &&
                 node.Parent is InvocationExpression invocation && invocation.Target == node)
                 symbol = invocation.GetSymbol();
-            if (symbol is not IEntity entity || entity.ParentModule is not { IsMainModule: true }) return;
+            if (symbol is not IEntity entity || entity.ParentModule is not { MetadataFile: { } file } parentModule) return;
             var handle = entity.MetadataToken;
             if (handle.IsNil || handle.Kind is not (HandleKind.TypeDefinition or HandleKind.MethodDefinition or
                 HandleKind.FieldDefinition or HandleKind.PropertyDefinition or HandleKind.EventDefinition)) return;
+            var metadata = file.Metadata;
+            var moduleMvid = metadata.GetGuid(metadata.GetModuleDefinition().Mvid);
             var target = new SymbolId(moduleMvid, MetadataTokens.GetToken(handle));
             var name = entity.SymbolKind is SymbolKind.Constructor or SymbolKind.Destructor
                 ? entity.DeclaringType?.Name ?? entity.Name
                 : entity.Name;
-            references.Add(new ReferenceSpan(start, end - start, target, null, $"Go to {name}"));
+            references.Add(new ReferenceSpan(start, end - start, target, parentModule.IsMainModule ? null : parentModule.AssemblyName, $"Go to {name}"));
         }
 
         public override void WriteKeyword(Role role, string keyword)

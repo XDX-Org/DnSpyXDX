@@ -12,7 +12,7 @@ Status was audited against the repository on 2026-07-27 through commit `081edfa`
 | 1. Application skeleton | Partial | Project split, DI, logging, settings, native dialogs, CI builds | 3–5 days | Split projects, DI, filtered logging, session/window state, and dialogs exist; CI and verified dual-RID artifacts do not |
 | 2. Assembly workspace | Complete | Open/close sessions, type-bounded lazy tree, metadata/error views | 1–2 weeks | The type-bounded tree is lazy and virtualized; resources, metadata-aware hex inspection, and decompilation error views are implemented |
 | 3. Decompiled documents | Complete | Read-only type/member decompilation, tabs, bounded caching, cancellation, and large-document virtualization | 1–2 weeks | The pure-Blazor viewer virtualizes fixed-height lines, caches models/token batches within LRU limits, and restores per-tab scroll state |
-| 4. Navigation and search | Partial | Symbol IDs, history, semantic spans, Ctrl+click, indexed name search | 1–2 weeks | History, symbol IDs, decompiler-derived C# reference spans, Ctrl+click, and workspace search exist; cross-module links and an indexed search remain |
+| 4. Navigation and search | Partial | Symbol IDs, history, semantic spans, Ctrl+click, indexed name search | 1–2 weeks | History, symbol IDs, cross-assembly decompiler-derived C# links, Ctrl+click, and workspace search exist; an indexed search remains |
 | 5. Project and `.slnx` export | Partial | Whole-project adapter, staging, multi-project mapping, reports, optional build | 1–2 weeks | Export, staging, `.slnx`, progress, reports, and optional validation exist; open-assembly references are not remapped to project references |
 | 6. Hardening | Partial | Malformed inputs, resource/path safety, memory/concurrency controls, recovery | 1–2 weeks | Basic validation, staging, cancellation, serialized per-session decompilation, and recovery exist; size/memory limits and the adversarial fixture suite do not |
 | 7. Release engineering | Partial | installers/archive layout, prerequisites, licenses, smoke tests, docs | 3–5 days | Requirements, manual publish commands, and cross-platform GUI smoke tests are complete; automation, packaged layouts, and license bundling remain |
@@ -44,7 +44,7 @@ Build these tickets in order. Checked items are supported by concrete production
 10. [x] Stop interactive tree expansion at types; retain backend member discovery and open members through search and source navigation in their declaring type.
 11. [x] Add cancellation, progress, error documents, and a bounded model/token-batch LRU cache.
 12. [x] Implement history and symbol identity.
-13. [x] Add decompiler-derived semantic reference spans and source navigation for symbols in the current module, including resolved overloads and extension methods. Cross-module navigation remains a separate follow-up.
+13. [x] Add decompiler-derived semantic reference spans and source navigation, including resolved overloads, extension methods, and exact-MVID cross-assembly navigation with same-folder dependency discovery.
 14. [x] Add workspace-wide type/member name search with filtering and debounced UI updates.
 15. [x] Add application-menu settings and native application exit actions, including reliable menu dismissal.
 16. [x] Add extensible application themes, Rider Dark and VS Dark presets, themed syntax colors, and persisted pre-paint theme restoration.

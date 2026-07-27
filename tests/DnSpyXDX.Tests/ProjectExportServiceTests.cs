@@ -45,6 +45,7 @@ public sealed class ProjectExportServiceTests
         public bool TryGetAssembly(Guid sessionId, out AssemblyDescriptor? assembly) { assembly = sessionId == descriptor.SessionId ? descriptor : null; return assembly is not null; }
         public Task<AssemblyDescriptor> OpenAsync(string path, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<AssemblyDescriptor> OpenReferenceAsync(NodeId reference, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<AssemblyDescriptor> OpenAssemblyForSymbolAsync(SymbolId symbol, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task CloseAsync(Guid sessionId) => Task.CompletedTask;
         public Task<IReadOnlyList<TreeNodeDescriptor>> GetChildrenAsync(NodeId parent, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<ResourceDocument> GetResourceAsync(NodeId resource, CancellationToken cancellationToken = default) => throw new NotSupportedException();

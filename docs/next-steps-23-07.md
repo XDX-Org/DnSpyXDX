@@ -28,10 +28,10 @@ The assembly tree intentionally stops at types. Members remain discoverable thro
    - Key cache entries by symbol, language, settings, and decompiler version.
    - Refresh the active document in place while preserving navigation and selection.
    - Persist the selected mode and support cancellation.
-5. **Exact semantic navigation — partial**
-   - Exact decompiler-derived C# reference spans now replace identifier-name heuristics for symbols in the current module.
+5. **Exact semantic navigation — complete**
+   - Exact decompiler-derived C# reference spans replace identifier-name heuristics.
    - Resolved overloads, extension methods, and cross-type members navigate to their precise definitions.
-   - Resolve references into other open assemblies; external-module targets are currently left unlinked to prevent incorrect navigation.
+   - Cross-assembly links resolve by module MVID and automatically discover matching managed DLL/EXE files beside open assemblies.
 6. **Indexed search**
    - Build an index when assemblies open instead of scanning metadata for every query.
    - Keep filtering and cancellation behavior.
@@ -66,7 +66,7 @@ This sequencing delivered a broad usable workflow, but source scalability, bound
 | --- | --- | --- |
 | Expand members beneath types in the tree | Tree intentionally stops at types | Complete; docs describe search/source navigation as the member workflow |
 | Virtualized source editor | Pure-Blazor virtualized line viewer | Complete |
-| Exact semantic spans | Decompiled C# uses resolved symbol spans within the current module | Add cross-module target identity and resolution |
+| Exact semantic spans | Decompiled C# uses resolved symbol spans and exact-MVID cross-assembly navigation | Complete |
 | Indexed workspace search | Metadata scan per query | Add an index before analyzer/reference features |
 | Bounded LRU cache | Bounded model and token-batch caches | Complete |
 | Automated dual-platform release | Manual publish instructions and cross-platform GUI smoke tests | Add CI publishing, packaging, and licenses |

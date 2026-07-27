@@ -5,6 +5,7 @@ public interface IDecompilerBackend : IAsyncDisposable
     IReadOnlyList<AssemblyDescriptor> Assemblies { get; }
     Task<AssemblyDescriptor> OpenAsync(string path, CancellationToken cancellationToken = default);
     Task<AssemblyDescriptor> OpenReferenceAsync(NodeId reference, CancellationToken cancellationToken = default);
+    Task<AssemblyDescriptor> OpenAssemblyForSymbolAsync(SymbolId symbol, CancellationToken cancellationToken = default);
     Task CloseAsync(Guid sessionId);
     Task<IReadOnlyList<TreeNodeDescriptor>> GetChildrenAsync(NodeId parent, CancellationToken cancellationToken = default);
     Task<ResourceDocument> GetResourceAsync(NodeId resource, CancellationToken cancellationToken = default);

@@ -335,6 +335,12 @@
   }
   private async Task NavigateFromSourceAsync(NavigationRequest request)
   {
+    if (!Backend.Assemblies.Any(assembly => assembly.ModuleMvid == request.Symbol.ModuleMvid))
+    {
+      Workspace.SetBusy(true, "Finding referenced assembly…");
+      try { var assembly = await Backend.OpenAssemblyForSymbolAsync(request.Symbol); Workspace.SetBusy(false, $"Opened {assembly.Name}"); }
+      catch (Exception ex) { Workspace.SetBusy(false, ex.Message); return; }
+    }
     var declaringType = await Backend.GetDeclaringTypeAsync(request.Symbol);
     revealedPath = (await Backend.GetPathAsync(declaringType)).ToHashSet();
     selectedSymbol = declaringType;

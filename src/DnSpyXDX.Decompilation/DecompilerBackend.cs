@@ -51,6 +51,40 @@ public sealed class DecompilerBackend : IDecompilerBackend
         return await OpenAsync(path, cancellationToken);
     }
 
+    public async Task<AssemblyDescriptor> OpenAssemblyForSymbolAsync(SymbolId symbol, CancellationToken cancellationToken = default)
+    {
+        var loaded = sessions.Values.FirstOrDefault(session => session.Descriptor.ModuleMvid == symbol.ModuleMvid);
+        if (loaded is not null) return loaded.Descriptor;
+        var paths = sessions.Values.Select(session => Path.GetDirectoryName(session.Descriptor.Path)!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .SelectMany(directory => Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly))
+            .Where(path => string.Equals(Path.GetExtension(path), ".dll", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(Path.GetExtension(path), ".exe", StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in paths)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (TryReadModuleMvid(path) == symbol.ModuleMvid) return await OpenAsync(path, cancellationToken);
+        }
+        throw new FileNotFoundException($"Could not find the assembly containing token 0x{symbol.MetadataToken:X8} beside an open assembly.");
+    }
+
+    private static Guid? TryReadModuleMvid(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            using var reader = new PEReader(stream, PEStreamOptions.LeaveOpen);
+            if (!reader.HasMetadata) return null;
+            var metadata = reader.GetMetadataReader();
+            return metadata.GetGuid(metadata.GetModuleDefinition().Mvid);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or BadImageFormatException)
+        {
+            return null;
+        }
+    }
+
     public Task CloseAsync(Guid sessionId)
     {
         if (sessions.TryRemove(sessionId, out var session)) session.Dispose();
@@ -507,7 +541,7 @@ internal sealed class AssemblySession : IDisposable
         // than lexically. The namespace header and dnSpy-style token comments are then folded back in while
         // keeping the classification spans and navigable references aligned to the text.
         var tree = decompiler.Decompile([handle]);
-        var (text, spans, references) = SemanticHighlighter.Highlight(tree, settings.CSharpFormattingOptions, Descriptor.ModuleMvid);
+        var (text, spans, references) = SemanticHighlighter.Highlight(tree, settings.CSharpFormattingOptions);
         var lines = SplitIntoClassifiedLines(text, spans, references);
         InsertNamespaceLine(lines, DeclaringTypeOf(handle));
         if (showMetadataTokens) InsertTokenCommentLines(lines, handle);
