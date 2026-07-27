@@ -35,7 +35,8 @@ public sealed class SymbolTools(IDecompilerBackend backend, McpActivityLog activ
         catch (Exception exception)
         {
             CompleteFailure(started, "search_symbols", exception);
-            throw;
+            if (exception is OperationCanceledException) throw;
+            throw McpErrors.Symbol(exception);
         }
     }
 
@@ -48,6 +49,7 @@ public sealed class SymbolTools(IDecompilerBackend backend, McpActivityLog activ
         activity.Begin();
         try
         {
+            if (metadataToken <= 0) throw McpErrors.InvalidToken();
             EnsureOpen(moduleMvid);
             var result = await backend.DescribeSymbolAsync(new(moduleMvid, metadataToken), cancellationToken)
                 ?? throw new KeyNotFoundException("The symbol was not found.");
@@ -57,7 +59,8 @@ public sealed class SymbolTools(IDecompilerBackend backend, McpActivityLog activ
         catch (Exception exception)
         {
             CompleteFailure(started, "get_symbol", exception, target);
-            throw;
+            if (exception is OperationCanceledException or ModelContextProtocol.McpException) throw;
+            throw McpErrors.Symbol(exception);
         }
     }
 
@@ -70,6 +73,7 @@ public sealed class SymbolTools(IDecompilerBackend backend, McpActivityLog activ
         activity.Begin();
         try
         {
+            if (metadataToken <= 0) throw McpErrors.InvalidToken();
             EnsureOpen(moduleMvid);
             var limit = Math.Clamp(maxResults, 1, 200);
             var found = await backend.AnalyzeAsync(new(moduleMvid, metadataToken), AnalyzerRelation.Uses, cancellationToken);
@@ -81,7 +85,8 @@ public sealed class SymbolTools(IDecompilerBackend backend, McpActivityLog activ
         catch (Exception exception)
         {
             CompleteFailure(started, "get_references", exception, target);
-            throw;
+            if (exception is OperationCanceledException or ModelContextProtocol.McpException) throw;
+            throw McpErrors.Symbol(exception);
         }
     }
 

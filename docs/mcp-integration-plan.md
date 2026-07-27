@@ -222,10 +222,10 @@ Exit: switching MCP on starts a protected loopback endpoint, a host can connect 
 
 ### Phase 1 — read-only inspection MVP
 
-**Status: In progress.** Initial assembly/symbol tools and source resources exist. Configured roots are absolute, snapshot-based, link-resolved, and revalidated after open; assembly size/open-count/open-timeout/concurrent-open limits are present. Client roots, complete resources, `list_children`, pagination, structured errors, endpoint-wide limits, and integration/security tests remain.
+**Status: In progress.** Initial assembly/symbol tools and source resources exist. Configured roots are absolute, snapshot-based, link-resolved, and revalidated after open; roots-capable clients are intersected with configured roots; assembly size/open-count/open-timeout/concurrent-open limits and stable coded errors are present. Complete resources, `list_children`, pagination, endpoint-wide limits, and integration/security tests remain.
 
 - [ ] **Partial:** Implement all initial tools and resource templates. `list_children`, assembly/symbol descriptors, and embedded-text resources remain.
-- [ ] **Partial:** Add roots enforcement, limits, cursor pagination, structured errors, cancellation, and safe logging. Configured-root hardening and initial open limits are implemented; client roots, full limits, pagination, and structured errors remain.
+- [ ] **Partial:** Add roots enforcement, limits, cursor pagination, structured errors, cancellation, and safe logging. Configured/client root enforcement, initial open limits, and stable coded errors are implemented; full limits, pagination, cursor errors, and wire-level error tests remain.
 - [x] Return resource links from search/symbol tools and fetch decompilation only on demand.
 - [x] Reuse exact cross-assembly MVID/token resolution.
 - [x] Generate example host configuration from the live endpoint settings.

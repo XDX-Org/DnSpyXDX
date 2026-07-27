@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using DnSpyXDX.Application;
+using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
 
 namespace DnSpyXDX.Host.Mcp.Tools;
@@ -57,7 +58,8 @@ public sealed class AssemblyTools
         {
             var state = exception is OperationCanceledException ? "cancelled" : "failed";
             activity.Add(new(started, "close_assembly", moduleMvid.ToString("D"), state, DateTimeOffset.UtcNow - started, SafeError(exception)));
-            throw;
+            if (exception is OperationCanceledException) throw;
+            throw McpErrors.Assembly(exception);
         }
     }
 
@@ -65,6 +67,7 @@ public sealed class AssemblyTools
     [Description("Opens a managed DLL or EXE from an explicitly allowed local root using metadata-only inspection.")]
     public async Task<McpAssemblyDescriptor> OpenAssemblyAsync(
         [Description("Absolute path below an allowed root.")] string path,
+        McpServer server,
         CancellationToken cancellationToken)
     {
         var started = DateTimeOffset.UtcNow;
@@ -74,6 +77,7 @@ public sealed class AssemblyTools
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(settings.RequestTimeout);
+            var clientRoots = await GetClientRootsAsync(server, timeout.Token);
             await openConcurrency.WaitAsync(timeout.Token);
             McpAssemblyDescriptor result;
             try
@@ -82,6 +86,7 @@ public sealed class AssemblyTools
                     throw new InvalidOperationException("The open assembly limit has been reached.");
                 var roots = settings.AllowedRoots.ToArray();
                 var canonicalPath = ValidatePath(path, roots);
+                if (clientRoots is not null) ValidatePath(canonicalPath, clientRoots);
                 var length = new FileInfo(canonicalPath).Length;
                 if (length > settings.MaximumAssemblyBytes)
                     throw new InvalidOperationException("The assembly exceeds the configured file size limit.");
@@ -106,7 +111,8 @@ public sealed class AssemblyTools
         {
             var state = exception is OperationCanceledException ? "cancelled" : "failed";
             activity.Add(new(started, "open_assembly", safeTarget, state, DateTimeOffset.UtcNow - started, SafeError(exception)));
-            throw;
+            if (exception is OperationCanceledException) throw;
+            throw McpErrors.Assembly(exception);
         }
     }
 
@@ -127,6 +133,22 @@ public sealed class AssemblyTools
         if (!allowed) throw new UnauthorizedAccessException("The path is outside the configured MCP roots.");
         return canonicalPath;
     }
+
+    private static async Task<IReadOnlyList<string>?> GetClientRootsAsync(McpServer server, CancellationToken cancellationToken)
+    {
+        if (server.ClientCapabilities?.Roots is null) return null;
+        var response = await server.RequestRootsAsync(new ListRootsRequestParams(), cancellationToken);
+        return response.Roots
+            .Select(root => TryGetFileRoot(root.Uri))
+            .Where(path => path is not null)
+            .Select(path => path!)
+            .ToArray();
+    }
+
+    private static string? TryGetFileRoot(string value) =>
+        Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.IsFile && Path.IsPathFullyQualified(uri.LocalPath)
+            ? uri.LocalPath
+            : null;
 
     private static string ResolveExistingPath(string path, bool file)
     {

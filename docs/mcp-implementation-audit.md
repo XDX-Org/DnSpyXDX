@@ -18,10 +18,10 @@ The MCP implementation is a working compatibility spike, but it does not yet sat
 | C#, IL, and IL-with-C# resources | Complete |
 | Shared desktop/MCP workspace | Mostly complete |
 | Activity panel | Partial |
-| Roots enforcement | Hardened for configured roots; client roots missing |
+| Roots enforcement | Configured/client root intersection implemented |
 | Limits and concurrency controls | Partial |
 | Cursor pagination | Missing |
-| Structured MCP errors | Missing |
+| Structured MCP errors | Partial; stable coded MCP errors implemented |
 | Automated MCP tests | Started; settings/root snapshot coverage only |
 | Host/platform compatibility verification | Partial, manual only |
 
@@ -34,9 +34,10 @@ The MCP implementation is a working compatibility spike, but it does not yet sat
 - requires and normalizes absolute configured roots;
 - resolves links in roots and assembly paths before containment checks;
 - uses an immutable root snapshot for each open operation;
+- requests roots from capable MCP clients and requires the path to satisfy both client and configured roots;
 - revalidates after opening and rolls back the backend session on failure.
 
-Client-provided MCP roots are still not supported or intersected with configured roots. Path-based opening also cannot completely eliminate filesystem time-of-check/time-of-use races; hardened deployments still need a handle-based or isolated-worker boundary.
+Clients without roots capability remain constrained by configured roots. A roots-capable client returning no usable file roots cannot open a path. Path-based opening cannot completely eliminate filesystem time-of-check/time-of-use races; hardened deployments still need a handle-based or isolated-worker boundary.
 
 ### 2. Implement every advertised resource
 
@@ -85,21 +86,20 @@ Without these, a large or hostile assembly can consume excessive CPU, memory, or
 
 ### 5. Return structured errors
 
-Invalid tool requests currently return a generic message such as:
+Assembly, symbol, and source handlers now translate expected failures into sanitized MCP errors with stable prefixes, including:
 
 ```text
 An error occurred invoking 'open_assembly'.
 ```
-
-Clients need stable sanitized errors such as:
 
 - `path_not_allowed`;
 - `assembly_not_open`;
 - `symbol_not_found`;
 - `invalid_token`;
 - `limit_exceeded`;
-- `stale_cursor`;
-- `request_cancelled`.
+- `invalid_language`.
+
+Cancellation continues through protocol cancellation rather than being rewritten. Cursor support must add `stale_cursor`, and coded errors still need integration tests confirming the exact wire representation and structured client consumption.
 
 ## Protocol-surface gaps
 
@@ -169,8 +169,8 @@ Still untested:
 
 1. [x] Require absolute configured roots, resolve links, snapshot roots, and revalidate after opening.
 2. [x] Add assembly file-size, open-count, open-timeout, and concurrent-open limits.
-3. [ ] Support client-provided MCP roots and intersect them with configured roots.
-4. [ ] Introduce structured MCP errors.
+3. [x] Support client-provided MCP roots and intersect them with configured roots.
+4. [ ] **Partial:** Stable sanitized MCP error codes are implemented; wire-level integration coverage and cursor errors remain.
 5. [ ] Add assembly and symbol resources so every returned URI works.
 6. [ ] Implement paginated `list_children`.
 7. [ ] Extract shared workspace open/unload coordination.
@@ -179,4 +179,4 @@ Still untested:
 10. [ ] Add configurable port and protected token persistence.
 11. [ ] Add richer analysis operations and shared indexing.
 
-Phase 0 is functionally demonstrated, but its formal exit criteria still require automated security and lifecycle coverage, Windows verification, MCP Inspector, and two real hosts. Phase 1 remains partial: its configured-root boundary and initial assembly-open limits are implemented, while resources, enumeration, pagination, structured errors, complete limits, and integration tests remain.
+Phase 0 is functionally demonstrated, but its formal exit criteria still require automated security and lifecycle coverage, Windows verification, MCP Inspector, and two real hosts. Phase 1 remains partial: configured/client root enforcement, initial assembly-open limits, and stable coded errors are implemented, while resources, enumeration, pagination, complete limits, and integration tests remain.

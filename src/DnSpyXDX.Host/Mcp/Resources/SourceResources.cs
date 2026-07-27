@@ -21,6 +21,7 @@ public sealed class SourceResources(IDecompilerBackend backend, McpActivityLog a
         activity.Begin();
         try
         {
+            if (metadataToken <= 0) throw McpErrors.InvalidToken();
             if (backend.Assemblies.All(assembly => assembly.ModuleMvid != moduleMvid))
                 throw new KeyNotFoundException("The assembly is not open.");
             var selectedLanguage = language.ToLowerInvariant() switch
@@ -48,7 +49,8 @@ public sealed class SourceResources(IDecompilerBackend backend, McpActivityLog a
                 _ => "Decompilation failed."
             };
             activity.Add(new(started, "resources/read", target, state, DateTimeOffset.UtcNow - started, message));
-            throw;
+            if (exception is OperationCanceledException or ModelContextProtocol.McpException) throw;
+            throw McpErrors.Resource(exception);
         }
     }
 }
