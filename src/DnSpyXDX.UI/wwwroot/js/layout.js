@@ -218,3 +218,45 @@ window.dnSpyXdx.scrollHexToRow = function (viewport, row, totalRows, rowHeight) 
   const ratio = Math.min(Math.max(row, 0), maximumRow) / Math.max(1, maximumRow);
   viewport.scrollTop = ratio * Math.max(0, viewport.scrollHeight - viewport.clientHeight);
 };
+window.dnSpyXdx.initFileDrop = function (dotNet) {
+  if (window.dnSpyXdx.fileDropReady) return;
+  window.dnSpyXdx.fileDropReady = true;
+  const assembly = /\.(dll|exe|winmd)$/i;
+  let depth = 0;
+  const hasFiles = event => Array.from(event.dataTransfer?.types || []).includes("Files");
+  const setOverlay = on => document.body.classList.toggle("app-drag-over", on);
+  window.addEventListener("dragenter", event => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    depth++;
+    setOverlay(true);
+  });
+  window.addEventListener("dragover", event => {
+    if (!hasFiles(event)) return;
+    // Stops the webview from navigating to the dropped file and allows the drop to land here instead.
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  });
+  window.addEventListener("dragleave", event => {
+    if (!hasFiles(event)) return;
+    depth = Math.max(0, depth - 1);
+    if (depth === 0) setOverlay(false);
+  });
+  window.addEventListener("drop", async event => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    depth = 0;
+    setOverlay(false);
+    const files = Array.from(event.dataTransfer.files).filter(file => assembly.test(file.name));
+    if (files.length === 0) return;
+    // Stage every dropped file into one folder first so sibling references resolve, then open them.
+    const batch = (crypto.randomUUID && crypto.randomUUID()) || String(Date.now());
+    const names = [];
+    for (const file of files) {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      await dotNet.invokeMethodAsync("StageDroppedAssembly", batch, file.name, bytes);
+      names.push(file.name);
+    }
+    await dotNet.invokeMethodAsync("OpenDroppedAssemblies", batch, names);
+  });
+};

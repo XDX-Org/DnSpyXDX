@@ -8,7 +8,7 @@ DnSpyXDX is a focused, read-only assembly browser for Windows and Linux. It comb
 
 ## Highlights
 
-- Open managed `.dll` and `.exe` files without executing assembly code
+- Open managed `.dll` and `.exe` files without executing assembly code, from a dialog or by dragging them onto the window
 - Lazily browse assemblies, references, resources, namespaces, and types; reach members through search and source navigation
 - Decompile complete types or individual members into readable C#
 - Search types, methods, fields, properties, and events across one or all open assemblies

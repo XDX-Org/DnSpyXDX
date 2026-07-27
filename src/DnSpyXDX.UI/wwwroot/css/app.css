@@ -241,3 +241,4 @@ button.source-token.code-link{text-decoration:none}
 .analyzer-remove:hover{background:var(--theme-color-293246);color:var(--theme-color-fff)}
 .analyzer-body{flex:1;min-height:0;display:flex;flex-direction:column}
 .panel-hidden{display:none!important}
+body.app-drag-over::after{content:"Drop a .dll or .exe to open it";position:fixed;inset:8px;z-index:200;display:grid;place-items:center;background:var(--theme-color-0b0e14);opacity:.9;color:var(--theme-color-d9e2f1);font-size:17px;letter-spacing:.02em;border:2px dashed var(--theme-color-7968ff);border-radius:10px;pointer-events:none}

@@ -225,6 +225,7 @@
         await JS.InvokeVoidAsync("dnSpyXdx.initExplorerResize", explorer, selfReference);
         await JS.InvokeVoidAsync("dnSpyXdx.initHistoryButtons", selfReference);
         await JS.InvokeVoidAsync("dnSpyXdx.initPanelHorizontalWheel");
+        await JS.InvokeVoidAsync("dnSpyXdx.initFileDrop", selfReference);
         StateHasChanged();
         if (restoredFromStorage) { Session.UiState = CaptureUiState(); ScheduleSave(); StateHasChanged(); }
         if (restoring && !sessionRestoreStarted) { sessionRestoreStarted = true; _ = RestoreWorkspaceAsync(); }
@@ -264,6 +265,34 @@
   private void AnalyzerRootsChanged(IReadOnlyList<AnalyzerRootState> updated) { analyzerRoots = updated.ToList(); ScheduleSave(); }
   private async Task SaveAfterDelayAsync(CancellationToken token) { try { await Task.Delay(350, token); Session.UiState = CaptureUiState(); await Session.SaveAsync(token); } catch (OperationCanceledException) { } }
   private async Task OpenAsync() { var path = await Dialogs.OpenAssemblyAsync(); if (path is null) return; Workspace.SetBusy(true, "Opening assembly…"); try { await Backend.OpenAsync(path); Workspace.SetBusy(false, $"Opened {Path.GetFileName(path)}"); } catch (Exception ex) { Workspace.SetBusy(false, ex.Message); } }
+  // Files dropped from the OS reach the WebView without their real path, so the bytes are staged into a
+  // shared per-drop folder (sibling assemblies land together, keeping reference resolution working) and
+  // then opened by path through the normal pipeline.
+  private static string DropBatchDirectory(string batch) => Path.Combine(Path.GetTempPath(), "DnSpyXDX-Dropped", new string(batch.Where(character => char.IsLetterOrDigit(character) || character == '-').ToArray()) is { Length: > 0 } safe ? safe : "batch");
+  [JSInvokable] public async Task StageDroppedAssembly(string batch, string name, byte[] data)
+  {
+    var directory = DropBatchDirectory(batch);
+    Directory.CreateDirectory(directory);
+    await File.WriteAllBytesAsync(Path.Combine(directory, Path.GetFileName(name)), data);
+  }
+  [JSInvokable] public async Task OpenDroppedAssemblies(string batch, string[] names)
+  {
+    var directory = DropBatchDirectory(batch);
+    Workspace.SetBusy(true, names.Length == 1 ? "Opening dropped assembly…" : $"Opening {names.Length} dropped assemblies…");
+    var opened = 0;
+    string? lastError = null;
+    foreach (var name in names)
+    {
+      try { await Backend.OpenAsync(Path.Combine(directory, Path.GetFileName(name))); opened++; }
+      catch (Exception ex) { lastError = ex.Message; }
+    }
+    var message = opened == names.Length
+      ? opened == 1 ? $"Opened {Path.GetFileName(names[0])}" : $"Opened {opened} assemblies"
+      : opened > 0 ? $"Opened {opened} of {names.Length}; last error: {lastError}"
+      : $"Could not open dropped file: {lastError}";
+    Workspace.SetBusy(false, message);
+    await InvokeAsync(StateHasChanged);
+  }
   private void ToggleMenu() => menuOpen = !menuOpen;
   private void CloseMenu() => menuOpen = false;
   private void OpenSettings() { menuOpen = false; settingsOpen = true; }
