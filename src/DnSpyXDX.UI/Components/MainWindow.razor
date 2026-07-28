@@ -52,7 +52,7 @@
     <label class="language-selector"><span>Language</span><select value="@language" @onchange="LanguageChangedAsync"><option value="@DecompilerLanguage.CSharp">C#</option><option value="@DecompilerLanguage.IL">IL</option><option value="@DecompilerLanguage.ILWithCSharp">IL with C#</option><option value="@DecompilerLanguage.Hex">Hex</option></select></label>
   </header>
   <main>
-    <div class="explorer-pane" @ref="explorer" style="width:@($"{explorerWidth}px")">
+    <div class="explorer-pane" @ref="explorer" style="width:@(explorerWidth.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))px">
       <aside class="explorer">
         <header class="explorer-header">
           <div class="panel-title">ASSEMBLIES</div>
@@ -62,7 +62,7 @@
             </button>
           </div>
         </header>
-        <VirtualizedTree Assemblies="Backend.Assemblies" EmptyMessage="@(restoring ? "Restoring assembly tree…" : "Open a managed .dll or .exe to begin.")" OnOpen="OpenTreeSymbolAsync" OnOpenReference="OpenReferenceAsync" OnOpenResource="OpenResourceAsync" OnContextMenu="OpenTreeContextMenu" ExpandedPath="revealedPath" SelectedSymbol="selectedSymbol" SelectedNode="selectedNode" SelectionVersion="treeSelectionVersion" CollapseVersion="treeCollapseVersion" />
+        <VirtualizedTree Assemblies="Backend.Assemblies" EmptyMessage="@(restoring ? "Restoring assembly tree…" : "Open a managed .dll or .exe to begin.")" OnOpen="OpenTreeSymbolAsync" OnOpenReference="OpenReferenceAsync" OnOpenResource="OpenResourceAsync" OnContextMenu="OpenTreeContextMenu" ExpandedPath="revealedPath" SelectedSymbol="selectedSymbol" SelectedNode="selectedNode" SelectionVersion="treeSelectionVersion" CollapseVersion="treeCollapseVersion" SelectedAssemblies="selectedAssemblies" OnClearSelection="ClearAssemblySelection" OnToggleAssembly="ToggleAssemblySelection" OnEmptyContextMenu="OpenTreeEmptyContextMenu" />
       </aside>
       <div class="explorer-resizer" title="Drag to resize assembly tree"></div>
     </div>
@@ -79,7 +79,7 @@
         else if (Workspace.ActiveTab is { } active) { <SourceView TabId="active.Id" Document="active.Document" WrapLines="wrapLines" OnNavigate="NavigateFromSourceAsync" OnAnalyze="OpenSourceAnalyzeMenu" /> }
       </div>
       @if (bottomOpen) {
-        <section class="bottom-panel" @ref="searchPanel" style="height:@($"{searchPanelHeight}px")">
+        <section class="bottom-panel" @ref="searchPanel" style="height:@(searchPanelHeight.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))px">
           <div class="search-resizer" title="Drag to resize the panel"></div>
           <div class="bottom-tabs" role="tablist">
             <button class="bottom-tab @(bottomTab == "search" ? "active" : null)" role="tab" aria-selected="@(bottomTab == "search")" disabled="@(Backend.Assemblies.Count == 0)" @onclick='() => SwitchBottomTab("search")'>Search</button>
@@ -96,8 +96,8 @@
             <div class="search-results">
               @if (results.Count == 0) { <div class="no-results">@(string.IsNullOrWhiteSpace(query) ? "Type a name to search across open assemblies." : "No matching types or members.")</div> }
               else { <Virtualize Items="results" Context="result" ItemSize="28" OverscanCount="10">
-                <button @key="result.Symbol" class="search-result" @onclick="e => OpenSearchResultAsync(result, e.CtrlKey)">
-                  <span class="result-kind result-@result.Kind.ToLowerInvariant()">@result.Kind</span><span class="result-name">@(result.QualifiedName ?? result.Name)</span><span class="result-assembly">@result.AssemblyName</span>
+                <button @key="result.Symbol" class="search-result" @onclick="e => OpenSearchResultAsync(result, e.CtrlKey)" @oncontextmenu="e => OpenSearchResultAnalyzeMenu(result, e)" @oncontextmenu:preventDefault>
+                  <span class="result-kind result-@result.Kind.ToLowerInvariant()">@(result.Display ?? result.Kind)</span><span class="result-name">@(result.QualifiedName ?? result.Name)</span><span class="result-assembly">@result.AssemblyName</span>
                 </button>
               </Virtualize> }
             </div>
@@ -119,7 +119,29 @@
     <div class="context-menu-dismiss" @onclick="CloseAssemblyContextMenu" @oncontextmenu:preventDefault></div>
     <div class="assembly-context-menu" style="--context-x:@(contextMenuX)px;--context-y:@(contextMenuY)px" @onclick:stopPropagation @oncontextmenu:preventDefault>
       <div class="context-menu-identity" title="@contextAssembly.Path"><strong>@contextAssembly.Name</strong><small>@Path.GetDirectoryName(contextAssembly.Path)</small></div>
-      <button disabled="@Workspace.IsBusy" @onclick="UnloadContextAssemblyAsync"><span>Unload assembly</span></button>
+      @if (selectedAssemblies.Count > 1 && selectedAssemblies.Contains(contextAssembly.SessionId))
+      {
+        <button disabled="@Workspace.IsBusy" @onclick="UnloadSelectedAssemblies"><span>Unload selected assemblies</span></button>
+      }
+      else
+      {
+        <button disabled="@Workspace.IsBusy" @onclick="UnloadContextAssemblyAsync"><span>Unload assembly</span></button>
+      }
+      @if (Backend.Assemblies.Count > 1)
+      {
+        <button disabled="@Workspace.IsBusy" @onclick="UnloadAllFromContextAsync"><span>Unload all assemblies</span></button>
+      }
+    </div>
+  }
+  @if (emptyMenuOpen)
+  {
+    <div class="context-menu-dismiss" @onclick="CloseEmptyMenu" @oncontextmenu:preventDefault></div>
+    <div class="assembly-context-menu" style="--context-x:@(contextMenuX)px;--context-y:@(contextMenuY)px" @onclick:stopPropagation @oncontextmenu:preventDefault>
+      <button disabled="@Workspace.IsBusy" @onclick="OpenFromEmptyMenuAsync"><span>Open assembly…</span></button>
+      @if (Backend.Assemblies.Count > 0)
+      {
+        <button disabled="@Workspace.IsBusy" @onclick="UnloadAllFromContextAsync"><span>Unload all assemblies</span></button>
+      }
     </div>
   }
   @if (contextSymbol is { } analyzeSymbol)
@@ -140,6 +162,25 @@
       <div class="settings-row"><span><strong>Application zoom</strong><small>Scale the entire interface</small></span><div class="application-zoom"><button aria-label="Zoom out" disabled="@(zoomPercent <= MinimumZoom)" @onclick="() => ChangeApplicationZoom(-1)">−</button><button class="zoom-percent" aria-label="Reset zoom to 100%" @onclick="ResetApplicationZoom">@zoomPercent%</button><button aria-label="Zoom in" disabled="@(zoomPercent >= MaximumZoom)" @onclick="() => ChangeApplicationZoom(1)">+</button></div></div>
       <label class="settings-row"><span><strong>Debug logging</strong><small>Write detailed diagnostics to the console</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@debugLogging" @onchange="DebugLoggingChanged" /></label>
       <label class="settings-row"><span><strong>Metadata tokens</strong><small>Show token and RID comments in the main panel</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@showMetadataTokens" @onchange="MetadataTokensChangedAsync" /></label>
+      <div class="settings-row"><span><strong>Decompiler</strong><small>C# output style. Both use the ILSpy engine.</small></span><select class="settings-select" value="@memberOrder" @onchange="MemberOrderChangedAsync"><option value="@MemberOrder.Ilspy">ILSpy (default)</option><option value="@MemberOrder.DnSpy">dnSpy</option></select></div>
+      @if (memberOrder == MemberOrder.DnSpy)
+      {
+        <div class="settings-row member-order-row"><span><strong>Decompilation order</strong><small>Order of member groups in the dnSpy layout</small></span>
+          <ol class="member-order-list">
+            @for (var i = 0; i < memberGroupOrder.Count; i++)
+            {
+              var index = i;
+              <li class="member-order-item">
+                <span>@MemberGroups.Label(memberGroupOrder[index])</span>
+                <span class="member-order-buttons">
+                  <button type="button" title="Move up" aria-label="Move up" disabled="@(index == 0)" @onclick="() => MoveMemberGroupAsync(index, -1)">▲</button>
+                  <button type="button" title="Move down" aria-label="Move down" disabled="@(index == memberGroupOrder.Count - 1)" @onclick="() => MoveMemberGroupAsync(index, 1)">▼</button>
+                </span>
+              </li>
+            }
+          </ol>
+        </div>
+      }
       <label class="settings-row"><span><strong>Line wrapping</strong><small>Wrap long source and resource text lines</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@wrapLines" @onchange="LineWrappingChangedAsync" /></label>
       <label class="settings-row mcp-roots-setting"><span><strong>MCP allowed roots</strong><small>One absolute directory per line</small></span><textarea value="@mcpAllowedRoots" @onchange="McpRootsChangedAsync" placeholder="/path/to/assemblies"></textarea></label>
     </section>
@@ -217,6 +258,8 @@
   private string themeId = Themes.DefaultId;
   private bool debugLogging;
   private bool showMetadataTokens;
+  private MemberOrder memberOrder;
+  private List<MemberGroup> memberGroupOrder = MemberGroups.DefaultOrder.ToList();
   private bool wrapLines;
   private string codeFontFamily = "DejaVu Sans Mono";
   private string[] systemFonts = [];
@@ -227,6 +270,9 @@
     .Distinct(StringComparer.OrdinalIgnoreCase);
   private DecompilerLanguage language = DecompilerLanguage.CSharp;
   private AssemblyDescriptor? contextAssembly;
+  // Session ids of assemblies selected together (Ctrl+A, or a right-click acting on the whole set).
+  private HashSet<Guid> selectedAssemblies = [];
+  private bool emptyMenuOpen;
   private SymbolId? contextSymbol;
   private string contextSymbolName = "";
   private TreeNodeKind contextSymbolKind;
@@ -237,6 +283,7 @@
   private DotNetObjectReference<MainWindow>? selfReference;
   private bool sessionRestoreStarted;
   private string mcpAllowedRoots = "";
+  private string lastOpenDirectory = "";
   private bool DebuggerActive => Debugger.Snapshot.Status is DebugSessionStatus.Running or DebugSessionStatus.Paused or DebugSessionStatus.Starting;
   private bool DebuggerPaused => !Debugger.IsBusy && Debugger.Snapshot.Status == DebugSessionStatus.Paused;
   private string DebugStatus
@@ -254,6 +301,8 @@
   protected override async Task OnInitializedAsync()
   {
     Workspace.Changed += Refresh;
+    Backend.AssembliesChanged += Refresh;
+    Workspace.DragActiveChanged += OnDragActive;
     Assemblies.Closing += AssemblyClosing;
     Debugger.Changed += DebuggerRefresh;
     restoring = true;
@@ -270,17 +319,22 @@
       McpSettings.SetAllowedRoots(ui.McpAllowedRoots ?? []);
       mcpAllowedRoots = string.Join(Environment.NewLine, McpSettings.AllowedRoots);
       analyzerRoots = ui.AnalyzerRoots?.ToList() ?? [];
+      lastOpenDirectory = ui.LastOpenDirectory;
       searchKind = ui.SearchKind;
       searchScope = ui.SearchScope;
       zoomPercent = ui.ZoomPercent <= 0 ? 100 : Math.Clamp(ui.ZoomPercent, MinimumZoom, MaximumZoom);
       themeId = Themes.Normalize(ui.ThemeId);
       debugLogging = ui.DebugLogging;
       showMetadataTokens = ui.ShowMetadataTokens;
+      memberOrder = ui.MemberOrder.ValidOrDefault();
+      memberGroupOrder = MemberGroups.Normalize(ui.MemberGroupOrder).ToList();
       wrapLines = ui.WrapLines;
       codeFontFamily = string.IsNullOrWhiteSpace(ui.CodeFontFamily) ? "DejaVu Sans Mono" : ui.CodeFontFamily.Trim();
       language = ui.Language.ValidOrDefault();
       LoggingSettings.DebugEnabled = debugLogging;
       DisplaySettings.ShowMetadataTokens = showMetadataTokens;
+      DisplaySettings.MemberOrder = memberOrder;
+      DisplaySettings.MemberGroupOrder = memberGroupOrder.ToArray();
       Zoom.SetZoom(zoomPercent);
     }
     catch (Exception ex) { restoring = false; Workspace.SetBusy(false, $"Session restore failed: {ex.Message}"); }
@@ -303,6 +357,7 @@
         await JS.InvokeVoidAsync("dnSpyXdx.initHistoryButtons", selfReference);
         await JS.InvokeVoidAsync("dnSpyXdx.initPanelHorizontalWheel");
         await JS.InvokeVoidAsync("dnSpyXdx.initFileDrop", selfReference);
+        await JS.InvokeVoidAsync("dnSpyXdx.initExplorerKeys", selfReference);
         StateHasChanged();
         if (restoredFromStorage) { Session.UiState = CaptureUiState(); ScheduleSave(); StateHasChanged(); }
         if (restoring && !sessionRestoreStarted) { sessionRestoreStarted = true; _ = RestoreWorkspaceAsync(); }
@@ -339,6 +394,9 @@
       }
     }
   });
+  // The native drag-drop handler owns the drop surface, so the drag overlay is driven from here rather than
+  // from HTML drag events (which WebView2 no longer raises for us).
+  private void OnDragActive(bool active) => _ = InvokeAsync(() => JS.InvokeVoidAsync("dnSpyXdx.setDropOverlay", active).AsTask());
   private async Task RestoreWorkspaceAsync()
   {
     var restored = false;
@@ -365,10 +423,10 @@
     }
   }
   private void ScheduleSave() { saveDelay?.Cancel(); saveDelay?.Dispose(); saveDelay = new CancellationTokenSource(); var token = saveDelay.Token; _ = SaveAfterDelayAsync(token); }
-  private UiSessionState CaptureUiState() => new(explorerWidth, searchPanelHeight, bottomOpen, searchKind, searchScope, zoomPercent, themeId, debugLogging, language, showMetadataTokens, wrapLines, codeFontFamily, bottomTab, analyzerRoots, McpSettings.Enabled, McpSettings.AllowedRoots.ToArray());
+  private UiSessionState CaptureUiState() => new(explorerWidth, searchPanelHeight, bottomOpen, searchKind, searchScope, zoomPercent, themeId, debugLogging, language, showMetadataTokens, wrapLines, codeFontFamily, bottomTab, analyzerRoots, McpSettings.Enabled, McpSettings.AllowedRoots.ToArray(), lastOpenDirectory, memberOrder, memberGroupOrder.ToArray());
   private void AnalyzerRootsChanged(IReadOnlyList<AnalyzerRootState> updated) { analyzerRoots = updated.ToList(); ScheduleSave(); }
   private async Task SaveAfterDelayAsync(CancellationToken token) { try { await Task.Delay(350, token); Session.UiState = CaptureUiState(); await Session.SaveAsync(token); } catch (OperationCanceledException) { } }
-  private async Task OpenAsync() { var path = await Dialogs.OpenAssemblyAsync(); if (path is null) return; Workspace.SetBusy(true, "Opening assembly…"); try { await Assemblies.OpenAsync(path, "desktop"); } catch (Exception ex) { Workspace.SetBusy(false, ex.Message); } }
+  private async Task OpenAsync() { var path = await Dialogs.OpenAssemblyAsync(lastOpenDirectory); if (path is null) return; lastOpenDirectory = Path.GetDirectoryName(path) ?? ""; ScheduleSave(); Workspace.SetBusy(true, "Opening assembly…"); try { await Assemblies.OpenAsync(path, "desktop"); } catch (Exception ex) { Workspace.SetBusy(false, ex.Message); } }
   // Files dropped from the OS reach the WebView without their real path, so the bytes are staged into a
   // shared per-drop folder (sibling assemblies land together, keeping reference resolution working) and
   // then opened by path through the normal pipeline.
@@ -460,7 +518,7 @@
   }
   private void SwitchBottomTab(string tab) { if (tab == "search") { OpenSearchPanel(); return; } bottomTab = tab; bottomOpen = true; ScheduleSave(); StateHasChanged(); }
   private void CloseBottom() { bottomOpen = false; ScheduleSave(); StateHasChanged(); }
-  private async Task UnloadAllAsync() { menuOpen = false; Workspace.SetBusy(true, "Unloading assemblies…"); await Assemblies.CloseAllAsync("desktop"); searchMatches = []; results = []; query = ""; bottomOpen = false; selectedSymbol = null; selectedNode = null; revealedPath = new HashSet<NodeId>(); }
+  private async Task UnloadAllAsync() { menuOpen = false; selectedAssemblies = []; Workspace.SetBusy(true, "Unloading assemblies…"); await Assemblies.CloseAllAsync("desktop"); searchMatches = []; results = []; query = ""; bottomOpen = false; selectedSymbol = null; selectedNode = null; revealedPath = new HashSet<NodeId>(); }
   private void OpenAssemblyContextMenu(MouseEventArgs e, AssemblyDescriptor assembly)
   {
     menuOpen = false;
@@ -468,6 +526,18 @@
     contextMenuX = (int)Math.Round(e.ClientX);
     contextMenuY = (int)Math.Round(e.ClientY);
   }
+  // Right-clicking empty space in the assembly tree (including the "open a file" placeholder) offers Open.
+  private void OpenTreeEmptyContextMenu(MouseEventArgs e)
+  {
+    menuOpen = false;
+    contextAssembly = null;
+    contextSymbol = null;
+    emptyMenuOpen = true;
+    contextMenuX = (int)Math.Round(e.ClientX);
+    contextMenuY = (int)Math.Round(e.ClientY);
+  }
+  private void CloseEmptyMenu() => emptyMenuOpen = false;
+  private async Task OpenFromEmptyMenuAsync() { emptyMenuOpen = false; await OpenAsync(); }
   private void OpenTreeContextMenu((MouseEventArgs Event, TreeNodeDescriptor Node) request)
   {
     if (request.Node.Kind == TreeNodeKind.Assembly)
@@ -489,6 +559,20 @@
   private static bool CanAnalyze(TreeNodeKind kind) => kind is TreeNodeKind.Type or TreeNodeKind.Method or TreeNodeKind.Constructor or TreeNodeKind.Field or TreeNodeKind.Property or TreeNodeKind.Event;
   private void CloseAssemblyContextMenu() => contextAssembly = null;
   private void CloseSymbolContextMenu() => contextSymbol = null;
+  // Right-clicking a search result offers Analyze, the same as the tree and source view. Search reports its
+  // kind as a string ("Type", "Method", …) which maps straight onto TreeNodeKind.
+  private void OpenSearchResultAnalyzeMenu(SearchResult result, MouseEventArgs e)
+  {
+    if (!Enum.TryParse<TreeNodeKind>(result.Kind, out var kind) || !CanAnalyze(kind)) return;
+    menuOpen = false;
+    contextAssembly = null;
+    emptyMenuOpen = false;
+    contextSymbol = result.Symbol;
+    contextSymbolName = result.QualifiedName ?? result.Name;
+    contextSymbolKind = kind;
+    contextMenuX = (int)Math.Round(e.ClientX);
+    contextMenuY = (int)Math.Round(e.ClientY);
+  }
   private void OpenSourceAnalyzeMenu(AnalyzeRequest request)
   {
     if (!CanAnalyze(request.Kind)) return;
@@ -518,12 +602,30 @@
     Workspace.SetBusy(true, $"Unloading {assembly.Name}…");
     await Assemblies.CloseAsync(assembly.ModuleMvid, "desktop");
   }
+  // Ctrl+A over the assembly tree selects every assembly; a plain click clears the selection again.
+  [JSInvokable] public void SelectAllAssemblies() { selectedAssemblies = Backend.Assemblies.Select(a => a.SessionId).ToHashSet(); StateHasChanged(); }
+  private void ClearAssemblySelection() { if (selectedAssemblies.Count == 0) return; selectedAssemblies = []; StateHasChanged(); }
+  // Ctrl+click toggles one assembly in the selection, building it up (or paring it down) a click at a time.
+  private void ToggleAssemblySelection(Guid sessionId) { if (!selectedAssemblies.Remove(sessionId)) selectedAssemblies.Add(sessionId); StateHasChanged(); }
+  // Delete over the tree (or the context menu) unloads the whole selection. dnSpy: Ctrl+A then Delete/Remove.
+  [JSInvokable] public async Task UnloadSelectedAssemblies()
+  {
+    if (Workspace.IsBusy || selectedAssemblies.Count == 0) return;
+    contextAssembly = null;
+    var targets = Backend.Assemblies.Where(a => selectedAssemblies.Contains(a.SessionId)).ToArray();
+    selectedAssemblies = [];
+    Workspace.SetBusy(true, targets.Length == 1 ? "Unloading assembly…" : $"Unloading {targets.Length} assemblies…");
+    foreach (var assembly in targets) await Assemblies.CloseAsync(assembly.ModuleMvid, "desktop");
+    Workspace.SetBusy(false, targets.Length == 1 ? "Assembly unloaded" : $"{targets.Length} assemblies unloaded");
+  }
+  private async Task UnloadAllFromContextAsync() { contextAssembly = null; emptyMenuOpen = false; await UnloadAllAsync(); }
 
   private void AssemblyClosing(AssemblyDescriptor assembly)
   {
     foreach (var tab in Workspace.Tabs.Where(tab => tab.Document.Symbol.ModuleMvid == assembly.ModuleMvid).ToArray()) CancelDecompilation(tab.Id);
     results = results.Where(result => result.Symbol.ModuleMvid != assembly.ModuleMvid).ToArray();
     searchMatches = searchMatches.Where(result => result.Symbol.ModuleMvid != assembly.ModuleMvid).ToArray();
+    selectedAssemblies.Remove(assembly.SessionId);
     if (selectedNode?.SessionId == assembly.SessionId) selectedNode = null;
     if (selectedSymbol?.ModuleMvid == assembly.ModuleMvid) { selectedSymbol = null; revealedPath = new HashSet<NodeId>(); }
   }
@@ -799,6 +901,25 @@
     await Session.SaveAsync();
     foreach (var tab in Workspace.Tabs.Where(tab => tab.Document.Resource is null).ToArray()) await RefreshTabLanguageAsync(tab);
   }
+  private async Task MemberOrderChangedAsync(ChangeEventArgs e)
+  {
+    memberOrder = Enum.TryParse<MemberOrder>(e.Value?.ToString(), out var parsed) ? parsed.ValidOrDefault() : MemberOrder.Ilspy;
+    DisplaySettings.MemberOrder = memberOrder;
+    Session.UiState = CaptureUiState();
+    await Session.SaveAsync();
+    // Only the C# view reorders; leave IL/hex tabs untouched so they don't needlessly re-decompile.
+    foreach (var tab in Workspace.Tabs.Where(tab => tab.Document.Resource is null && tab.Document.Language == DecompilerLanguage.CSharp.Key()).ToArray()) await RefreshTabLanguageAsync(tab);
+  }
+  private async Task MoveMemberGroupAsync(int index, int delta)
+  {
+    var target = index + delta;
+    if (target < 0 || target >= memberGroupOrder.Count) return;
+    (memberGroupOrder[index], memberGroupOrder[target]) = (memberGroupOrder[target], memberGroupOrder[index]);
+    DisplaySettings.MemberGroupOrder = memberGroupOrder.ToArray();
+    Session.UiState = CaptureUiState();
+    await Session.SaveAsync();
+    foreach (var tab in Workspace.Tabs.Where(tab => tab.Document.Resource is null && tab.Document.Language == DecompilerLanguage.CSharp.Key()).ToArray()) await RefreshTabLanguageAsync(tab);
+  }
   private async Task LineWrappingChangedAsync(ChangeEventArgs e)
   {
     wrapLines = e.Value is true;
@@ -880,5 +1001,5 @@
     }
     catch (Exception ex) { Workspace.SetBusy(false, $"Solution extraction failed: {ex.Message}"); }
   }
-  public void Dispose() { Workspace.Changed -= Refresh; Assemblies.Closing -= AssemblyClosing; Debugger.Changed -= DebuggerRefresh; saveDelay?.Cancel(); saveDelay?.Dispose(); searchDelay?.Cancel(); searchDelay?.Dispose(); CancelAllDecompilations(); selfReference?.Dispose(); }
+  public void Dispose() { Workspace.Changed -= Refresh; Backend.AssembliesChanged -= Refresh; Workspace.DragActiveChanged -= OnDragActive; Assemblies.Closing -= AssemblyClosing; Debugger.Changed -= DebuggerRefresh; saveDelay?.Cancel(); saveDelay?.Dispose(); searchDelay?.Cancel(); searchDelay?.Dispose(); CancelAllDecompilations(); selfReference?.Dispose(); }
 }

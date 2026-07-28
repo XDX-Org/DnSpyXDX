@@ -120,11 +120,23 @@ public sealed class WorkspaceAssemblyService(
 
     public async Task CloseAllAsync(string source, CancellationToken cancellationToken = default)
     {
-        foreach (var assembly in backend.Assemblies.ToArray())
-            await CloseAsync(assembly.ModuleMvid, source, cancellationToken);
-        workspace.Clear();
-        viewStates.Clear();
-        presentationCache.Clear();
-        workspace.SetBusy(false, "All assemblies unloaded");
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            // Cheap per-assembly UI teardown (cancel decompilations, drop cached view state) on this thread,
+            // then a single bulk backend unload that empties the tree at once and releases modules off-thread.
+            foreach (var assembly in backend.Assemblies.ToArray())
+            {
+                Closing?.Invoke(assembly);
+                viewStates.RemoveAssembly(assembly.ModuleMvid);
+                presentationCache.RemoveAssembly(assembly.ModuleMvid);
+            }
+            await backend.CloseAllAsync();
+            workspace.Clear();
+            viewStates.Clear();
+            presentationCache.Clear();
+            workspace.SetBusy(false, "All assemblies unloaded");
+        }
+        finally { gate.Release(); }
     }
 }

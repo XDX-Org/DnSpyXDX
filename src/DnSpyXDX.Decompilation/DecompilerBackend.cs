@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Threading.Channels;
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
@@ -14,6 +15,7 @@ using ICSharpCode.Decompiler.CSharp.OutputVisitor;
 using ICSharpCode.Decompiler.CSharp.Syntax;
 using ICSharpCode.Decompiler.Disassembler;
 using ICSharpCode.Decompiler.Metadata;
+using ICSharpCode.Decompiler.Semantics;
 using ICSharpCode.Decompiler.TypeSystem;
 using DnSpyXDX.Application;
 
@@ -24,17 +26,34 @@ public sealed class DecompilerBackend : IDecompilerBackend
     private readonly ConcurrentDictionary<Guid, AssemblySession> sessions = new();
     private readonly RuntimeDisplaySettings displaySettings;
     private readonly PersistentDecompileCache? documentCache;
+    private readonly NeighborLoadingSettings neighborLoading;
     // ILSpy's decompilation pipeline is large and pays a heavy one-time JIT cost: the first type decompiled
     // in the process takes several times longer than every later one. That flag ensures exactly one opened
     // assembly kicks off a background warm-up so the user's first real click lands on an already-hot pipeline.
     private static int warmUpStarted;
+    // On-demand neighbor loading (dnSpy parity). Like dnSpy, references resolve as a session's type system
+    // builds and the resolved documents are surfaced in the tree. We promote an assembly the decompiler
+    // resolved out of a directory the workspace has actually opened ("app-local") — the folder the target and
+    // its siblings share. Framework/runtime assemblies resolve from the shared runtime or NuGet packs, so
+    // their directory never matches and they stay out, which is what keeps the tree from filling with the BCL.
+    private static readonly StringComparer PathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+    private readonly ConcurrentDictionary<string, byte> promotionAttempted = new(PathComparer);
+    private readonly ConcurrentDictionary<string, byte> workspaceDirectories = new(PathComparer);
+    private readonly Channel<string> promotionQueue = Channel.CreateUnbounded<string>(new UnboundedChannelOptions { SingleReader = true });
+    private readonly CancellationTokenSource disposal = new();
+    private readonly Task? promotionWorker;
+
+    public event Action? AssembliesChanged;
 
     public DecompilerBackend() : this(new RuntimeDisplaySettings()) { }
     public DecompilerBackend(RuntimeDisplaySettings displaySettings) : this(displaySettings, null) { }
-    public DecompilerBackend(RuntimeDisplaySettings displaySettings, PersistentDecompileCache? documentCache)
+    public DecompilerBackend(RuntimeDisplaySettings displaySettings, PersistentDecompileCache? documentCache) : this(displaySettings, documentCache, new NeighborLoadingSettings()) { }
+    public DecompilerBackend(RuntimeDisplaySettings displaySettings, PersistentDecompileCache? documentCache, NeighborLoadingSettings neighborLoading)
     {
         this.displaySettings = displaySettings;
         this.documentCache = documentCache;
+        this.neighborLoading = neighborLoading;
+        if (neighborLoading.AutoLoadReferencedAssemblies) promotionWorker = Task.Run(DrainPromotionsAsync);
     }
     public IReadOnlyList<AssemblyDescriptor> Assemblies => sessions.Values.Select(s => s.Descriptor).OrderBy(s => s.Name).ToArray();
 
@@ -45,14 +64,60 @@ public sealed class DecompilerBackend : IDecompilerBackend
             cancellationToken.ThrowIfCancellationRequested();
             var fullPath = Path.GetFullPath(path);
             if (!File.Exists(fullPath)) throw new FileNotFoundException("Assembly not found.", fullPath);
-            var session = AssemblySession.Open(fullPath, displaySettings, documentCache);
+            // Mark this file and its directory as workspace-local before the decompiler resolves references,
+            // so siblings it pulls in during construction are recognised as app-local and queued for
+            // promotion — and so the file is never re-queued to promote itself.
+            if (neighborLoading.AutoLoadReferencedAssemblies)
+            {
+                workspaceDirectories.TryAdd(Path.GetDirectoryName(fullPath)!, 0);
+                promotionAttempted.TryAdd(fullPath, 0);
+            }
+            var session = AssemblySession.Open(fullPath, displaySettings, documentCache,
+                neighborLoading.AutoLoadReferencedAssemblies ? OnReferenceResolved : null);
             if (!sessions.TryAdd(session.Descriptor.SessionId, session)) { session.Dispose(); throw new InvalidOperationException("Could not add assembly session."); }
             // The reverse-reference index gates cross-assembly matches on the set of open assemblies, so
             // every index becomes stale when that set changes; drop them all and let them rebuild lazily.
             foreach (var other in sessions.Values) other.InvalidateAnalyzerIndex();
             if (Interlocked.Exchange(ref warmUpStarted, 1) == 0) session.BeginWarmUp();
+            AssembliesChanged?.Invoke();
             return session.Descriptor;
         }, cancellationToken);
+    }
+
+    // Called (on a background thread) for every assembly the decompiler resolves while a session builds.
+    // Cheap and non-recursive: it only filters and enqueues. The drain worker does the actual opening, so a
+    // deep app-local reference graph unwinds without blowing the stack or re-entering the resolving session.
+    private void OnReferenceResolved(string resolvedPath)
+    {
+        string fullPath;
+        try { fullPath = Path.GetFullPath(resolvedPath); }
+        catch (Exception ex) when (ex is ArgumentException or PathTooLongException or NotSupportedException) { return; }
+        // App-local only: a sibling sitting in a directory the workspace actually opened (the target's own
+        // folder). Framework and runtime assemblies resolve from the shared runtime or NuGet packs, so their
+        // directory never matches and they stay out of the tree.
+        var directory = Path.GetDirectoryName(fullPath);
+        if (directory is null || !workspaceDirectories.ContainsKey(directory)) return;
+        if (!promotionAttempted.TryAdd(fullPath, 0)) return;
+        promotionQueue.Writer.TryWrite(fullPath);
+    }
+
+    private async Task DrainPromotionsAsync()
+    {
+        try
+        {
+            await foreach (var path in promotionQueue.Reader.ReadAllAsync(disposal.Token))
+            {
+                if (sessions.Values.Any(s => PathComparer.Equals(s.Descriptor.Path, path))) continue;
+                if (!File.Exists(path)) continue;
+                // Best-effort: a native or otherwise unopenable DLL sitting in the folder must not break the
+                // workspace. OpenAsync opening this neighbor cascades — its own references get resolved and,
+                // if app-local, queued here in turn.
+                try { await OpenAsync(path, disposal.Token); }
+                catch (OperationCanceledException) when (disposal.IsCancellationRequested) { throw; }
+                catch { }
+            }
+        }
+        catch (OperationCanceledException) { }
     }
 
     public async Task<AssemblyDescriptor> OpenReferenceAsync(NodeId reference, CancellationToken cancellationToken = default)
@@ -61,8 +126,8 @@ public sealed class DecompilerBackend : IDecompilerBackend
         var name = source.GetReferenceName(reference);
         var loaded = sessions.Values.FirstOrDefault(s => string.Equals(s.Descriptor.Name, name, StringComparison.OrdinalIgnoreCase));
         if (loaded is not null) return loaded.Descriptor;
-        var path = source.ResolveReferencePath(name)
-            ?? throw new FileNotFoundException($"Could not find referenced assembly '{name}' beside {Path.GetFileName(source.Descriptor.Path)}.");
+        var path = source.ResolveReference(reference)
+            ?? throw new FileNotFoundException($"Could not find referenced assembly '{name}'. It isn't beside {Path.GetFileName(source.Descriptor.Path)}, in the configured search paths, the shared .NET runtime, or the GAC.");
         return await OpenAsync(path, cancellationToken);
     }
 
@@ -102,9 +167,27 @@ public sealed class DecompilerBackend : IDecompilerBackend
 
     public Task CloseAsync(Guid sessionId)
     {
-        if (sessions.TryRemove(sessionId, out var session)) session.Dispose();
+        // An explicit unload is a deliberate "forget this assembly" gesture, so drop its persisted decompile
+        // entries too. The id is captured before Dispose frees the module; the delete runs in the background.
+        // Also forget it in the promotion set: otherwise reopening its owner would skip re-promoting it as
+        // "already attempted", so on-demand siblings never come back after being unloaded.
+        if (sessions.TryRemove(sessionId, out var session)) { promotionAttempted.TryRemove(session.Descriptor.Path, out _); session.EvictFromCache(); session.Dispose(); }
         foreach (var other in sessions.Values) other.InvalidateAnalyzerIndex();
+        AssembliesChanged?.Invoke();
         return Task.CompletedTask;
+    }
+
+    public Task CloseAllAsync()
+    {
+        // Closing one assembly at a time invalidates every other analyzer index each time — O(n^2) — and
+        // disposes each module synchronously, which freezes the UI when a whole folder (a Unity Managed
+        // directory) is open. Clear the set in one shot so the tree empties immediately, then release the
+        // modules on a background thread. No per-item index invalidation is needed: nothing is left to index.
+        var closing = sessions.Values.ToArray();
+        sessions.Clear();
+        promotionAttempted.Clear();
+        AssembliesChanged?.Invoke();
+        return Task.Run(() => { foreach (var session in closing) { session.EvictFromCache(); session.Dispose(); } });
     }
 
     public Task<IReadOnlyList<TreeNodeDescriptor>> GetChildrenAsync(NodeId parent, CancellationToken cancellationToken = default) =>
@@ -222,9 +305,12 @@ public sealed class DecompilerBackend : IDecompilerBackend
 
     public async ValueTask DisposeAsync()
     {
+        disposal.Cancel();
+        promotionQueue.Writer.TryComplete();
+        if (promotionWorker is not null) { try { await promotionWorker; } catch { } }
         foreach (var session in sessions.Values) session.Dispose();
         sessions.Clear();
-        await Task.CompletedTask;
+        disposal.Dispose();
     }
 }
 
@@ -233,6 +319,7 @@ internal sealed class AssemblySession : IDisposable
     private readonly PEFile module;
     private readonly MetadataReader metadata;
     private readonly CSharpDecompiler decompiler;
+    private readonly UniversalAssemblyResolver universalResolver;
     private readonly DecompilerSettings settings;
     private readonly MetadataTypeNameProvider typeNames;
     private readonly SemaphoreSlim gate = new(1, 1);
@@ -241,7 +328,7 @@ internal sealed class AssemblySession : IDisposable
     // A content hash of this assembly, so a patched or rebuilt file never reads another build's cached source.
     // Computed once, lazily, the first time a cacheable document is decompiled (under the decompile gate).
     private string? assemblyId;
-    private readonly Dictionary<(int Token, DecompilerLanguage Language, bool ShowMetadataTokens), DecompilerDocument> cache = [];
+    private readonly Dictionary<(int Token, DecompilerLanguage Language, bool ShowMetadataTokens, MemberOrder MemberOrder, string GroupOrder), DecompilerDocument> cache = [];
     private byte[]? image;
     private IReadOnlyList<BinaryRegion>? binaryRegions;
     private IReadOnlyDictionary<string, SymbolId>? typeLinks;
@@ -253,11 +340,12 @@ internal sealed class AssemblySession : IDisposable
     private readonly object indexLock = new();
     public AssemblyDescriptor Descriptor { get; }
 
-    private AssemblySession(PEFile module, CSharpDecompiler decompiler, DecompilerSettings settings, AssemblyDescriptor descriptor, RuntimeDisplaySettings displaySettings, PersistentDecompileCache? documentCache)
+    private AssemblySession(PEFile module, CSharpDecompiler decompiler, UniversalAssemblyResolver universalResolver, DecompilerSettings settings, AssemblyDescriptor descriptor, RuntimeDisplaySettings displaySettings, PersistentDecompileCache? documentCache)
     {
         this.module = module;
         metadata = module.Metadata;
         this.decompiler = decompiler;
+        this.universalResolver = universalResolver;
         this.settings = settings;
         this.displaySettings = displaySettings;
         this.documentCache = documentCache;
@@ -265,7 +353,7 @@ internal sealed class AssemblySession : IDisposable
         Descriptor = descriptor;
     }
 
-    public static AssemblySession Open(string path, RuntimeDisplaySettings displaySettings, PersistentDecompileCache? documentCache = null)
+    public static AssemblySession Open(string path, RuntimeDisplaySettings displaySettings, PersistentDecompileCache? documentCache = null, Action<string>? onReferenceResolved = null)
     {
         PEFile module;
         try { module = new PEFile(path, PEStreamOptions.PrefetchEntireImage); }
@@ -275,15 +363,18 @@ internal sealed class AssemblySession : IDisposable
         var metadata = module.Metadata;
         var mvid = metadata.GetGuid(metadata.GetModuleDefinition().Mvid);
         var name = metadata.GetString(metadata.GetAssemblyDefinition().Name);
-        var resolver = new UniversalAssemblyResolver(path, false, module.DetectTargetFrameworkId());
-        resolver.AddSearchDirectory(Path.GetDirectoryName(path)!);
+        var universal = new UniversalAssemblyResolver(path, false, module.DetectTargetFrameworkId());
+        universal.AddSearchDirectory(Path.GetDirectoryName(path)!);
+        // When the workspace wants on-demand neighbor loading, watch what the decompiler resolves so app-local
+        // dependencies can be promoted to their own sessions; otherwise use the resolver directly.
+        IAssemblyResolver resolver = onReferenceResolved is null ? universal : new PromotingAssemblyResolver(universal, onReferenceResolved);
         var settings = new DecompilerSettings { ThrowOnAssemblyResolveErrors = false };
         settings.CSharpFormattingOptions.IndentationString = "\t";
         settings.CSharpFormattingOptions.IndentSwitchBody = true;
         var decompiler = new CSharpDecompiler(module, resolver, settings);
         var sessionId = Guid.NewGuid();
         var descriptor = new AssemblyDescriptor(sessionId, mvid, name, path, module.DetectTargetFrameworkId() ?? "Unknown", module.Reader.PEHeaders.CoffHeader.Machine.ToString(), new NodeId(sessionId, "root"));
-        return new AssemblySession(module, decompiler, settings, descriptor, displaySettings, documentCache);
+        return new AssemblySession(module, decompiler, universal, settings, descriptor, displaySettings, documentCache);
     }
 
     public IReadOnlyList<TreeNodeDescriptor> GetChildren(NodeId parent, CancellationToken ct)
@@ -309,7 +400,7 @@ internal sealed class AssemblySession : IDisposable
                 : null;
             return new TreeNodeDescriptor(new NodeId(Descriptor.SessionId, $"res:{MetadataTokens.GetToken(h)}"), name, TreeNodeKind.Resource, false, Tooltip: tooltip);
         }).OrderBy(x => x.Name).ToArray();
-        if (parent.Value == "namespaces") return metadata.TypeDefinitions.Select(h => metadata.GetString(metadata.GetTypeDefinition(h).Namespace)).Distinct().OrderBy(x => x).Select(ns => new TreeNodeDescriptor(new NodeId(Descriptor.SessionId, $"ns:{Uri.EscapeDataString(ns)}"), string.IsNullOrEmpty(ns) ? "<global>" : ns, TreeNodeKind.Namespace, true)).ToArray();
+        if (parent.Value == "namespaces") return metadata.TypeDefinitions.Select(h => metadata.GetString(metadata.GetTypeDefinition(h).Namespace)).Distinct().OrderBy(x => x).Select(ns => new TreeNodeDescriptor(new NodeId(Descriptor.SessionId, $"ns:{Uri.EscapeDataString(ns)}"), string.IsNullOrEmpty(ns) ? "-" : ns, TreeNodeKind.Namespace, true)).ToArray();
         if (parent.Value.StartsWith("ns:", StringComparison.Ordinal))
         {
             var ns = Uri.UnescapeDataString(parent.Value[3..]);
@@ -331,6 +422,26 @@ internal sealed class AssemblySession : IDisposable
         var handle = MetadataTokens.EntityHandle(token);
         if (handle.Kind != HandleKind.AssemblyReference) throw new ArgumentException("The node is not an assembly reference.", nameof(reference));
         return metadata.GetString(metadata.GetAssemblyReference((AssemblyReferenceHandle)handle).Name);
+    }
+
+    /// <summary>Locates the file backing an assembly-reference node. Asks the decompiler's own resolver first
+    /// — it searches the assembly's directory, configured probe paths, the shared .NET runtime and the GAC —
+    /// which is what lets a framework or runtime dependency open even when it doesn't sit beside the file that
+    /// references it. Falls back to the plain beside-the-file search by name.</summary>
+    public string? ResolveReference(NodeId reference)
+    {
+        if (reference.Value.StartsWith("ref:", StringComparison.Ordinal) &&
+            int.TryParse(reference.Value.AsSpan(4), out var token) &&
+            MetadataTokens.EntityHandle(token) is { Kind: HandleKind.AssemblyReference } handle)
+        {
+            try
+            {
+                var found = universalResolver.FindAssemblyFile(new ICSharpCode.Decompiler.Metadata.AssemblyReference(module, (AssemblyReferenceHandle)handle));
+                if (!string.IsNullOrEmpty(found) && File.Exists(found)) return found;
+            }
+            catch (Exception ex) when (ex is BadImageFormatException or IOException or NotSupportedException) { }
+        }
+        return ResolveReferencePath(GetReferenceName(reference));
     }
 
     private static bool IsLikelyObfuscatedResourceName(string name) =>
@@ -648,11 +759,38 @@ internal sealed class AssemblySession : IDisposable
         return bounded.IsNil ? richest : bounded;
     }
 
+    // The content-hash identity used to key persistent cache entries, computed once from this assembly's
+    // bytes and memoised. Reads the in-memory PE image, so callers must invoke it while the module is alive.
+    private string AssemblyId() => assemblyId ??= PersistentDecompileCache.ComputeAssemblyId(module.Reader.GetEntireImage().GetContent().AsSpan());
+
+    // Delete this assembly's persisted decompile entries. Called on an explicit UI unload, not on app
+    // shutdown (which saves the session and keeps the cache for a fast restore). The id is captured now while
+    // the module is alive; the deletion runs in the background and reads it from the file only if this session
+    // never had to compute it, so it remains correct after the module is disposed.
+    public void EvictFromCache()
+    {
+        if (documentCache is not { } cache) return;
+        var known = assemblyId;
+        var path = Descriptor.Path;
+        _ = Task.Run(() =>
+        {
+            try { cache.Evict(known ?? PersistentDecompileCache.ComputeAssemblyId(File.ReadAllBytes(path))); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        });
+    }
+
     public async Task<DecompilerDocument> DecompileAsync(SymbolId symbol, DecompilerLanguage language, CancellationToken ct)
     {
         if (!Enum.IsDefined(language)) throw new ArgumentOutOfRangeException(nameof(language));
         var showMetadataTokens = displaySettings.ShowMetadataTokens;
-        var key = (symbol.MetadataToken, language, showMetadataTokens);
+        // Member order only reshapes the C# view; every other view keeps ILSpy's order so those cache
+        // entries stay shared across the setting instead of duplicating per option.
+        var memberOrder = language == DecompilerLanguage.CSharp ? displaySettings.MemberOrder.ValidOrDefault() : MemberOrder.Ilspy;
+        // The dnSpy layout also depends on the chosen group order; other cases don't, so their signature is
+        // empty and their cache entries stay shared regardless of the group setting.
+        var groupOrder = memberOrder == MemberOrder.DnSpy ? MemberGroups.Normalize(displaySettings.MemberGroupOrder) : MemberGroups.DefaultOrder;
+        var groupSignature = memberOrder == MemberOrder.DnSpy ? MemberGroups.Signature(groupOrder) : "";
+        var key = (symbol.MetadataToken, language, showMetadataTokens, memberOrder, groupSignature);
         if (cache.TryGetValue(key, out var cached)) return cached;
         await gate.WaitAsync(ct);
         try
@@ -661,10 +799,11 @@ internal sealed class AssemblySession : IDisposable
             // A previous run may have already decompiled this exact document; loading it from disk avoids
             // re-running ILSpy, which is what makes restoring a saved session (or reopening a type) fast.
             var cacheable = documentCache is not null && PersistentDecompileCache.IsCacheable(language);
+            string? cacheAssemblyId = null;
             if (cacheable)
             {
-                assemblyId ??= PersistentDecompileCache.ComputeAssemblyId(module.Reader.GetEntireImage().GetContent().AsSpan());
-                var stored = await Task.Run(() => documentCache!.TryLoad(assemblyId, symbol.MetadataToken, language, showMetadataTokens), ct);
+                cacheAssemblyId = AssemblyId();
+                var stored = await Task.Run(() => documentCache!.TryLoad(cacheAssemblyId, symbol.MetadataToken, language, showMetadataTokens, memberOrder, groupSignature), ct);
                 if (stored is not null) return cache[key] = stored;
             }
             var handle = MetadataTokens.EntityHandle(symbol.MetadataToken);
@@ -675,7 +814,12 @@ internal sealed class AssemblySession : IDisposable
             DebugDocumentMap? debugMap = null;
             if (language == DecompilerLanguage.CSharp)
                 (text, semanticSpans, csharpReferences, debugMap) = await Task.Run(
-                    () => DecompileCSharp(symbol, handle, showMetadataTokens),
+                    () => DecompileCSharp(
+                        symbol,
+                        handle,
+                        showMetadataTokens,
+                        memberOrder,
+                        groupOrder),
                     ct);
             else if (language == DecompilerLanguage.IL)
                 (text, debugMap) = await Task.Run(
@@ -716,7 +860,7 @@ internal sealed class AssemblySession : IDisposable
                 SemanticSpans: semanticSpans, DebugMap: debugMap);
             cache[key] = result;
             // Persist off the gate so writing the entry never delays returning the document to the UI.
-            if (cacheable) _ = Task.Run(() => documentCache!.Save(assemblyId!, result, language, showMetadataTokens));
+            if (cacheable) _ = Task.Run(() => documentCache!.Save(AssemblyId(), result, language, showMetadataTokens, memberOrder, groupSignature));
             return result;
         }
         finally { decompiler.CancellationToken = default; gate.Release(); }
@@ -729,12 +873,19 @@ internal sealed class AssemblySession : IDisposable
         DebugDocumentMap DebugMap) DecompileCSharp(
             SymbolId symbol,
             EntityHandle handle,
-            bool showMetadataTokens)
+            bool showMetadataTokens,
+            MemberOrder memberOrder,
+            IReadOnlyList<MemberGroup> groupOrder)
     {
         // Decompile to a syntax tree and paint each token from its bound symbol (dnSpy's approach) rather
         // than lexically. The namespace header and dnSpy-style token comments are then folded back in while
         // keeping the classification spans and navigable references aligned to the text.
+        // dnSpy mode favours explicit bodies over C#-6 sugar: a getter-only property that returns a value is
+        // emitted as `get { return x; }` rather than `=> x`. The setting is flipped per call, which is safe
+        // because DecompileAsync serialises every decompile on this session through its gate.
+        settings.UseExpressionBodyForCalculatedGetterOnlyProperties = memberOrder != MemberOrder.DnSpy;
         var tree = decompiler.Decompile([handle]);
+        if (memberOrder == MemberOrder.DnSpy) ReorderMembersDnSpyStyle(tree, groupOrder);
         var (text, spans, references) = SemanticHighlighter.Highlight(tree, settings.CSharpFormattingOptions);
         var lines = SplitIntoClassifiedLines(text, spans, references);
         InsertNamespaceLine(lines, DeclaringTypeOf(handle));
@@ -743,6 +894,57 @@ internal sealed class AssemblySession : IDisposable
         var flattened = FlattenClassifiedLines(lines);
         return (flattened.Text, flattened.Spans, flattened.References, debugMap);
     }
+
+    // dnSpy lists a type's members in source-code order, not ILSpy's kind-grouped order (which clusters all
+    // properties, then all events, then all methods). ILSpy only reconstructs source order for COM interop via
+    // GetMembersWithNativeOrdering; we apply the same idea to every type so, e.g., an event declared between two
+    // properties stays between them instead of being pulled out into an events group.
+    //
+    // dnSpy's layout groups a type's members by kind — methods, properties, events, fields and nested types —
+    // and renders those groups as contiguous blocks in a user-chosen order (its "Decompilation order" setting).
+    // Within a block, members keep declaration order (properties/events keyed on their first accessor token,
+    // which lives in the MethodDef table in declaration order; methods/fields/nested types on their own token).
+    // The sort key is (group rank in the chosen order, declaration token). OrderBy is stable, so members that
+    // share a key keep their existing relative order.
+    private static void ReorderMembersDnSpyStyle(SyntaxTree tree, IReadOnlyList<MemberGroup> groupOrder)
+    {
+        var rank = new int[5];
+        for (var i = 0; i < groupOrder.Count; i++) rank[(int)groupOrder[i]] = i;
+        foreach (var type in tree.Descendants.OfType<TypeDeclaration>().ToList())
+        {
+            var sorted = type.Members.OrderBy(member => GetDeclarationOrderKey(member, rank)).ToList();
+            type.Members.Clear();
+            foreach (var member in sorted) type.Members.Add(member);
+        }
+    }
+
+    private static (int GroupRank, int Token) GetDeclarationOrderKey(EntityDeclaration member, int[] rank)
+    {
+        // Declarations are annotated with a resolve result, not the entity directly: members carry a
+        // MemberResolveResult (its Member is the IMethod/IProperty/IEvent/IField) and nested types a
+        // TypeResolveResult. Anything unresolvable (rare) sorts last so it never displaces real members.
+        if (member is TypeDeclaration)
+        {
+            var typeDefinition = member.Annotation<TypeResolveResult>()?.Type.GetDefinition();
+            return (rank[(int)MemberGroup.NestedTypes], typeDefinition is null ? int.MaxValue : TokenValue(typeDefinition.MetadataToken));
+        }
+        if (member.Annotation<MemberResolveResult>()?.Member is not { } entity) return (int.MaxValue, int.MaxValue);
+        var (group, handle) = entity switch
+        {
+            IField => (MemberGroup.Fields, entity.MetadataToken),
+            IProperty { Getter: { } getter } => (MemberGroup.Properties, getter.MetadataToken),
+            IProperty { Setter: { } setter } => (MemberGroup.Properties, setter.MetadataToken),
+            IProperty => (MemberGroup.Properties, entity.MetadataToken),
+            IEvent { AddAccessor: { } add } => (MemberGroup.Events, add.MetadataToken),
+            IEvent { RemoveAccessor: { } remove } => (MemberGroup.Events, remove.MetadataToken),
+            IEvent { InvokeAccessor: { } invoke } => (MemberGroup.Events, invoke.MetadataToken),
+            IEvent => (MemberGroup.Events, entity.MetadataToken),
+            _ => (MemberGroup.Methods, entity.MetadataToken) // IMethod: plain methods, constructors, operators
+        };
+        return (rank[(int)group], TokenValue(handle));
+    }
+
+    private static int TokenValue(EntityHandle handle) => handle.IsNil ? int.MaxValue : MetadataTokens.GetToken(handle);
 
     private sealed class ClassifiedLine(string text, int? originalLine = null)
     {
@@ -1682,7 +1884,10 @@ internal sealed class AssemblySession : IDisposable
         {
             ct.ThrowIfCancellationRequested();
             var t = metadata.GetTypeDefinition(h); var metadataName = metadata.GetString(t.Name); var typeName = TypeDisplayName(t);
-            var typeResult = Result(h, typeName, "Type");
+            // Show the type's C# keyword (class/struct/interface/enum/delegate) in the search list, like the
+            // assembly explorer, rather than a generic "Type". Kind stays "Type" for filtering and navigation.
+            var keyword = Classify(t);
+            var typeResult = Result(h, typeName, "Type", keyword == "staticclass" ? "class" : keyword);
             if (Matches(typeResult, metadataName, query)) yield return typeResult;
             foreach (var m in t.GetMethods()) { var name = metadata.GetString(metadata.GetMethodDefinition(m).Name); var result = Result(m, name, "Method"); if (Matches(result, name, query)) yield return result; }
             foreach (var f in t.GetFields()) { var name = metadata.GetString(metadata.GetFieldDefinition(f).Name); var result = Result(f, name, "Field"); if (Matches(result, name, query)) yield return result; }
@@ -1723,7 +1928,7 @@ internal sealed class AssemblySession : IDisposable
     private TypeDefinitionHandle FindPropertyDeclaringType(PropertyDefinitionHandle target) => metadata.TypeDefinitions.FirstOrDefault(t => metadata.GetTypeDefinition(t).GetProperties().Contains(target));
     private TypeDefinitionHandle FindEventDeclaringType(EventDefinitionHandle target) => metadata.TypeDefinitions.FirstOrDefault(t => metadata.GetTypeDefinition(t).GetEvents().Contains(target));
 
-    private SearchResult Result(EntityHandle h, string name, string kind)
+    private SearchResult Result(EntityHandle h, string name, string kind, string? display = null)
     {
         var symbol = new SymbolId(Descriptor.ModuleMvid, MetadataTokens.GetToken(h));
         var declaringType = DeclaringTypeOf(h);
@@ -1732,7 +1937,7 @@ internal sealed class AssemblySession : IDisposable
         var outer = declaringType;
         while (!metadata.GetTypeDefinition(outer).GetDeclaringType().IsNil) outer = metadata.GetTypeDefinition(outer).GetDeclaringType();
         var ns = metadata.GetString(metadata.GetTypeDefinition(outer).Namespace);
-        return new(symbol, name, kind, Descriptor.Name, ns, new SymbolId(Descriptor.ModuleMvid, MetadataTokens.GetToken(declaringType)), qualifiedName);
+        return new(symbol, name, kind, Descriptor.Name, ns, new SymbolId(Descriptor.ModuleMvid, MetadataTokens.GetToken(declaringType)), qualifiedName, display);
     }
 
     private string QualifiedTypeName(TypeDefinitionHandle handle)

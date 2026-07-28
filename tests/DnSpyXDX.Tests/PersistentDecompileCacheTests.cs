@@ -148,6 +148,84 @@ public sealed class PersistentDecompileCacheTests
     }
 
     [Fact]
+    public void Evict_removes_one_assemblys_entries_and_leaves_others()
+    {
+        using var directory = new TempCacheDirectory();
+        var cache = new PersistentDecompileCache(directory.Path);
+        var kept = PersistentDecompileCache.ComputeAssemblyId(new byte[] { 1, 2, 3 });
+        var document = SampleDocument(Guid.NewGuid());
+        cache.Save(AssemblyId, document, DecompilerLanguage.CSharp, showMetadataTokens: false);
+        cache.Save(AssemblyId, document, DecompilerLanguage.IL, showMetadataTokens: false);
+        cache.Save(kept, document, DecompilerLanguage.CSharp, showMetadataTokens: false);
+
+        cache.Evict(AssemblyId);
+
+        // Every language/flag entry for the evicted assembly is gone; another assembly is untouched.
+        Assert.Null(cache.TryLoad(AssemblyId, document.Symbol.MetadataToken, DecompilerLanguage.CSharp, showMetadataTokens: false));
+        Assert.Null(cache.TryLoad(AssemblyId, document.Symbol.MetadataToken, DecompilerLanguage.IL, showMetadataTokens: false));
+        Assert.NotNull(cache.TryLoad(kept, document.Symbol.MetadataToken, DecompilerLanguage.CSharp, showMetadataTokens: false));
+    }
+
+    [Fact]
+    public void Evicting_a_missing_assembly_is_a_no_op()
+    {
+        using var directory = new TempCacheDirectory();
+        var cache = new PersistentDecompileCache(directory.Path);
+
+        cache.Evict(AssemblyId); // must not throw
+    }
+
+    [Fact]
+    public async Task Unloading_an_assembly_in_the_ui_evicts_its_persistent_cache()
+    {
+        using var directory = new TempCacheDirectory();
+        var cache = new PersistentDecompileCache(directory.Path);
+        await using var backend = new DecompilerBackend(new RuntimeDisplaySettings(), cache);
+        var assembly = await backend.OpenAsync(typeof(PersistentDecompileCacheTests).Assembly.Location);
+        var symbol = new SymbolId(assembly.ModuleMvid, GetTypeToken(backend, assembly, nameof(PersistentDecompileCacheTests)));
+
+        await backend.DecompileAsync(symbol, DecompilerLanguage.CSharp);
+        Assert.True(await WaitUntilAsync(() => CachedFileCount(directory.Path) > 0), "decompile should have written a cache entry");
+
+        await backend.CloseAsync(assembly.SessionId); // the UI unload path
+
+        Assert.True(await WaitUntilAsync(() => CachedFileCount(directory.Path) == 0),
+            "closing the assembly should have evicted its cached document");
+    }
+
+    [Fact]
+    public async Task Disposing_the_backend_keeps_the_cache_for_a_later_restore()
+    {
+        using var directory = new TempCacheDirectory();
+        var cache = new PersistentDecompileCache(directory.Path);
+        await using (var backend = new DecompilerBackend(new RuntimeDisplaySettings(), cache))
+        {
+            var assembly = await backend.OpenAsync(typeof(PersistentDecompileCacheTests).Assembly.Location);
+            var symbol = new SymbolId(assembly.ModuleMvid, GetTypeToken(backend, assembly, nameof(PersistentDecompileCacheTests)));
+            await backend.DecompileAsync(symbol, DecompilerLanguage.CSharp);
+            Assert.True(await WaitUntilAsync(() => CachedFileCount(directory.Path) > 0), "decompile should have written a cache entry");
+        }
+        // Disposal is the app-shutdown path (session is saved separately); it must NOT evict the cache.
+        await Task.Delay(200);
+
+        Assert.True(CachedFileCount(directory.Path) > 0, "disposing the backend must not evict the cache");
+    }
+
+    private static int CachedFileCount(string directory) =>
+        Directory.Exists(directory) ? Directory.EnumerateFiles(directory, "*.json.gz", SearchOption.AllDirectories).Count() : 0;
+
+    private static async Task<bool> WaitUntilAsync(Func<bool> condition)
+    {
+        // Saves and evictions run on background tasks; allow generous time in case the thread pool is busy.
+        for (var attempt = 0; attempt < 250; attempt++)
+        {
+            if (condition()) return true;
+            await Task.Delay(20);
+        }
+        return condition();
+    }
+
+    [Fact]
     public void Only_text_languages_are_cacheable()
     {
         Assert.True(PersistentDecompileCache.IsCacheable(DecompilerLanguage.CSharp));

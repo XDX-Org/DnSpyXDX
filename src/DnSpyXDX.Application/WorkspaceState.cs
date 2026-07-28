@@ -4,6 +4,10 @@ public sealed class WorkspaceState
 {
     private readonly List<DocumentTab> tabs = [];
     public event Action? Changed;
+    // Raised by the native drag-drop handler while a file is dragged over the window, so the UI can show the
+    // drop overlay. Separate from Changed so a hover doesn't trigger a re-render or a session save.
+    public event Action<bool>? DragActiveChanged;
+    public void SetDragActive(bool active) => DragActiveChanged?.Invoke(active);
     public IReadOnlyList<DocumentTab> Tabs => tabs;
     public string? ActiveTabId { get; private set; }
     public DocumentTab? ActiveTab => tabs.FirstOrDefault(t => t.Id == ActiveTabId);

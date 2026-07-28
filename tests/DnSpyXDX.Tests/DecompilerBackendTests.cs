@@ -120,6 +120,67 @@ public sealed class DecompilerBackendTests
     }
 
     [Fact]
+    public async Task Dnspy_member_order_groups_by_kind_in_the_configured_order()
+    {
+        var displaySettings = new RuntimeDisplaySettings();
+        await using var backend = new DecompilerBackend(displaySettings);
+        await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
+        var type = Assert.Single(await backend.SearchAsync(nameof(SampleMembers)), result =>
+            result.Kind == "Type" && result.QualifiedName == "DnSpyXDX.Tests.SampleMembers");
+
+        var ilspy = await backend.DecompileAsync(type.Symbol, DecompilerLanguage.CSharp);
+        displaySettings.MemberOrder = MemberOrder.DnSpy;
+        var dnspy = await backend.DecompileAsync(type.Symbol, DecompilerLanguage.CSharp);
+
+        Assert.NotEqual(ilspy.Text, dnspy.Text);
+
+        // dnSpy groups members by kind into contiguous blocks, in the default order Methods, Properties,
+        // Events, Fields, Nested Types. Within a block members keep declaration order (so the three properties
+        // stay in source order). This guards the grouping and that fields/nested types are not floated to the
+        // top by their low metadata-table tokens.
+        int At(string text) => dnspy.Text.IndexOf(text, StringComparison.Ordinal);
+        var blocks = new[] { "void SampleMethod", "int SampleProperty", "event Action", "public int SampleField;", "class SampleNested" };
+        var positions = blocks.Select(At).ToList();
+        Assert.DoesNotContain(-1, positions);
+        Assert.Equal(positions.OrderBy(p => p).ToList(), positions);
+        // Declaration order within the Properties block.
+        Assert.True(At("int SampleProperty") < At("int CalculatedProperty") && At("int CalculatedProperty") < At("int AfterEventProperty"));
+
+        // dnSpy mode also spells out a calculated getter-only property as a full accessor block instead of
+        // ILSpy's expression body.
+        Assert.Contains("public int CalculatedProperty => SampleField;", ilspy.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("=> SampleField;", dnspy.Text, StringComparison.Ordinal);
+        Assert.Matches(@"public int CalculatedProperty\s*\{\s*get\s*\{\s*return SampleField;", dnspy.Text);
+
+        Assert.Equal(MemberOrder.Ilspy, new RuntimeDisplaySettings().MemberOrder);
+        Assert.Equal(MemberOrder.Ilspy, new UiSessionState().MemberOrder);
+        Assert.Equal(MemberGroups.DefaultOrder, new RuntimeDisplaySettings().MemberGroupOrder);
+        Assert.Null(new UiSessionState().MemberGroupOrder);
+    }
+
+    [Fact]
+    public async Task Dnspy_member_group_order_is_configurable()
+    {
+        var displaySettings = new RuntimeDisplaySettings { MemberOrder = MemberOrder.DnSpy };
+        await using var backend = new DecompilerBackend(displaySettings);
+        await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
+        var type = Assert.Single(await backend.SearchAsync(nameof(SampleMembers)), result =>
+            result.Kind == "Type" && result.QualifiedName == "DnSpyXDX.Tests.SampleMembers");
+
+        var defaultOrder = await backend.DecompileAsync(type.Symbol, DecompilerLanguage.CSharp);
+        // Reverse the groups: fields and nested types to the top, methods to the bottom.
+        displaySettings.MemberGroupOrder =
+            [MemberGroup.Fields, MemberGroup.NestedTypes, MemberGroup.Events, MemberGroup.Properties, MemberGroup.Methods];
+        var reordered = await backend.DecompileAsync(type.Symbol, DecompilerLanguage.CSharp);
+
+        Assert.NotEqual(defaultOrder.Text, reordered.Text);
+        int At(string text) => reordered.Text.IndexOf(text, StringComparison.Ordinal);
+        Assert.True(At("public int SampleField;") < At("class SampleNested"), "Fields should now precede nested types.");
+        Assert.True(At("class SampleNested") < At("int SampleProperty"), "Nested types should now precede properties.");
+        Assert.True(At("int SampleProperty") < At("void SampleMethod"), "Methods should now come last.");
+    }
+
+    [Fact]
     public async Task Decompiled_documents_carry_links_for_types_in_the_same_assembly()
     {
         await using var backend = new DecompilerBackend();
@@ -309,7 +370,7 @@ public sealed class DecompilerBackendTests
         Assert.Contains(members, m => m.Name == nameof(SampleMembers.SampleMethod));
 
         // They are reachable by expanding the property or event that owns them.
-        var property = members.Single(m => m.Kind == TreeNodeKind.Property);
+        var property = members.Single(m => m.Kind == TreeNodeKind.Property && m.Name == nameof(SampleMembers.SampleProperty));
         Assert.True(property.HasChildren);
         var accessors = await backend.GetChildrenAsync(property.Id);
         Assert.Equal(["get_SampleProperty", "set_SampleProperty"], accessors.Select(a => a.Name));
@@ -556,7 +617,9 @@ public sealed class SampleMembers
 {
     public int SampleField;
     public int SampleProperty { get; set; }
+    public int CalculatedProperty => SampleField;
     public event Action? SampleEvent;
+    public int AfterEventProperty => SampleField;
     public void SampleMethod() { }
     public void CallsLater() => Later();
     public void Later() { }

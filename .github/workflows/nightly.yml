@@ -1,0 +1,148 @@
+name: Nightly
+
+on:
+  schedule:
+    # 07:00 UTC daily (~midnight US Pacific)
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish a rolling 'nightly' prerelease with the built binaries"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore DnSpyXDX.slnx
+
+      - name: Build
+        run: dotnet build DnSpyXDX.slnx -c Release --no-restore
+
+      - name: Test
+        run: dotnet test DnSpyXDX.slnx -c Release --no-build --logger "trx;LogFileName=test-results.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-${{ matrix.os }}
+          path: "**/TestResults/*.trx"
+          if-no-files-found: ignore
+
+  publish:
+    name: Publish (${{ matrix.rid }})
+    needs: build-test
+    # Both RIDs cross-publish from Linux: the win-x64 runtime pack and Photino's
+    # win-x64 native lib arrive as NuGet packages and the SDK embeds the icon
+    # without Windows tooling, so a Windows runner isn't needed here.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rid: [win-x64, linux-x64]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Publish self-contained single-file (${{ matrix.rid }})
+        # Single-file bundles the managed assemblies into one executable. The Photino native
+        # library and the wwwroot/ assets deliberately stay external (IncludeNativeLibraries...
+        # =false), which is the reliable combination for Photino's WebView bootstrap.
+        run: >
+          dotnet publish src/DnSpyXDX.Host
+          -c Release
+          -r ${{ matrix.rid }}
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=false
+          -o publish/${{ matrix.rid }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: DnSpyXDX-${{ matrix.rid }}
+          path: publish/${{ matrix.rid }}
+          if-no-files-found: error
+
+  release:
+    name: Rolling nightly prerelease
+    needs: publish
+    # Scheduled runs always publish; manual runs only when explicitly requested.
+    if: github.event_name == 'schedule' || inputs.publish_release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Compute build metadata
+        id: meta
+        run: |
+          echo "stamp=$(date -u '+%Y-%m-%d %H:%M UTC')" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Package per-RID archives
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for dir in artifacts/DnSpyXDX-*; do
+            [ -d "$dir" ] || continue
+            rid="${dir##*/DnSpyXDX-}"
+            (cd "$dir" && zip -r "$GITHUB_WORKSPACE/dist/DnSpyXDX-${rid}.zip" .)
+          done
+          ls -l dist
+
+      - name: Move nightly tag to current commit
+        # action-gh-release won't relocate an existing tag, so force-update the ref
+        # (or create it the first time) to keep 'nightly' pointing at this build.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api -X PATCH "repos/${{ github.repository }}/git/refs/tags/nightly" \
+            -f sha="${{ github.sha }}" -F force=true \
+          || gh api -X POST "repos/${{ github.repository }}/git/refs" \
+            -f ref="refs/tags/nightly" -f sha="${{ github.sha }}"
+
+      - name: Publish rolling 'nightly' release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: nightly
+          name: Nightly build ${{ steps.meta.outputs.stamp }} (${{ steps.meta.outputs.short_sha }})
+          prerelease: true
+          body: |
+            **Nightly build — rolling prerelease.** This `nightly` release is overwritten on every run.
+
+            - **Built:** ${{ steps.meta.outputs.stamp }}
+            - **Commit:** `${{ github.sha }}`
+
+            Self-contained single-file binaries for Windows x64 and Linux x64. Not a stable release.
+          files: dist/*.zip
