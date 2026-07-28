@@ -21,6 +21,7 @@ namespace DnSpyXDX.Decompilation;
 public sealed class DecompilerBackend : IDecompilerBackend
 {
     private readonly ConcurrentDictionary<Guid, AssemblySession> sessions = new();
+    private readonly object sessionMutationLock = new();
     private readonly RuntimeDisplaySettings displaySettings;
     private readonly PersistentDecompileCache? documentCache;
     // ILSpy's decompilation pipeline is large and pays a heavy one-time JIT cost: the first type decompiled
@@ -44,13 +45,23 @@ public sealed class DecompilerBackend : IDecompilerBackend
             cancellationToken.ThrowIfCancellationRequested();
             var fullPath = Path.GetFullPath(path);
             if (!File.Exists(fullPath)) throw new FileNotFoundException("Assembly not found.", fullPath);
-            var session = AssemblySession.Open(fullPath, displaySettings, documentCache);
-            if (!sessions.TryAdd(session.Descriptor.SessionId, session)) { session.Dispose(); throw new InvalidOperationException("Could not add assembly session."); }
-            // The reverse-reference index gates cross-assembly matches on the set of open assemblies, so
-            // every index becomes stale when that set changes; drop them all and let them rebuild lazily.
-            foreach (var other in sessions.Values) other.InvalidateAnalyzerIndex();
-            if (Interlocked.Exchange(ref warmUpStarted, 1) == 0) session.BeginWarmUp();
-            return session.Descriptor;
+            lock (sessionMutationLock)
+            {
+                var pathComparison = OperatingSystem.IsWindows()
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal;
+                var existing = sessions.Values.FirstOrDefault(candidate =>
+                    string.Equals(candidate.Descriptor.Path, fullPath, pathComparison));
+                if (existing is not null) return existing.Descriptor;
+
+                var session = AssemblySession.Open(fullPath, displaySettings, documentCache);
+                if (!sessions.TryAdd(session.Descriptor.SessionId, session)) { session.Dispose(); throw new InvalidOperationException("Could not add assembly session."); }
+                // The reverse-reference index gates cross-assembly matches on the set of open assemblies, so
+                // every index becomes stale when that set changes; drop them all and let them rebuild lazily.
+                foreach (var other in sessions.Values) other.InvalidateAnalyzerIndex();
+                if (Interlocked.Exchange(ref warmUpStarted, 1) == 0) session.BeginWarmUp();
+                return session.Descriptor;
+            }
         }, cancellationToken);
     }
 
@@ -101,8 +112,11 @@ public sealed class DecompilerBackend : IDecompilerBackend
 
     public Task CloseAsync(Guid sessionId)
     {
-        if (sessions.TryRemove(sessionId, out var session)) session.Dispose();
-        foreach (var other in sessions.Values) other.InvalidateAnalyzerIndex();
+        lock (sessionMutationLock)
+        {
+            if (sessions.TryRemove(sessionId, out var session)) session.Dispose();
+            foreach (var other in sessions.Values) other.InvalidateAnalyzerIndex();
+        }
         return Task.CompletedTask;
     }
 
@@ -221,8 +235,11 @@ public sealed class DecompilerBackend : IDecompilerBackend
 
     public async ValueTask DisposeAsync()
     {
-        foreach (var session in sessions.Values) session.Dispose();
-        sessions.Clear();
+        lock (sessionMutationLock)
+        {
+            foreach (var session in sessions.Values) session.Dispose();
+            sessions.Clear();
+        }
         await Task.CompletedTask;
     }
 }
