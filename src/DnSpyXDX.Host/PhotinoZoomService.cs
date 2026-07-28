@@ -1,15 +1,15 @@
 using DnSpyXDX.Application;
-using Photino.NET;
+using PhotinoEx.Core;
 
 namespace DnSpyXDX.Host;
 
 /// <summary>Applies application zoom through Photino's native webview API.</summary>
 public sealed class PhotinoZoomService : IApplicationZoomService
 {
-    private PhotinoWindow? window;
+    private PhotinoExWindow? window;
     public int ZoomPercent { get; private set; } = 100;
 
-    public void Attach(PhotinoWindow mainWindow)
+    public void Attach(PhotinoExWindow mainWindow)
     {
         window = mainWindow;
         window.SetZoom(ZoomPercent);

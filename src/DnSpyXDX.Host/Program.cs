@@ -1,12 +1,13 @@
 using DnSpyXDX.Application;
 using DnSpyXDX.Decompilation;
 using DnSpyXDX.Export;
-using DnSpyXDX.Host;
 using DnSpyXDX.Host.Mcp;
 using DnSpyXDX.UI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Photino.Blazor;
+using PhotinoEx.Blazor;
+
+namespace DnSpyXDX.Host;
 
 internal static class Program
 {
@@ -14,15 +15,17 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
-        var builder = PhotinoBlazorAppBuilder.CreateDefault(args);
+        var builder = PhotinoExBlazorAppBuilder.CreateDefault(args);
         var loggingSettings = new RuntimeLoggingSettings();
         builder.Services.AddLogging(logging =>
         {
             logging.ClearProviders();
             logging.AddConsole();
-            logging.AddFilter((category, level) =>
-                category?.StartsWith("DnSpyXDX", StringComparison.Ordinal) == true &&
-                (level >= LogLevel.Information || loggingSettings.DebugEnabled));
+            logging.AddFilter(
+                (category, level) =>
+                    category?.StartsWith("DnSpyXDX", StringComparison.Ordinal) == true
+                    && (level >= LogLevel.Information || loggingSettings.DebugEnabled)
+            );
         });
         builder.Services.AddSingleton(loggingSettings);
         builder.Services.AddSingleton<RuntimeDisplaySettings>();
@@ -36,6 +39,8 @@ internal static class Program
         builder.Services.AddSingleton<SourcePresentationCache>();
         builder.Services.AddSingleton<WorkspaceAssemblyService>();
         builder.Services.AddSingleton<IFileDialogService, PhotinoFileDialogService>();
+        var fileDropService = new PhotinoFileDropService();
+        builder.Services.AddSingleton<IFileDropService>(fileDropService);
         builder.Services.AddSingleton<IWorkspaceSessionService, WorkspaceSessionService>();
         builder.Services.AddSingleton<McpServerSettings>();
         builder.Services.AddSingleton<McpActivityLog>();
@@ -52,12 +57,21 @@ internal static class Program
         // never collide with another Photino process.
         var userDataFolder = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "DnSpyXDX", "WebView2");
+            "DnSpyXDX",
+            "WebView2"
+        );
         Directory.CreateDirectory(userDataFolder);
         // Windows uses a multi-resolution .ico for the window/taskbar icon; GTK on Linux wants a .png.
         var iconFile = OperatingSystem.IsWindows() ? "dnspyxdx.ico" : "dnspyxdx.png";
-        app.MainWindow.SetLogVerbosity(0).SetTemporaryFilesPath(userDataFolder).SetTitle("DnSpyXDX").SetIconFile(Path.Combine(AppContext.BaseDirectory, "wwwroot", iconFile)).SetSize(1320, 840).SetMinSize(860, 560).SetUseOsDefaultSize(false);
+        app.MainWindow.SetLogVerbosity(0)
+            .SetTemporaryFilesPath(userDataFolder)
+            .SetTitle("DnSpyXDX")
+            .SetIconFile(Path.Combine(AppContext.BaseDirectory, "wwwroot", iconFile))
+            .SetSize(1320, 840)
+            .SetMinSize(860, 560)
+            .SetUseOsDefaultSize(false);
         zoomService.Attach(app.MainWindow);
+        fileDropService.Attach(app.MainWindow);
         applicationLifetime.Attach(app.MainWindow);
         WindowStateManager.Attach(app.MainWindow);
         app.Run();

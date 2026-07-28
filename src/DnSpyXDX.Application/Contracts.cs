@@ -35,6 +35,11 @@ public interface IFileDialogService
     Task<string?> SelectExportFolderAsync();
 }
 
+public interface IFileDropService
+{
+    event Action<IReadOnlyList<string>> FilesDropped;
+}
+
 public interface IWorkspaceSessionService
 {
     UiSessionState UiState { get; set; }

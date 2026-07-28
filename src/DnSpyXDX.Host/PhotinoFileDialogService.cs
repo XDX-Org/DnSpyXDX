@@ -1,21 +1,26 @@
 using DnSpyXDX.Application;
-using Photino.NET;
+using PhotinoEx.Core;
+using PhotinoEx.Core.Models;
 
 namespace DnSpyXDX.Host;
 
-public sealed class PhotinoFileDialogService(PhotinoWindow window) : IFileDialogService
+public sealed class PhotinoFileDialogService(PhotinoExWindow window) : IFileDialogService
 {
-    public Task<string?> OpenAssemblyAsync()
+    public async Task<string?> OpenAssemblyAsync()
     {
-        var files = window.ShowOpenFile(
+        var files = await window.ShowOpenFileDialogAsync(
             "Open .NET assembly",
+            string.Empty,
             multiSelect: false,
-            filters:
-            [
-                ("All files (*.*)", ["*.*"])
-            ]);
-        return Task.FromResult(files.FirstOrDefault());
+            filterPatterns: [new FileFilter("All files (*.*)", "*.*")]
+        );
+        return files?.FirstOrDefault();
     }
 
-    public Task<string?> SelectExportFolderAsync() => Task.FromResult(window.ShowOpenFolder("Choose an empty export folder").FirstOrDefault());
+    public async Task<string?> SelectExportFolderAsync() =>
+        (await window.ShowOpenFolderDialogAsync(
+            "Choose an empty export folder",
+            string.Empty,
+            multiSelect: false
+        ))?.FirstOrDefault();
 }
