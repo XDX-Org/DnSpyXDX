@@ -33,6 +33,17 @@ public sealed class DecompilerBackendTests
     }
 
     [Fact]
+    public async Task Unloading_immediately_after_open_is_safe_during_background_warmup()
+    {
+        await using var backend = new DecompilerBackend();
+        var assembly = await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
+
+        await backend.CloseAsync(assembly.SessionId);
+
+        Assert.Empty(backend.Assemblies);
+    }
+
+    [Fact]
     public async Task Rejects_unsupported_language_values()
     {
         await using var backend = new DecompilerBackend();

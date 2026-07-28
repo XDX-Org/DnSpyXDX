@@ -12,7 +12,7 @@ public sealed class PhotinoFileDialogService(PhotinoExWindow window) : IFileDial
             "Open .NET assembly",
             string.Empty,
             multiSelect: false,
-            filterPatterns: [new FileFilter("All files (*.*)", "*.*")]
+            filterPatterns: [new FileFilter(".NET assemblies (*.dll;*.exe)", "*.dll;*.exe")]
         );
         return files?.FirstOrDefault();
     }

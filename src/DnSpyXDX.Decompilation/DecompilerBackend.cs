@@ -252,6 +252,10 @@ internal sealed class AssemblySession : IDisposable
     private readonly DecompilerSettings settings;
     private readonly MetadataTypeNameProvider typeNames;
     private readonly SemaphoreSlim gate = new(1, 1);
+    private readonly CancellationTokenSource warmUpCancellation = new();
+    private readonly object warmUpLock = new();
+    private Task? warmUpTask;
+    private int disposed;
     private readonly RuntimeDisplaySettings displaySettings;
     private readonly PersistentDecompileCache? documentCache;
     // A content hash of this assembly, so a patched or rebuilt file never reads another build's cached source.
@@ -601,22 +605,34 @@ internal sealed class AssemblySession : IDisposable
     // is used so this never contends with a real DecompileAsync on the session gate; JIT state is process-wide,
     // so warming a separate instance warms the paths the real one takes. Best-effort - failures are ignored.
     private const int WarmUpPasses = 5;
-    public void BeginWarmUp() => Task.Run(async () =>
+    public void BeginWarmUp()
     {
-        try
+        lock (warmUpLock)
         {
-            var handle = WarmUpType();
-            if (handle.IsNil) return;
-            var warmUpDecompiler = CreateDecompiler();
-            for (var pass = 0; pass < WarmUpPasses; pass++)
+            if (warmUpTask is not null || Volatile.Read(ref disposed) != 0) return;
+            var cancellationToken = warmUpCancellation.Token;
+            warmUpTask = Task.Run(async () =>
             {
-                warmUpDecompiler.Decompile([handle]);
-                // Yield between passes so the runtime's background tier-1 recompilation can make progress.
-                await Task.Delay(250).ConfigureAwait(false);
-            }
+                try
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var handle = WarmUpType();
+                    if (handle.IsNil) return;
+                    var warmUpDecompiler = CreateDecompiler();
+                    warmUpDecompiler.CancellationToken = cancellationToken;
+                    for (var pass = 0; pass < WarmUpPasses; pass++)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        warmUpDecompiler.Decompile([handle]);
+                        // Yield between passes so the runtime's background tier-1 recompilation can make progress.
+                        await Task.Delay(250, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+                catch { /* warm-up is best-effort; a cold first decompile is the only cost of failure */ }
+            });
         }
-        catch { /* warm-up is best-effort; a cold first decompile is the only cost of failure */ }
-    });
+    }
 
     // A separate decompiler over the same module, for the background warm-up. Mirrors the configuration built
     // in Open so the warm-up exercises the same pipeline the real decompiler uses.
@@ -2103,7 +2119,25 @@ internal sealed class AssemblySession : IDisposable
         return new AnalyzerResult(symbol, name, nodeKind, Descriptor.Name, ns, declaringSymbol, qualifiedName, ilOffset);
     }
 
-    public void Dispose() { gate.Dispose(); module.Dispose(); }
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref disposed, 1) != 0) return;
+
+        warmUpCancellation.Cancel();
+        Task? runningWarmUp;
+        lock (warmUpLock) runningWarmUp = warmUpTask;
+        try { runningWarmUp?.GetAwaiter().GetResult(); }
+        catch (OperationCanceledException) { }
+
+        gate.Wait();
+        try { module.Dispose(); }
+        finally
+        {
+            gate.Release();
+            gate.Dispose();
+            warmUpCancellation.Dispose();
+        }
+    }
 }
 
 internal sealed class MetadataTypeNameProvider(MetadataReader metadata) : ISignatureTypeProvider<string, object?>
