@@ -2,7 +2,4 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
   </PropertyGroup>
-  <ItemGroup>
-    <ProjectReference Include="../../src/DnSpyXDX.Debugging/DnSpyXDX.Debugging.csproj" />
-  </ItemGroup>
 </Project>

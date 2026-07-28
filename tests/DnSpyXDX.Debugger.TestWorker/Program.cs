@@ -1,6 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using DnSpyXDX.Debugging;
+using System.Runtime.CompilerServices;
 
 var mode = args.FirstOrDefault() ?? "normal";
 if (mode == "crash")
@@ -10,8 +10,14 @@ if (mode == "crash")
 }
 if (mode.StartsWith("netcoredbg", StringComparison.Ordinal))
     return await RunNetCoreDbgAsync(mode);
+if (mode == "target")
+{
+    Console.WriteLine(DebuggerBreakpointTarget.Run(40));
+    Console.WriteLine(await DebuggerBreakpointTarget.RunAsync(40));
+    await Task.Delay(Timeout.InfiniteTimeSpan);
+}
 
-var framer = new DapMessageFramer();
+var framer = new TestDapMessageFramer();
 while (await framer.ReadAsync(Console.OpenStandardInput()) is { } payload)
 {
     using var document = JsonDocument.Parse(payload);
@@ -40,7 +46,7 @@ return 0;
 
 static async Task<int> RunNetCoreDbgAsync(string mode)
 {
-    var framer = new DapMessageFramer();
+    var framer = new TestDapMessageFramer();
     var input = Console.OpenStandardInput();
     var output = Console.OpenStandardOutput();
     var nextSequence = 1000;
@@ -370,4 +376,24 @@ static async Task<int> RunNetCoreDbgAsync(string mode)
     }
 
     return 0;
+}
+
+internal static class DebuggerBreakpointTarget
+{
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.NoOptimization)]
+    public static int Run(int value)
+    {
+        if (value > 0)
+            value += 2;
+        else
+            value -= 2;
+        return value;
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.NoOptimization)]
+    public static async Task<int> RunAsync(int value)
+    {
+        await Task.Yield();
+        return value + 2;
+    }
 }

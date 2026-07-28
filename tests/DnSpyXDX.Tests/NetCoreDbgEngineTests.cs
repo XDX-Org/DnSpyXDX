@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
 using System.Threading.Channels;
 using DnSpyXDX.Application;
+using DnSpyXDX.Decompilation;
 using DnSpyXDX.Debugging;
 using Xunit;
 
@@ -329,6 +331,189 @@ public sealed class NetCoreDbgEngineTests
     }
 
     [Fact]
+    public async Task Live_netcoredbg_stops_at_entry_without_pdb()
+    {
+        var adapter = Environment.GetEnvironmentVariable(
+            NetCoreDbgEngineProvider.PathEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(adapter)) return;
+
+        using var target = CreateSymbolLessTestWorker();
+        var provider = new NetCoreDbgEngineProvider(
+            new CoreClrDebuggerOptions(
+                adapter,
+                GracefulShutdownTimeout: TimeSpan.FromSeconds(5)));
+        await using var engine = await provider.CreateAsync(
+            CancellationToken.None);
+
+        var result = await engine.StartAsync(
+            new DebugLaunchRequest(
+                DebugRuntimeKind.CoreClr,
+                target.ExecutablePath,
+                ["target"],
+                StopAtEntry: true),
+            CancellationToken.None);
+
+        Assert.True(result.IsPaused);
+        Assert.Equal(
+            DebugStopReason.Entry,
+            Assert.IsType<DebugStopInfo>(result.InitialStop).Reason);
+        await engine.TerminateAsync(CancellationToken.None);
+        if (result.ProcessId is { } processId)
+            await WaitForProcessExitAsync(processId);
+    }
+
+    [Fact]
+    public async Task Live_external_target_stops_at_entry_when_configured()
+    {
+        var adapter = Environment.GetEnvironmentVariable(
+            NetCoreDbgEngineProvider.PathEnvironmentVariable);
+        var target = Environment.GetEnvironmentVariable(
+            "DNSPYXDX_EXTERNAL_DEBUG_TARGET");
+        if (string.IsNullOrWhiteSpace(adapter) ||
+            string.IsNullOrWhiteSpace(target))
+            return;
+
+        var provider = new NetCoreDbgEngineProvider(
+            new CoreClrDebuggerOptions(
+                adapter,
+                GracefulShutdownTimeout: TimeSpan.FromSeconds(5)));
+        await using var engine = await provider.CreateAsync(
+            CancellationToken.None);
+
+        var result = await engine.StartAsync(
+            new DebugLaunchRequest(
+                DebugRuntimeKind.CoreClr,
+                target,
+                StopAtEntry: true),
+            CancellationToken.None);
+
+        Assert.True(result.IsPaused);
+        var stop = Assert.IsType<DebugStopInfo>(result.InitialStop);
+        Assert.Equal(DebugStopReason.Entry, stop.Reason);
+        Assert.NotEmpty(
+            await engine.GetStackTraceAsync(
+                stop.Thread,
+                CancellationToken.None));
+        await engine.TerminateAsync(CancellationToken.None);
+        if (result.ProcessId is { } processId)
+            await WaitForProcessExitAsync(processId);
+    }
+
+    [Fact]
+    public async Task Live_external_target_populates_decompiled_frame_variables()
+    {
+        var adapter = Environment.GetEnvironmentVariable(
+            NetCoreDbgEngineProvider.PathEnvironmentVariable);
+        var target = Environment.GetEnvironmentVariable(
+            "DNSPYXDX_EXTERNAL_DEBUG_TARGET");
+        var methodName = Environment.GetEnvironmentVariable(
+            "DNSPYXDX_EXTERNAL_DEBUG_METHOD");
+        var statement = Environment.GetEnvironmentVariable(
+            "DNSPYXDX_EXTERNAL_BREAKPOINT_TEXT");
+        var expectedVariable = Environment.GetEnvironmentVariable(
+            "DNSPYXDX_EXTERNAL_EXPECTED_VARIABLE");
+        if (string.IsNullOrWhiteSpace(adapter) ||
+            string.IsNullOrWhiteSpace(target) ||
+            string.IsNullOrWhiteSpace(methodName) ||
+            string.IsNullOrWhiteSpace(statement))
+            return;
+
+        await using var backend = new DecompilerBackend();
+        await backend.OpenAsync(target);
+        var method = Assert.Single(
+            await backend.SearchAsync(methodName),
+            result =>
+                result.Kind == "Method" &&
+                result.QualifiedName == methodName);
+        var document = await backend.DecompileAsync(
+            method.Symbol,
+            DecompilerLanguage.CSharp);
+        var point = Assert.Single(
+            document.DebugMap!.SequencePoints,
+            candidate =>
+                document.Text.Substring(
+                    candidate.StartOffset,
+                    candidate.Length)
+                    .Contains(statement, StringComparison.Ordinal));
+        var breakpoint = new DebugBreakpoint(
+            Guid.NewGuid(),
+            point.BreakpointLocation ?? point.Location);
+        var provider = new NetCoreDbgEngineProvider(
+            new CoreClrDebuggerOptions(
+                adapter,
+                GracefulShutdownTimeout: TimeSpan.FromSeconds(5)));
+        await using var engine = await provider.CreateAsync(
+            CancellationToken.None);
+        var events = Channel.CreateUnbounded<DebugEngineEvent>();
+        engine.EventReceived += value => events.Writer.TryWrite(value);
+
+        var result = await engine.StartAsync(
+            new DebugLaunchRequest(
+                DebugRuntimeKind.CoreClr,
+                target)
+            {
+                InitialBreakpoints = [breakpoint]
+            },
+            CancellationToken.None);
+        var stop = await ReadStopAsync(
+            events.Reader,
+            DebugStopReason.Breakpoint);
+        var frame = Assert.IsType<DebugStackFrame>(
+            (await engine.GetStackTraceAsync(
+                stop.Thread,
+                CancellationToken.None)).FirstOrDefault());
+        var scope = Assert.Single(
+            await engine.GetScopesAsync(
+                frame.Id,
+                CancellationToken.None));
+        Assert.NotEqual(0, scope.Variables.Value);
+        var variables = await engine.GetVariablesAsync(
+            scope.Variables,
+            CancellationToken.None);
+        Assert.NotEmpty(variables);
+        if (!string.IsNullOrWhiteSpace(expectedVariable))
+            Assert.Contains(
+                variables,
+                variable => variable.Name == expectedVariable);
+
+        await engine.TerminateAsync(CancellationToken.None);
+        if (result.ProcessId is { } processId)
+            await WaitForProcessExitAsync(processId);
+    }
+
+    [Fact]
+    public async Task Initial_breakpoints_hold_launch_at_entry_then_resume()
+    {
+        var provider = new NetCoreDbgEngineProvider(
+            new CoreClrDebuggerOptions(
+                DotnetHost(),
+                [TestWorkerPath(), "netcoredbg-il"],
+                TimeSpan.FromSeconds(2)));
+        await using var engine = await provider.CreateAsync(
+            CancellationToken.None);
+        var breakpoint = new DebugBreakpoint(
+            Guid.NewGuid(),
+            new DebugCodeLocation(
+                new DebugMethodId(
+                    Guid.Parse("11111111-2222-3333-4444-555555555555"),
+                    0x06000001),
+                4));
+
+        var result = await engine.StartAsync(
+            new DebugLaunchRequest(
+                DebugRuntimeKind.CoreClr,
+                TestWorkerPath())
+            {
+                InitialBreakpoints = [breakpoint]
+            },
+            CancellationToken.None);
+
+        Assert.False(result.IsPaused);
+        Assert.Null(result.InitialStop);
+        await engine.TerminateAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task Pending_il_breakpoint_updates_when_module_loads()
     {
         var provider = new NetCoreDbgEngineProvider(
@@ -429,6 +614,184 @@ public sealed class NetCoreDbgEngineTests
     }
 
     [Fact]
+    public async Task Live_extended_netcoredbg_hits_decompiler_mapped_breakpoint()
+    {
+        var adapter = Environment.GetEnvironmentVariable(
+            NetCoreDbgEngineProvider.PathEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(adapter)) return;
+
+        var worker = TestWorkerPath();
+        using var stream = File.OpenRead(worker);
+        using var peReader = new PEReader(stream);
+        var metadata = peReader.GetMetadataReader();
+        var mvid = metadata.GetGuid(metadata.GetModuleDefinition().Mvid);
+        var targetType = metadata.TypeDefinitions
+            .Select(handle => (Handle: handle, Definition:
+                metadata.GetTypeDefinition(handle)))
+            .Single(value =>
+                metadata.GetString(value.Definition.Name) ==
+                "DebuggerBreakpointTarget");
+        var targetMethod = targetType.Definition.GetMethods()
+            .Single(handle =>
+                metadata.GetString(
+                    metadata.GetMethodDefinition(handle).Name) == "RunAsync");
+        var method = new DebugMethodId(
+            mvid,
+            MetadataTokens.GetToken(targetMethod));
+        await using var backend = new DecompilerBackend();
+        await backend.OpenAsync(worker);
+        var document = await backend.DecompileAsync(
+            new SymbolId(mvid, MetadataTokens.GetToken(targetType.Handle)),
+            DecompilerLanguage.CSharp);
+        var requestedPoint = document.DebugMap!.SequencePoints
+            .Where(point =>
+                document.Text.Substring(point.StartOffset, point.Length)
+                    .Contains("await Task.Yield", StringComparison.Ordinal))
+            .OrderBy(point => point.Length)
+            .FirstOrDefault();
+        Assert.NotNull(requestedPoint);
+        var requested = new DebugBreakpoint(
+            Guid.NewGuid(),
+            requestedPoint.BreakpointLocation ??
+                requestedPoint.Location);
+        Assert.NotEqual(method.MetadataToken, requested.Location.Method.MetadataToken);
+        var provider = new NetCoreDbgEngineProvider(
+            new CoreClrDebuggerOptions(
+                adapter,
+                GracefulShutdownTimeout: TimeSpan.FromSeconds(5)));
+        await using var engine = await provider.CreateAsync(
+            CancellationToken.None);
+        var events = Channel.CreateUnbounded<DebugEngineEvent>();
+        engine.EventReceived += value => events.Writer.TryWrite(value);
+
+        var result = await engine.StartAsync(
+            new DebugLaunchRequest(
+                DebugRuntimeKind.CoreClr,
+                worker,
+                ["target"])
+            {
+                InitialBreakpoints = [requested]
+            },
+            CancellationToken.None);
+
+        Assert.True(result.Capabilities.SupportsDecompiledCodeBreakpoints);
+        DebugBreakpointBinding? binding = null;
+        DebugStopInfo? stop = null;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while ((binding?.IsVerified != true || stop is null) &&
+               await events.Reader.WaitToReadAsync(timeout.Token))
+        {
+            while (events.Reader.TryRead(out var value))
+            {
+                if (value is DebugEngineBreakpointsChanged changed)
+                    binding = Assert.Single(changed.Breakpoints);
+                else if (value is DebugEngineStopped
+                    {
+                        Stop.Reason: DebugStopReason.Breakpoint
+                    } stopped)
+                    stop = stopped.Stop;
+            }
+        }
+
+        Assert.NotNull(binding);
+        Assert.True(binding.IsVerified, binding.Message);
+        Assert.NotNull(stop);
+        Assert.Equal(DebugStopReason.Breakpoint, stop.Reason);
+
+        await engine.TerminateAsync(CancellationToken.None);
+    }
+
+    [Theory]
+    [InlineData(DebugStepKind.Into)]
+    [InlineData(DebugStepKind.Over)]
+    [InlineData(DebugStepKind.Out)]
+    public async Task Live_extended_netcoredbg_steps_in_decompiled_module_without_pdb(
+        DebugStepKind stepKind)
+    {
+        var adapter = Environment.GetEnvironmentVariable(
+            NetCoreDbgEngineProvider.PathEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(adapter)) return;
+
+        using var target = CreateSymbolLessTestWorker();
+        using var stream = File.OpenRead(target.AssemblyPath);
+        using var peReader = new PEReader(stream);
+        var metadata = peReader.GetMetadataReader();
+        var mvid = metadata.GetGuid(metadata.GetModuleDefinition().Mvid);
+        var targetType = metadata.TypeDefinitions
+            .Select(handle => (Handle: handle, Definition:
+                metadata.GetTypeDefinition(handle)))
+            .Single(value =>
+                metadata.GetString(value.Definition.Name) ==
+                "DebuggerBreakpointTarget");
+        await using var backend = new DecompilerBackend();
+        await backend.OpenAsync(target.AssemblyPath);
+        var document = await backend.DecompileAsync(
+            new SymbolId(mvid, MetadataTokens.GetToken(targetType.Handle)),
+            DecompilerLanguage.CSharp);
+        var requestedPoint = document.DebugMap!.SequencePoints
+            .Where(point =>
+                document.Text.Substring(point.StartOffset, point.Length)
+                    .Contains("return value", StringComparison.Ordinal))
+            .OrderBy(point => point.Length)
+            .FirstOrDefault();
+        Assert.NotNull(requestedPoint);
+        var requested = new DebugBreakpoint(
+            Guid.NewGuid(),
+            requestedPoint.BreakpointLocation ??
+                requestedPoint.Location);
+        var provider = new NetCoreDbgEngineProvider(
+            new CoreClrDebuggerOptions(
+                adapter,
+                GracefulShutdownTimeout: TimeSpan.FromSeconds(5)));
+        await using var engine = await provider.CreateAsync(
+            CancellationToken.None);
+        var events = Channel.CreateUnbounded<DebugEngineEvent>();
+        engine.EventReceived += value => events.Writer.TryWrite(value);
+
+        var result = await engine.StartAsync(
+            new DebugLaunchRequest(
+                DebugRuntimeKind.CoreClr,
+                target.ExecutablePath,
+                ["target"])
+            {
+                InitialBreakpoints = [requested]
+            },
+            CancellationToken.None);
+        var stopped = await ReadStopAsync(
+            events.Reader,
+            DebugStopReason.Breakpoint);
+        var frame = Assert.IsType<DebugStackFrame>(
+            (await engine.GetStackTraceAsync(
+                stopped.Thread,
+                CancellationToken.None)).FirstOrDefault());
+        var scope = Assert.Single(
+            await engine.GetScopesAsync(
+                frame.Id,
+                CancellationToken.None));
+        Assert.NotEqual(0, scope.Variables.Value);
+        var variables = await engine.GetVariablesAsync(
+            scope.Variables,
+            CancellationToken.None);
+        var value = Assert.Single(
+            variables,
+            variable => variable.Name == "value");
+        Assert.Equal("42", value.Value);
+
+        await engine.StepAsync(
+            stopped.Thread,
+            stepKind,
+            CancellationToken.None);
+        var stepped = await ReadStopAsync(
+            events.Reader,
+            DebugStopReason.Step);
+
+        Assert.Equal(stopped.Thread, stepped.Thread);
+        await engine.TerminateAsync(CancellationToken.None);
+        if (result.ProcessId is { } processId)
+            await WaitForProcessExitAsync(processId);
+    }
+
+    [Fact]
     public async Task Live_netcoredbg_attaches_to_running_process_when_configured()
     {
         var adapter = Environment.GetEnvironmentVariable(
@@ -507,6 +870,62 @@ public sealed class NetCoreDbgEngineTests
         return new DebugCodeLocation(new DebugMethodId(mvid, token), 0);
     }
 
+    private static SymbolLessTestWorker CreateSymbolLessTestWorker()
+    {
+        var sourceAssembly = TestWorkerPath();
+        var sourceDirectory = Path.GetDirectoryName(sourceAssembly)!;
+        var directory = Path.Combine(
+            Path.GetTempPath(),
+            $"DnSpyXDX-symbol-less-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        foreach (var fileName in new[]
+        {
+            "DnSpyXDX.Debugger.TestWorker.exe",
+            "DnSpyXDX.Debugger.TestWorker.dll",
+            "DnSpyXDX.Debugger.TestWorker.deps.json",
+            "DnSpyXDX.Debugger.TestWorker.runtimeconfig.json"
+        })
+        {
+            File.Copy(
+                Path.Combine(sourceDirectory, fileName),
+                Path.Combine(directory, fileName));
+        }
+        return new SymbolLessTestWorker(directory);
+    }
+
+    private static async Task<DebugStopInfo> ReadStopAsync(
+        ChannelReader<DebugEngineEvent> events,
+        DebugStopReason reason)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (await events.WaitToReadAsync(timeout.Token))
+        {
+            while (events.TryRead(out var value))
+            {
+                if (value is DebugEngineStopped stopped &&
+                    stopped.Stop.Reason == reason)
+                    return stopped.Stop;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"Debugger stop reason {reason} was not received.");
+    }
+
+    private static async Task WaitForProcessExitAsync(int processId)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(processId);
+            await process.WaitForExitAsync()
+                .WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        catch (ArgumentException)
+        {
+            // The target exited before it could be reopened.
+        }
+    }
+
     private static async Task<T> ReadEventAsync<T>(
         ChannelReader<DebugEngineEvent> events)
         where T : DebugEngineEvent
@@ -522,5 +941,18 @@ public sealed class NetCoreDbgEngineTests
 
         throw new InvalidOperationException(
             $"Debugger event {typeof(T).Name} was not received.");
+    }
+
+    private sealed class SymbolLessTestWorker(string directory) : IDisposable
+    {
+        public string AssemblyPath { get; } = Path.Combine(
+            directory,
+            "DnSpyXDX.Debugger.TestWorker.dll");
+        public string ExecutablePath { get; } = Path.Combine(
+            directory,
+            "DnSpyXDX.Debugger.TestWorker.exe");
+
+        public void Dispose() =>
+            Directory.Delete(directory, recursive: true);
     }
 }

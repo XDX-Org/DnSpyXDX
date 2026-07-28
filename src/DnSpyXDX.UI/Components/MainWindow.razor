@@ -497,7 +497,9 @@
       await Assemblies.TryOpenDebuggerModuleAsync(debugLaunchPath);
       await Debugger.LaunchAsync(debugLaunchPath, arguments, debugStopAtEntry);
     }
-    if (Debugger.Error is null) debugDialogOpen = false;
+    if (Debugger.Snapshot.Status is DebugSessionStatus.Running or
+        DebugSessionStatus.Paused)
+      debugDialogOpen = false;
   }
   private async Task Exit()
   {

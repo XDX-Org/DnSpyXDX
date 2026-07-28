@@ -57,7 +57,7 @@
       : Binding?.Message ?? (Binding?.IsVerified == true ? "Bound breakpoint" : "Remove breakpoint");
   private string LineStyle => WrapLines ? $"--continuation-indent:{LeadingColumns() + SourceDocumentModel.TabWidth}ch" : $"height:{LineHeight}px";
   private Task ToggleBreakpointAsync() => DebugPoint is { } point
-    ? OnToggleBreakpoint.InvokeAsync(point.Location)
+    ? OnToggleBreakpoint.InvokeAsync(point.BreakpointLocation ?? point.Location)
     : Task.CompletedTask;
 
   private int LeadingColumns()

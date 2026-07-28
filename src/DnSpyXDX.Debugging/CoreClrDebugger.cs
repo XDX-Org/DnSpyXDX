@@ -165,7 +165,13 @@ internal sealed class NetCoreDbgEngine(
         if (Interlocked.Exchange(ref started, 1) != 0)
             throw new InvalidOperationException("CoreCLR debugger engine has already started.");
         ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
-        var startArguments = BuildStartArguments(request);
+        var holdAtEntryForInitialBreakpoints =
+            request is DebugLaunchRequest { StopAtEntry: false } &&
+            request.InitialBreakpoints?.Any(
+                breakpoint => breakpoint.Enabled) == true;
+        var startArguments = BuildStartArguments(
+            request,
+            holdAtEntryForInitialBreakpoints);
         var startCommand = request is DebugLaunchRequest ? "launch" : "attach";
         var startupTimeout = options.StartupTimeout ?? DefaultStartupTimeout;
         if (startupTimeout <= TimeSpan.Zero)
@@ -231,10 +237,14 @@ internal sealed class NetCoreDbgEngine(
                 startupToken).ConfigureAwait(false));
             RequireSuccess(await startResponse.ConfigureAwait(false));
 
-            if (request is DebugLaunchRequest { StopAtEntry: true })
+            if (request is DebugLaunchRequest launch &&
+                (launch.StopAtEntry || holdAtEntryForInitialBreakpoints))
             {
                 lastStop = await initialStop.Task.WaitAsync(startupToken)
                     .ConfigureAwait(false);
+                if (holdAtEntryForInitialBreakpoints &&
+                    lastStop.Reason == DebugStopReason.Entry)
+                    await ContinueAsync(startupToken).ConfigureAwait(false);
             }
 
             return new DebugEngineStartResult(
@@ -510,7 +520,9 @@ internal sealed class NetCoreDbgEngine(
         await current.DisposeAsync().ConfigureAwait(false);
     }
 
-    private JsonObject BuildStartArguments(DebugStartRequest request)
+    private JsonObject BuildStartArguments(
+        DebugStartRequest request,
+        bool forceStopAtEntry = false)
     {
         if (request is DebugLaunchRequest launch)
         {
@@ -528,7 +540,7 @@ internal sealed class NetCoreDbgEngine(
                     ? Path.GetDirectoryName(program)
                     : Path.GetFullPath(launch.WorkingDirectory),
                 ["env"] = EnvironmentObject(launch.Environment),
-                ["stopAtEntry"] = launch.StopAtEntry,
+                ["stopAtEntry"] = launch.StopAtEntry || forceStopAtEntry,
                 ["justMyCode"] = false,
                 ["enableStepFiltering"] = false,
                 ["console"] = "internalConsole"

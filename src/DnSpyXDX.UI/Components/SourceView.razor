@@ -365,7 +365,7 @@ else
 
   private DebugBreakpoint? Breakpoint(int line) =>
     DebugPoint(line) is { } point
-      ? Debugger.BreakpointAt(point.Location)
+      ? Debugger.BreakpointAt(point.BreakpointLocation ?? point.Location)
       : null;
 
   private DebugBreakpointBinding? BreakpointBinding(int line) =>

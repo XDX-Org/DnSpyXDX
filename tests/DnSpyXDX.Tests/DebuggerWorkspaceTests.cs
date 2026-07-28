@@ -151,6 +151,31 @@ public sealed class DebuggerWorkspaceTests
     }
 
     [Fact]
+    public void Empty_scope_does_not_request_reserved_zero_variable_reference()
+    {
+        var thread = new DebugThread(new DebugThreadId(2), "Main", true);
+        var frame = new DebugStackFrame(
+            new DebugFrameId(20),
+            thread.Id,
+            "Program.Main",
+            null);
+        var debugger = new FakeDebuggerService
+        {
+            ThreadResults = [thread]
+        };
+        debugger.FrameResults[thread.Id] = [frame];
+        debugger.ScopeResults[frame.Id] =
+            [new DebugScope("Locals", default)];
+        using var workspace = new DebuggerWorkspace(debugger);
+
+        debugger.PublishPaused(thread.Id);
+
+        Assert.Empty(debugger.RequestedVariableReferences);
+        Assert.Empty(workspace.Variables);
+        Assert.Null(workspace.Error);
+    }
+
+    [Fact]
     public async Task Breakpoints_can_be_disabled_and_removed_from_panel()
     {
         var debugger = new FakeDebuggerService();
@@ -189,6 +214,7 @@ public sealed class DebuggerWorkspaceTests
             ScopeResults { get; } = [];
         public Dictionary<DebugVariableReference, IReadOnlyList<DebugVariable>>
             VariableResults { get; } = [];
+        public List<DebugVariableReference> RequestedVariableReferences { get; } = [];
 
         public event Action<DebugSessionSnapshot>? StateChanged;
         public event Action<IReadOnlyList<DebugBreakpointBinding>>? BreakpointsChanged;
@@ -274,10 +300,13 @@ public sealed class DebuggerWorkspaceTests
 
         public Task<IReadOnlyList<DebugVariable>> GetVariablesAsync(
             DebugVariableReference reference,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(
+            CancellationToken cancellationToken = default)
+        {
+            RequestedVariableReferences.Add(reference);
+            return Task.FromResult(
                 VariableResults.GetValueOrDefault(reference) ??
                 (IReadOnlyList<DebugVariable>)[]);
+        }
 
         public Task<DebugEvaluationResult> EvaluateAsync(
             string expression,

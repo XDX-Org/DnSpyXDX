@@ -111,7 +111,7 @@
               <button class="debugger-breakpoint-link"
                       @onclick="() => OnNavigateLocation.InvokeAsync(breakpoint.Location)">
                 <span class="debugger-breakpoint-state @(binding?.IsVerified == true ? "verified" : null)"></span>
-                <code>0x@breakpoint.Location.Method.MetadataToken.ToString("X8") + @breakpoint.Location.ILOffset.ToString("X")</code>
+                <code>@($"0x{breakpoint.Location.Method.MetadataToken:X8} + {breakpoint.Location.ILOffset:X}")</code>
                 <small>@(binding?.IsVerified == true ? "Bound" : binding?.Message ?? "Pending")</small>
               </button>
               <button class="debugger-remove"

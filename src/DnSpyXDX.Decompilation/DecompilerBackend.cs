@@ -708,30 +708,50 @@ internal sealed class AssemblySession : IDisposable
     // is used so this never contends with a real DecompileAsync on the session gate; JIT state is process-wide,
     // so warming a separate instance warms the paths the real one takes. Best-effort - failures are ignored.
     private const int WarmUpPasses = 5;
-    public void BeginWarmUp() => Task.Run(async () =>
+    public void BeginWarmUp()
     {
-        try
+        var handle = WarmUpType();
+        if (handle.IsNil) return;
+        var token = MetadataTokens.GetToken(handle);
+        _ = Task.Run(async () =>
         {
-            var handle = WarmUpType();
-            if (handle.IsNil) return;
-            var warmUpDecompiler = CreateDecompiler();
-            for (var pass = 0; pass < WarmUpPasses; pass++)
+            try
             {
-                warmUpDecompiler.Decompile([handle]);
-                // Yield between passes so the runtime's background tier-1 recompilation can make progress.
-                await Task.Delay(250).ConfigureAwait(false);
+                // The warm-up owns a separate PE image. A user can close the workspace while this task is
+                // running; sharing the session image would let Dispose free metadata under ILSpy and can
+                // produce an access violation rather than a catchable managed exception.
+                using var warmUpModule = new PEFile(
+                    Descriptor.Path,
+                    PEStreamOptions.PrefetchEntireImage);
+                var resolver = new UniversalAssemblyResolver(
+                    Descriptor.Path,
+                    false,
+                    warmUpModule.DetectTargetFrameworkId());
+                resolver.AddSearchDirectory(
+                    Path.GetDirectoryName(Descriptor.Path)!);
+                var warmUpSettings = new DecompilerSettings
+                {
+                    ThrowOnAssemblyResolveErrors = false
+                };
+                warmUpSettings.CSharpFormattingOptions.IndentationString = "\t";
+                warmUpSettings.CSharpFormattingOptions.IndentSwitchBody = true;
+                var warmUpDecompiler = new CSharpDecompiler(
+                    warmUpModule,
+                    resolver,
+                    warmUpSettings);
+                var warmUpHandle = MetadataTokens.EntityHandle(token);
+                for (var pass = 0; pass < WarmUpPasses; pass++)
+                {
+                    warmUpDecompiler.Decompile([warmUpHandle]);
+                    // Yield between passes so the runtime's background tier-1 recompilation can make progress.
+                    await Task.Delay(250).ConfigureAwait(false);
+                }
             }
-        }
-        catch { /* warm-up is best-effort; a cold first decompile is the only cost of failure */ }
-    });
-
-    // A separate decompiler over the same module, for the background warm-up. Mirrors the configuration built
-    // in Open so the warm-up exercises the same pipeline the real decompiler uses.
-    private CSharpDecompiler CreateDecompiler()
-    {
-        var resolver = new UniversalAssemblyResolver(Descriptor.Path, false, module.DetectTargetFrameworkId());
-        resolver.AddSearchDirectory(Path.GetDirectoryName(Descriptor.Path)!);
-        return new CSharpDecompiler(module, resolver, settings);
+            catch
+            {
+                // Warm-up is best-effort; a cold first decompile is the only cost of failure.
+            }
+        });
     }
 
     // A representative top-level type for the warm-up: large enough to exercise ILSpy's loop-heavy transforms
@@ -1036,12 +1056,37 @@ internal sealed class AssemblySession : IDisposable
         var points = new List<DebugDocumentSequencePoint>();
         foreach (var method in decompiler.CreateSequencePoints(tree))
         {
-            var methodHandle = method.Key.Method?.MetadataToken;
+            // Async and iterator syntax is reconstructed from the generated MoveNext body. ILSpy keeps the
+            // user-facing method in Method but exposes the body that owns these offsets in MoveNextMethod.
+            // Pairing MoveNext offsets with the kickoff method token makes every non-trivial breakpoint fall
+            // outside that tiny kickoff body.
+            var runtimeMethod = method.Key.MoveNextMethod ?? method.Key.Method;
+            var methodHandle = runtimeMethod?.MetadataToken;
             if (methodHandle is null || methodHandle.Value.Kind != HandleKind.MethodDefinition)
                 continue;
+            var methodDefinitionHandle =
+                (MethodDefinitionHandle)methodHandle.Value;
             var methodId = new DebugMethodId(
                 Descriptor.ModuleMvid,
                 MetadataTokens.GetToken(methodHandle.Value));
+            IlBreakpointSelector? breakpointSelector = null;
+            var definition = metadata.GetMethodDefinition(
+                methodDefinitionHandle);
+            if (definition.RelativeVirtualAddress != 0)
+            {
+                try
+                {
+                    breakpointSelector = new IlBreakpointSelector(
+                        module.Reader.GetMethodBody(
+                            definition.RelativeVirtualAddress).GetILBytes() ??
+                        []);
+                }
+                catch (Exception exception) when (
+                    exception is BadImageFormatException or
+                        InvalidOperationException)
+                {
+                }
+            }
             foreach (var point in method.Value)
             {
                 if (point.IsHidden ||
@@ -1057,7 +1102,13 @@ internal sealed class AssemblySession : IDisposable
                     start,
                     end - start,
                     new DebugCodeLocation(methodId, point.Offset),
-                    point.EndOffset));
+                    point.EndOffset,
+                    breakpointSelector?.Select(
+                        point.Offset,
+                        point.EndOffset) is { } breakpointOffset &&
+                        breakpointOffset != point.Offset
+                        ? new DebugCodeLocation(methodId, breakpointOffset)
+                        : null));
             }
         }
 

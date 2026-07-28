@@ -379,7 +379,9 @@ public sealed class DebuggerWorkspace : IDisposable
     {
         var scopes = await debugger.GetScopesAsync(frame.Id, cancellationToken);
         var loaded = new List<DebugVariable>();
-        foreach (var scope in scopes.Where(value => !value.IsExpensive))
+        foreach (var scope in scopes.Where(value =>
+            !value.IsExpensive &&
+            value.Variables.Value != 0))
         {
             loaded.AddRange(
                 await debugger.GetVariablesAsync(

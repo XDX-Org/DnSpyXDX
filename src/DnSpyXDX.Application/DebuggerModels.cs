@@ -52,7 +52,8 @@ public sealed record DebugDocumentSequencePoint(
     int StartOffset,
     int Length,
     DebugCodeLocation Location,
-    int EndILOffset);
+    int EndILOffset,
+    DebugCodeLocation? BreakpointLocation = null);
 
 public sealed record DebugDocumentMap(
     SymbolId Document,
