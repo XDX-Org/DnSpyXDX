@@ -11,6 +11,42 @@ namespace DnSpyXDX.Tests;
 public sealed class DecompilerBackendTests
 {
     [Fact]
+    public async Task Reuses_an_existing_session_when_the_same_assembly_is_opened_again()
+    {
+        await using var backend = new DecompilerBackend();
+        var path = typeof(DecompilerBackendTests).Assembly.Location;
+
+        var first = await backend.OpenAsync(path);
+        var second = await backend.OpenAsync(Path.Combine(Path.GetDirectoryName(path)!, ".", Path.GetFileName(path)));
+
+        Assert.Equal(first.SessionId, second.SessionId);
+        Assert.Single(backend.Assemblies);
+    }
+
+    [Fact]
+    public async Task Concurrent_duplicate_opens_create_one_session()
+    {
+        await using var backend = new DecompilerBackend();
+        var path = typeof(DecompilerBackendTests).Assembly.Location;
+
+        var opened = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => backend.OpenAsync(path)));
+
+        Assert.Single(opened.Select(assembly => assembly.SessionId).Distinct());
+        Assert.Single(backend.Assemblies);
+    }
+
+    [Fact]
+    public async Task Unloading_immediately_after_open_is_safe_during_background_warmup()
+    {
+        await using var backend = new DecompilerBackend();
+        var assembly = await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
+
+        await backend.CloseAsync(assembly.SessionId);
+
+        Assert.Empty(backend.Assemblies);
+    }
+
+    [Fact]
     public async Task Rejects_unsupported_language_values()
     {
         await using var backend = new DecompilerBackend();
@@ -182,7 +218,7 @@ public sealed class DecompilerBackendTests
         var document = await backend.GetResourceAsync(resource.Id);
 
         Assert.Equal("Text", document.Kind);
-        Assert.Equal("DnSpyXDX embedded resource test\n", document.Text);
+        Assert.Equal("DnSpyXDX embedded resource test\r\n", document.Text);
         Assert.NotEmpty(document.Data);
         Assert.Contains("obfuscator", suspicious.Tooltip, StringComparison.OrdinalIgnoreCase);
     }

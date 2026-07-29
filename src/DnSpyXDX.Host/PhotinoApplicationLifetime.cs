@@ -1,13 +1,13 @@
 using DnSpyXDX.Application;
-using Photino.NET;
+using PhotinoEx.Core;
 
 namespace DnSpyXDX.Host;
 
 public sealed class PhotinoApplicationLifetime : IApplicationLifetime
 {
-    private PhotinoWindow? window;
+    private PhotinoExWindow? window;
 
-    public void Attach(PhotinoWindow mainWindow) => window = mainWindow;
+    public void Attach(PhotinoExWindow mainWindow) => window = mainWindow;
 
     public void Exit() => window?.Close();
 }

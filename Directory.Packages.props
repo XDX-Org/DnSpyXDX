@@ -3,12 +3,12 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
   </PropertyGroup>
   <ItemGroup>
-    <PackageVersion Include="Photino.Blazor" Version="4.0.13" />
     <PackageVersion Include="ICSharpCode.Decompiler" Version="10.1.1.8388" />
     <PackageVersion Include="Mono.Cecil" Version="0.10.1" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Console" Version="10.0.0" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="1.4.1" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.0.1" />
+    <PackageVersion Include="PhotinoXDX.Blazor" Version="0.1.0-preview.4" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
   </ItemGroup>
