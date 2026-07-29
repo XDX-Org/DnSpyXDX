@@ -28,6 +28,8 @@ jobs:
         os: [windows-latest, ubuntu-latest]
     steps:
       - uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v6
@@ -80,6 +82,8 @@ jobs:
         rid: [win-x64, linux-x64]
     steps:
       - uses: actions/checkout@v7
+        with:
+          submodules: recursive
 
       - name: Set up .NET
         uses: actions/setup-dotnet@v6
