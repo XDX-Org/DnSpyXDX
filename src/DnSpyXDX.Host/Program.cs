@@ -93,24 +93,6 @@ internal static class Program
         fileDropService.Attach(app.MainWindow);
         applicationLifetime.Attach(app.MainWindow);
         WindowStateManager.Attach(app.MainWindow);
-        // The WebView hides real paths from HTML drag-drop, so a dropped assembly is staged to a temp folder
-        // and its siblings can't resolve. This native OLE drop target reads the real CF_HDROP paths and opens
-        // from the original folder, so siblings resolve like they do in dnSpy. Windows only.
-        if (OperatingSystem.IsWindows())
-        {
-            var assemblies = app.Services.GetRequiredService<WorkspaceAssemblyService>();
-            var workspace = app.Services.GetRequiredService<WorkspaceState>();
-            var dropLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("DnSpyXDX.FileDrop");
-            WindowsFileDrop.Attach(app.MainWindow, files =>
-            {
-                foreach (var path in files)
-                {
-                    var extension = Path.GetExtension(path);
-                    if (!extension.Equals(".dll", StringComparison.OrdinalIgnoreCase) && !extension.Equals(".exe", StringComparison.OrdinalIgnoreCase)) continue;
-                    _ = assemblies.OpenAsync(path, "drag and drop");
-                }
-            }, active => workspace.SetDragActive(active), dropLogger);
-        }
         app.Run();
     }
 }
