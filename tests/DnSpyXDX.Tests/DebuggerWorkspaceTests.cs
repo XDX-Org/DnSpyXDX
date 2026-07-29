@@ -180,6 +180,8 @@ public sealed class DebuggerWorkspaceTests
             true);
         var displayed = workspace.DisplayVariable(variable);
         Assert.Equal("original", displayed.Name);
+        Assert.Equal(DebugVariableNameOrigin.Decompiler, displayed.NameOrigin);
+        Assert.Equal(0, displayed.Slot);
         Assert.Equal("V_0", displayed.EvaluateName);
         Assert.True(displayed.CanSetValue);
     }

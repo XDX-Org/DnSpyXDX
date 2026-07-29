@@ -31,4 +31,5 @@
     />
   </ItemGroup>
   <Import Project="../../eng/NetCoreDbg.targets" />
+  <Import Project="../../eng/DebuggerWorker.targets" />
 </Project>

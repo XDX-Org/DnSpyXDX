@@ -84,7 +84,14 @@ public sealed class DebuggerWorkspace : IDisposable
                 .OrderBy(candidate => Math.Abs(
                     (long)candidate.StartILOffset - location.ILOffset))
                 .First();
-        return variable with { Name = local.Name };
+        return variable with
+        {
+            Name = local.Name,
+            NameOrigin = DebugVariableNameOrigin.Decompiler,
+            Slot = slot,
+            StartILOffset = local.StartILOffset,
+            EndILOffset = local.EndILOffset
+        };
     }
 
     private static bool TryParseSyntheticLocal(string name, out int slot)

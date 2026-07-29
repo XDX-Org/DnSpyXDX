@@ -1,0 +1,38 @@
+<Project>
+  <PropertyGroup>
+    <BundleDebuggerWorker Condition="'$(BundleDebuggerWorker)' == ''">true</BundleDebuggerWorker>
+    <_DebuggerWorkerRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</_DebuggerWorkerRid>
+    <_DebuggerWorkerRid Condition="'$(_DebuggerWorkerRid)' == ''">$(NETCoreSdkRuntimeIdentifier)</_DebuggerWorkerRid>
+    <_DebuggerWorkerProject>$(MSBuildThisFileDirectory)../src/DnSpyXDX.Debugger.Worker/DnSpyXDX.Debugger.Worker.csproj</_DebuggerWorkerProject>
+    <_DebuggerWorkerPublishDir>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)/$(BaseIntermediateOutputPath)debugger-worker/$(_DebuggerWorkerRid)/publish/'))</_DebuggerWorkerPublishDir>
+  </PropertyGroup>
+
+  <Target Name="BuildDebuggerWorker"
+          Condition="'$(BundleDebuggerWorker)' == 'true'"
+          BeforeTargets="Build;Publish">
+    <MSBuild Projects="$(_DebuggerWorkerProject)"
+             Targets="Restore;Publish"
+             Properties="Configuration=$(Configuration);RuntimeIdentifier=$(_DebuggerWorkerRid);SelfContained=false;PublishDir=$(_DebuggerWorkerPublishDir)" />
+    <ItemGroup>
+      <_DebuggerWorkerFiles Include="$(_DebuggerWorkerPublishDir)**/*" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="CopyDebuggerWorkerToOutput"
+          Condition="'$(BundleDebuggerWorker)' == 'true'"
+          DependsOnTargets="BuildDebuggerWorker"
+          AfterTargets="Build">
+    <Copy SourceFiles="@(_DebuggerWorkerFiles)"
+          DestinationFiles="@(_DebuggerWorkerFiles->'$(OutDir)debuggers/worker/$(_DebuggerWorkerRid)/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="CopyDebuggerWorkerToPublish"
+          Condition="'$(BundleDebuggerWorker)' == 'true'"
+          DependsOnTargets="BuildDebuggerWorker"
+          AfterTargets="Publish">
+    <Copy SourceFiles="@(_DebuggerWorkerFiles)"
+          DestinationFiles="@(_DebuggerWorkerFiles->'$(PublishDir)debuggers/worker/$(_DebuggerWorkerRid)/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+</Project>

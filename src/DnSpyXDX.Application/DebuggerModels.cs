@@ -37,6 +37,14 @@ public enum DebugStepKind
     Out
 }
 
+public enum DebugVariableNameOrigin
+{
+    Runtime,
+    Symbols,
+    Decompiler,
+    Synthetic
+}
+
 public readonly record struct DebugThreadId(long Value);
 public readonly record struct DebugFrameId(long Value);
 public readonly record struct DebugVariableReference(long Value);
@@ -192,7 +200,11 @@ public sealed record DebugVariable(
     string? Type,
     DebugVariableReference Variables,
     string? EvaluateName = null,
-    bool CanSetValue = false);
+    bool CanSetValue = false,
+    DebugVariableNameOrigin NameOrigin = DebugVariableNameOrigin.Runtime,
+    int? Slot = null,
+    int StartILOffset = 0,
+    int EndILOffset = int.MaxValue);
 
 public sealed record DebugEvaluationResult(
     string Value,

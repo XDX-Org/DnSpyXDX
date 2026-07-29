@@ -22,7 +22,8 @@ public sealed class McpServerService(
     WorkspaceAssemblyService assemblies,
     McpServerSettings settings,
     McpActivityLog activity,
-    ILogger<McpServerService> logger) : IMcpServerService
+    ILogger<McpServerService> logger,
+    DebuggerAutomationService? debugger = null) : IMcpServerService
 {
     private readonly SemaphoreSlim lifecycle = new(1, 1);
     private readonly ConcurrentDictionary<string, string> clients = new();
@@ -65,10 +66,12 @@ public sealed class McpServerService(
             builder.Services.AddSingleton(assemblies);
             builder.Services.AddSingleton(settings);
             builder.Services.AddSingleton(activity);
+            if (debugger is not null) builder.Services.AddSingleton(debugger);
             builder.Services.AddSingleton<McpCursorCodec>();
-            builder.Services.AddMcpServer().WithHttpTransport()
+            var mcp = builder.Services.AddMcpServer().WithHttpTransport()
                 .WithTools<AssemblyTools>().WithTools<SymbolTools>().WithTools<TreeTools>()
                 .WithResources<SourceResources>().WithResources<DescriptorResources>();
+            if (debugger is not null) mcp.WithTools<DebuggerTools>();
             var app = builder.Build();
             startingApplication = app;
             app.Use(async (context, next) =>

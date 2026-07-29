@@ -951,7 +951,11 @@ internal sealed class MonoSoftDebuggerSession(VirtualMachine virtualMachine)
             return locals.Select((local, index) => CreateVariable(
                     NullIfWhiteSpace(local.Name) ?? $"V_{local.Index}",
                     values[index],
-                    local.Type.FullName))
+                    local.Type.FullName,
+                    NullIfWhiteSpace(local.Name) is null
+                        ? DebugVariableNameOrigin.Synthetic
+                        : DebugVariableNameOrigin.Runtime,
+                    local.Index))
                 .ToArray();
         }
         catch (Exception exception) when (
@@ -966,7 +970,9 @@ internal sealed class MonoSoftDebuggerSession(VirtualMachine virtualMachine)
     private DebugVariable CreateVariable(
         string name,
         Value? value,
-        string? typeHint = null)
+        string? typeHint = null,
+        DebugVariableNameOrigin nameOrigin = DebugVariableNameOrigin.Runtime,
+        int? slot = null)
     {
         switch (value)
         {
@@ -975,19 +981,25 @@ internal sealed class MonoSoftDebuggerSession(VirtualMachine virtualMachine)
                     name,
                     "null",
                     typeHint,
-                    new DebugVariableReference(0));
+                    new DebugVariableReference(0),
+                    NameOrigin: nameOrigin,
+                    Slot: slot);
             case PrimitiveValue primitive:
                 return new(
                     name,
                     FormatPrimitive(primitive.Value),
                     typeHint ?? primitive.Value?.GetType().FullName,
-                    new DebugVariableReference(0));
+                    new DebugVariableReference(0),
+                    NameOrigin: nameOrigin,
+                    Slot: slot);
             case StringMirror text:
                 return new(
                     name,
                     text.Value,
                     typeHint ?? "string",
-                    new DebugVariableReference(0));
+                    new DebugVariableReference(0),
+                    NameOrigin: nameOrigin,
+                    Slot: slot);
             case ArrayMirror array:
             {
                 var length = array.Length;
@@ -997,7 +1009,8 @@ internal sealed class MonoSoftDebuggerSession(VirtualMachine virtualMachine)
                     return array.GetValues(0, count)
                         .Select((item, index) => CreateVariable(
                             $"[{index}]",
-                            item))
+                            item,
+                            nameOrigin: DebugVariableNameOrigin.Synthetic))
                         .ToArray();
                 });
                 return new(
@@ -1005,7 +1018,9 @@ internal sealed class MonoSoftDebuggerSession(VirtualMachine virtualMachine)
                     $"{Safe(() => array.Type.FullName) ?? typeHint ?? "array"}" +
                     $"[{length}]",
                     Safe(() => array.Type.FullName) ?? typeHint,
-                    reference);
+                    reference,
+                    NameOrigin: nameOrigin,
+                    Slot: slot);
             }
             case ObjectMirror instance:
             {
@@ -1014,14 +1029,18 @@ internal sealed class MonoSoftDebuggerSession(VirtualMachine virtualMachine)
                     name,
                     $"{{{type ?? "object"}}}",
                     type,
-                    new DebugVariableReference(0));
+                    new DebugVariableReference(0),
+                    NameOrigin: nameOrigin,
+                    Slot: slot);
             }
             default:
                 return new(
                     name,
                     value.ToString() ?? string.Empty,
                     typeHint,
-                    new DebugVariableReference(0));
+                    new DebugVariableReference(0),
+                    NameOrigin: nameOrigin,
+                    Slot: slot);
         }
     }
 

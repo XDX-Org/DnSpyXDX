@@ -674,6 +674,37 @@ public sealed class NetCoreDbgEngineTests
     }
 
     [Fact]
+    public async Task Detached_worker_translates_coreclr_session()
+    {
+        var provider = new WorkerDebuggerEngineProvider(
+            DebugRuntimeKind.CoreClr,
+            new WorkerDebuggerOptions(
+                WorkerPath: DetachedWorkerPath(),
+                ShutdownTimeout: TimeSpan.FromSeconds(2),
+                NetCoreDbgPath: DotnetHost(),
+                NetCoreDbgArguments: [TestWorkerPath(), "netcoredbg-il"],
+                NetCoreDbgStartupTimeout: TimeSpan.FromSeconds(2)));
+        await using var engine = await provider.CreateAsync(CancellationToken.None);
+        var result = await engine.StartAsync(
+            new DebugAttachRequest(DebugRuntimeKind.CoreClr, ProcessId: 2468),
+            CancellationToken.None);
+        var location = new DebugCodeLocation(
+            new DebugMethodId(
+                Guid.Parse("11111111-2222-3333-4444-555555555555"),
+                0x06000001),
+            4);
+        var binding = Assert.Single(await engine.SetBreakpointsAsync(
+            [new DebugBreakpoint(Guid.NewGuid(), location)],
+            CancellationToken.None));
+
+        Assert.True(result.Capabilities.SupportsDecompiledCodeBreakpoints);
+        Assert.True(binding.IsVerified);
+        Assert.Equal(location, binding.BoundLocation);
+        Assert.NotEmpty(await engine.GetThreadsAsync(CancellationToken.None));
+        await engine.TerminateAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task Live_extended_netcoredbg_binds_and_hits_il_breakpoint()
     {
         var adapter = Environment.GetEnvironmentVariable(
@@ -983,6 +1014,15 @@ public sealed class NetCoreDbgEngineTests
             AppContext.BaseDirectory,
             "DnSpyXDX.Debugger.TestWorker.dll");
         Assert.True(File.Exists(path), $"Missing test worker: {path}");
+        return path;
+    }
+
+    private static string DetachedWorkerPath()
+    {
+        var path = Path.Combine(
+            AppContext.BaseDirectory,
+            "DnSpyXDX.Debugger.Worker.dll");
+        Assert.True(File.Exists(path), $"Missing debugger worker: {path}");
         return path;
     }
 

@@ -66,6 +66,13 @@ public sealed class NetCoreDbgEngineProvider : IDebuggerEngineProvider
                 "netcoredbg",
                 runtimeIdentifier,
                 executableName),
+            Path.GetFullPath(Path.Combine(
+                AppContext.BaseDirectory,
+                "..",
+                "..",
+                "netcoredbg",
+                runtimeIdentifier,
+                executableName)),
             Path.Combine(AppContext.BaseDirectory, "debuggers", "netcoredbg", executableName),
             Path.Combine(AppContext.BaseDirectory, executableName),
             executableName
@@ -545,13 +552,22 @@ internal sealed class NetCoreDbgEngine(
             new JsonObject { ["variablesReference"] = reference.Value },
             cancellationToken).ConfigureAwait(false));
         return RequiredArray(body, "variables").EnumerateArray()
-            .Select(value => new DebugVariable(
-                OptionalString(value, "name") ?? "",
+            .Select(value =>
+            {
+                var name = OptionalString(value, "name") ?? "";
+                var slot = SyntheticLocalSlot(name);
+                return new DebugVariable(
+                name,
                 OptionalString(value, "value") ?? "",
                 OptionalString(value, "type"),
                 new DebugVariableReference(RequiredInt64(value, "variablesReference")),
                 OptionalString(value, "evaluateName"),
-                CanSetValue: capabilities.SupportsSetVariable))
+                CanSetValue: capabilities.SupportsSetVariable,
+                NameOrigin: slot is null
+                    ? DebugVariableNameOrigin.Runtime
+                    : DebugVariableNameOrigin.Synthetic,
+                Slot: slot);
+            })
             .ToArray();
     }
 
@@ -1002,6 +1018,14 @@ internal sealed class NetCoreDbgEngine(
                 "NetCoreDbg xdxLocation must be an object.");
         return RequiredDebugLocation(location);
     }
+
+    private static int? SyntheticLocalSlot(string name) =>
+        name.Length > 2 &&
+        name.StartsWith("V_", StringComparison.Ordinal) &&
+        int.TryParse(name.AsSpan(2), out var slot) &&
+        slot >= 0
+            ? slot
+            : null;
 
     private static DebugCodeLocation RequiredDebugLocation(JsonElement value)
     {

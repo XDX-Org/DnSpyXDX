@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>DnSpyXDX.Debugger.Worker</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../DnSpyXDX.Debugging/DnSpyXDX.Debugging.csproj" />
+    <ProjectReference Include="../DnSpyXDX.Debugging.Backends/DnSpyXDX.Debugging.Backends.csproj" />
+    <ProjectReference Include="../DnSpyXDX.Debugging.Protocol/DnSpyXDX.Debugging.Protocol.csproj" />
+  </ItemGroup>
+</Project>

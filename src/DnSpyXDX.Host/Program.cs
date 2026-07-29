@@ -43,15 +43,26 @@ internal static class Program
             services.GetRequiredService<RuntimeDisplaySettings>(),
             services.GetRequiredService<PersistentDecompileCache>(),
             services.GetRequiredService<NeighborLoadingSettings>()));
-        builder.Services.AddSingleton(new CoreClrDebuggerOptions());
-        builder.Services.AddSingleton<IDebuggerEngineProvider, NetCoreDbgEngineProvider>();
-        builder.Services.AddSingleton(new MonoSoftDebuggerOptions());
-        builder.Services.AddSingleton<IDebuggerEngineProvider, MonoSoftDebuggerEngineProvider>();
+        builder.Services.AddSingleton(new WorkerDebuggerOptions());
+        builder.Services.AddSingleton<IDebuggerEngineProvider>(services =>
+            new WorkerDebuggerEngineProvider(
+                DebugRuntimeKind.CoreClr,
+                services.GetRequiredService<WorkerDebuggerOptions>()));
+        builder.Services.AddSingleton<IDebuggerEngineProvider>(services =>
+            new WorkerDebuggerEngineProvider(
+                DebugRuntimeKind.Mono,
+                services.GetRequiredService<WorkerDebuggerOptions>()));
+        builder.Services.AddSingleton<IDebuggerEngineProvider>(services =>
+            new WorkerDebuggerEngineProvider(
+                DebugRuntimeKind.UnityMono,
+                services.GetRequiredService<WorkerDebuggerOptions>()));
+        builder.Services.AddSingleton<IUnityMonoEndpointDiscovery, UnityMonoEndpointDiscovery>();
         builder.Services.AddSingleton<IDebuggerEngineRegistry>(services =>
             new DebuggerEngineRegistry(
                 services.GetServices<IDebuggerEngineProvider>()));
         builder.Services.AddSingleton<IDebuggerService, DebuggerService>();
         builder.Services.AddSingleton<DebuggerWorkspace>();
+        builder.Services.AddSingleton<DebuggerAutomationService>();
         builder.Services.AddSingleton<IProjectExportService, ProjectExportService>();
         builder.Services.AddSingleton<WorkspaceState>();
         builder.Services.AddSingleton<SourceViewStateStore>();

@@ -1,7 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="../DnSpyXDX.Application/DnSpyXDX.Application.csproj" />
-    <ProjectReference Include="../../third_party/debugger-libs/Mono.Debugger.Soft/Mono.Debugger.Soft.csproj" />
-    <PackageReference Include="Mono.Cecil" />
+    <ProjectReference Include="../DnSpyXDX.Debugging.Protocol/DnSpyXDX.Debugging.Protocol.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="CoreClrDebugger.cs;DapConnection.cs;DapMessageFramer.cs;DebuggerWorker.cs;MonoSoftDebugger.cs;UnityMonoDebugger.cs" />
   </ItemGroup>
 </Project>
