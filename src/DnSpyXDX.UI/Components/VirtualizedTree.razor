@@ -9,8 +9,9 @@
   else
   {
     <Virtualize Items="visible" Context="item" ItemSize="RowHeight" OverscanCount="12">
-      <button @key="item.Node.Id" class="tree-row @(IsRowSelected(item.Node) ? "selected" : null)" style="--depth:@item.Depth" title="@(item.Tooltip ?? item.Node.Tooltip ?? item.Node.Detail)" @onclick="e => SelectAsync(item.Node, e)" @oncontextmenu="e => OpenContextMenuAsync(item.Node, e)" @oncontextmenu:preventDefault @oncontextmenu:stopPropagation>
+      <button @key="item.Node.Id" class="tree-row @(IsRowSelected(item.Node) ? "selected" : null)" style="--depth:@item.Depth" title="@(item.Framework is null ? item.Tooltip ?? item.Node.Tooltip ?? item.Node.Detail : null)" @onmouseenter="e => PositionTooltip(e, item)" @onclick="e => SelectAsync(item.Node, e)" @oncontextmenu="e => OpenContextMenuAsync(item.Node, e)" @oncontextmenu:preventDefault @oncontextmenu:stopPropagation>
         <span class="chevron" @onclick="() => ToggleAsync(item.Node)" @onclick:stopPropagation="true">@(item.Node.HasChildren ? (expanded.Contains(item.Node.Id) ? "▾" : "▸") : "")</span>@if (ShowIcon(item.Node.Kind)) { <span class="node-icon @item.Node.Kind.ToString().ToLowerInvariant()">@Icon(item.Node.Kind)</span> }@if (item.Node.Visibility is not null && item.Node.Kind != TreeNodeKind.Type) { <span class="meta-visibility">@item.Node.Visibility</span> }@if (item.Node.TypeDisplay is not null) { <span class="meta-type meta-type-@item.Node.TypeClassification">@item.Node.TypeDisplay</span> }<span class="meta-name meta-@item.Node.NameClassification">@{ var name = SplitGenericName(item.Node.Name); }@name.Base@foreach (var part in name.Generic) { <span class="@(part.IsParameter ? "meta-typeparam" : "meta-generic-punctuation")">@part.Text</span> }</span>@if (item.Node.Detail is not null) { <small>@item.Node.Detail</small> }
+        @if (item.Framework is not null) { <span class="assembly-tooltip" style="left:@(tooltipX)px;top:@(tooltipY)px"><span class="assembly-tooltip-label">Target framework</span><strong>@item.Framework</strong><span class="assembly-tooltip-label">Loaded from</span><code>@item.LoadedFrom</code></span> }
       </button>
     </Virtualize>
   }
@@ -46,10 +47,24 @@
   private int handledSelectionVersion = -1;
   private HashSet<NodeId> appliedPath = [];
   private bool scrollToSelection;
+  private double tooltipX;
+  private double tooltipY;
+
+  private void PositionTooltip(MouseEventArgs e, FlatNode item)
+  {
+    if (item.Framework is null) return;
+    tooltipX = e.ClientX + 12;
+    tooltipY = e.ClientY + 12;
+  }
 
   protected override async Task OnParametersSetAsync()
   {
-    roots = Assemblies.Select(assembly => new FlatNode(new TreeNodeDescriptor(assembly.RootNode, assembly.Name, TreeNodeKind.Assembly, true, Detail: assembly.TargetFramework), 0, $"Loaded from: {Path.GetDirectoryName(assembly.Path)}")).ToArray();
+    roots = Assemblies.Select(assembly => new FlatNode(
+      new TreeNodeDescriptor(assembly.RootNode, assembly.Name, TreeNodeKind.Assembly, true),
+      0,
+      Framework: assembly.TargetFramework,
+      LoadedFrom: Path.GetDirectoryName(assembly.Path)))
+      .ToArray();
     var validSessions = Assemblies.Select(assembly => assembly.SessionId).ToHashSet();
     foreach (var key in children.Keys.Where(key => !validSessions.Contains(key.SessionId)).ToArray()) children.Remove(key);
     expanded.RemoveWhere(key => !validSessions.Contains(key.SessionId));
@@ -169,5 +184,5 @@
   }
 
   private readonly record struct GenericPart(string Text, bool IsParameter);
-  private sealed record FlatNode(TreeNodeDescriptor Node, int Depth, string? Tooltip = null);
+  private sealed record FlatNode(TreeNodeDescriptor Node, int Depth, string? Tooltip = null, string? Framework = null, string? LoadedFrom = null);
 }
