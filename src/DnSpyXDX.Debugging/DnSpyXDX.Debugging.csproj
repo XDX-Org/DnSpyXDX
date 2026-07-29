@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../DnSpyXDX.Application/DnSpyXDX.Application.csproj" />
+    <ProjectReference Include="../../third_party/debugger-libs/Mono.Debugger.Soft/Mono.Debugger.Soft.csproj" />
+    <PackageReference Include="Mono.Cecil" />
+  </ItemGroup>
+</Project>

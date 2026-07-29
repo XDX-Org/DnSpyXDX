@@ -1,7 +1,7 @@
 @inject IDecompilerBackend Backend
 @inject IJSRuntime JS
 
-<div class="explorer-tree" @ref="viewport">
+<div class="explorer-tree" @ref="viewport" @oncontextmenu="e => OnEmptyContextMenu.InvokeAsync(e)" @oncontextmenu:preventDefault>
   @if (Assemblies.Count == 0)
   {
     <div class="empty">@EmptyMessage</div>
@@ -9,7 +9,7 @@
   else
   {
     <Virtualize Items="visible" Context="item" ItemSize="RowHeight" OverscanCount="12">
-      <button @key="item.Node.Id" class="tree-row @(IsSelected(item.Node) ? "selected" : null)" style="--depth:@item.Depth" title="@(item.Tooltip ?? item.Node.Tooltip ?? item.Node.Detail)" @onclick="e => SelectAsync(item.Node, e)" @oncontextmenu="e => OpenContextMenuAsync(item.Node, e)" @oncontextmenu:preventDefault="@HasContextMenu(item.Node)" @oncontextmenu:stopPropagation="@HasContextMenu(item.Node)">
+      <button @key="item.Node.Id" class="tree-row @(IsRowSelected(item.Node) ? "selected" : null)" style="--depth:@item.Depth" title="@(item.Tooltip ?? item.Node.Tooltip ?? item.Node.Detail)" @onclick="e => SelectAsync(item.Node, e)" @oncontextmenu="e => OpenContextMenuAsync(item.Node, e)" @oncontextmenu:preventDefault @oncontextmenu:stopPropagation>
         <span class="chevron" @onclick="() => ToggleAsync(item.Node)" @onclick:stopPropagation="true">@(item.Node.HasChildren ? (expanded.Contains(item.Node.Id) ? "▾" : "▸") : "")</span>@if (ShowIcon(item.Node.Kind)) { <span class="node-icon @item.Node.Kind.ToString().ToLowerInvariant()">@Icon(item.Node.Kind)</span> }@if (item.Node.Visibility is not null && item.Node.Kind != TreeNodeKind.Type) { <span class="meta-visibility">@item.Node.Visibility</span> }@if (item.Node.TypeDisplay is not null) { <span class="meta-type meta-type-@item.Node.TypeClassification">@item.Node.TypeDisplay</span> }<span class="meta-name meta-@item.Node.NameClassification">@{ var name = SplitGenericName(item.Node.Name); }@name.Base@foreach (var part in name.Generic) { <span class="@(part.IsParameter ? "meta-typeparam" : "meta-generic-punctuation")">@part.Text</span> }</span>@if (item.Node.Detail is not null) { <small>@item.Node.Detail</small> }
       </button>
     </Virtualize>
@@ -24,9 +24,16 @@
   [Parameter] public EventCallback<NodeId> OnOpenReference { get; set; }
   [Parameter] public EventCallback<(NodeId Resource, bool NewTab)> OnOpenResource { get; set; }
   [Parameter] public EventCallback<(MouseEventArgs Event, TreeNodeDescriptor Node)> OnContextMenu { get; set; }
+  // Fired on a right-click that isn't on a node (empty space, or the "open a file" placeholder) — the host
+  // shows an "Open assembly" menu there. Row right-clicks stop propagation, so only true empty space reaches here.
+  [Parameter] public EventCallback<MouseEventArgs> OnEmptyContextMenu { get; set; }
   [Parameter] public IReadOnlySet<NodeId>? ExpandedPath { get; set; }
   [Parameter] public SymbolId? SelectedSymbol { get; set; }
   [Parameter] public NodeId? SelectedNode { get; set; }
+  // Session ids of assemblies in the multi-selection (Ctrl+A / Delete). Their root rows render as selected.
+  [Parameter] public IReadOnlySet<Guid>? SelectedAssemblies { get; set; }
+  [Parameter] public EventCallback OnClearSelection { get; set; }
+  [Parameter] public EventCallback<Guid> OnToggleAssembly { get; set; }
   [Parameter] public int SelectionVersion { get; set; }
   [Parameter] public int CollapseVersion { get; set; }
 
@@ -118,6 +125,15 @@
 
   private async Task SelectAsync(TreeNodeDescriptor node, MouseEventArgs e)
   {
+    // Ctrl/Cmd+click on an assembly adds or removes it from the multi-selection (dnSpy-style), without
+    // expanding it or disturbing the rest of the selection.
+    if (node.Kind == TreeNodeKind.Assembly && (e.CtrlKey || e.MetaKey))
+    {
+      await OnToggleAssembly.InvokeAsync(node.Id.SessionId);
+      return;
+    }
+    // A plain click is a fresh single selection, so drop any multi-selection built with Ctrl+A first.
+    if (SelectedAssemblies is { Count: > 0 }) await OnClearSelection.InvokeAsync();
     if (node.Symbol is { } symbol) await OnOpen.InvokeAsync(new NavigationRequest(symbol, e.CtrlKey, node.Kind, node.Name));
     else if (node.Kind == TreeNodeKind.Reference) await OnOpenReference.InvokeAsync(node.Id);
     else if (node.Kind == TreeNodeKind.Resource) await OnOpenResource.InvokeAsync((node.Id, e.CtrlKey || e.MetaKey));
@@ -128,6 +144,7 @@
   // Assembly nodes have their unload menu; symbol-bearing nodes (types and members) get the Analyze menu.
   private static bool HasContextMenu(TreeNodeDescriptor node) => node.Kind == TreeNodeKind.Assembly || node.Symbol is not null;
   private bool IsSelected(TreeNodeDescriptor node) => node.Id == SelectedNode || node.Symbol is { } symbol && symbol == SelectedSymbol;
+  private bool IsRowSelected(TreeNodeDescriptor node) => IsSelected(node) || (node.Kind == TreeNodeKind.Assembly && SelectedAssemblies is not null && SelectedAssemblies.Contains(node.Id.SessionId));
   private static bool ShowIcon(TreeNodeKind kind) => kind is TreeNodeKind.Assembly or TreeNodeKind.Group or TreeNodeKind.Reference or TreeNodeKind.Resource;
   private static string Icon(TreeNodeKind kind) => kind switch { TreeNodeKind.Assembly => "◈", TreeNodeKind.Namespace => "N", TreeNodeKind.Type => "C", TreeNodeKind.Method or TreeNodeKind.Constructor => "M", TreeNodeKind.Property => "P", TreeNodeKind.Field => "F", TreeNodeKind.Event => "E", TreeNodeKind.Reference => "↗", TreeNodeKind.Resource => "◆", _ => "▦" };
 

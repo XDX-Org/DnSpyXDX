@@ -1,3 +1,6 @@
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
+using System.Reflection.PortableExecutable;
 using DnSpyXDX.Application;
 using DnSpyXDX.Decompilation;
 using DnSpyXDX.UI;
@@ -93,6 +96,113 @@ public sealed class DecompilerBackendTests
         Assert.Contains("namespace DnSpyXDX.Tests;", document.Text, StringComparison.Ordinal);
         Assert.False(new RuntimeDisplaySettings().ShowMetadataTokens);
         Assert.False(new UiSessionState().ShowMetadataTokens);
+        Assert.NotNull(document.DebugMap);
+        Assert.Equal(document.Symbol, document.DebugMap.Document);
+        Assert.NotEmpty(document.DebugMap.SequencePoints);
+        Assert.All(document.DebugMap.SequencePoints, point =>
+        {
+            Assert.Equal(assembly.ModuleMvid, point.Location.Method.ModuleMvid);
+            Assert.Equal(0x06, point.Location.Method.MetadataToken >> 24);
+            Assert.True(point.Location.ILOffset >= 0);
+            Assert.True(point.EndILOffset > point.Location.ILOffset);
+            Assert.InRange(point.StartOffset, 0, document.Text.Length - 1);
+            Assert.InRange(point.StartOffset + point.Length, 1, document.Text.Length);
+        });
+    }
+
+    [Fact]
+    public async Task Decompiled_breakpoints_use_control_flow_join_offsets()
+    {
+        var worker = Path.Combine(
+            AppContext.BaseDirectory,
+            "DnSpyXDX.Debugger.TestWorker.dll");
+        Assert.True(File.Exists(worker), $"Missing test worker: {worker}");
+        await using var backend = new DecompilerBackend();
+        var assembly = await backend.OpenAsync(worker);
+        var target = Assert.Single(
+            await backend.SearchAsync("DebuggerBreakpointTarget"),
+            result =>
+                result.Kind == "Type" &&
+                result.Name == "DebuggerBreakpointTarget" &&
+                result.Symbol.ModuleMvid == assembly.ModuleMvid);
+
+        var document = await backend.DecompileAsync(
+            target.Symbol,
+            DecompilerLanguage.CSharp);
+        var runMethod = Assert.Single(
+            await backend.SearchAsync("Run"),
+            result =>
+                result.Kind == "Method" &&
+                result.QualifiedName == "DebuggerBreakpointTarget.Run");
+        var point = Assert.Single(
+            document.DebugMap!.SequencePoints,
+            candidate =>
+                candidate.Location.Method.MetadataToken ==
+                    runMethod.Symbol.MetadataToken &&
+                document.Text.Substring(
+                    candidate.StartOffset,
+                    candidate.Length)
+                    .Contains("return value", StringComparison.Ordinal));
+
+        var breakpointLocation = Assert.IsType<DebugCodeLocation>(
+            point.BreakpointLocation);
+        Assert.Equal(point.Location.Method, breakpointLocation.Method);
+        Assert.InRange(
+            breakpointLocation.ILOffset,
+            point.Location.ILOffset + 1,
+            point.EndILOffset - 1);
+    }
+
+    [Fact]
+    public async Task Decompiled_async_breakpoints_use_move_next_method_body()
+    {
+        var worker = Path.Combine(
+            AppContext.BaseDirectory,
+            "DnSpyXDX.Debugger.TestWorker.dll");
+        await using var backend = new DecompilerBackend();
+        var assembly = await backend.OpenAsync(worker);
+        var target = Assert.Single(
+            await backend.SearchAsync("DebuggerBreakpointTarget"),
+            result =>
+                result.Kind == "Type" &&
+                result.Name == "DebuggerBreakpointTarget" &&
+                result.Symbol.ModuleMvid == assembly.ModuleMvid);
+        var asyncMethod = Assert.Single(
+            await backend.SearchAsync("RunAsync"),
+            result =>
+                result.Kind == "Method" &&
+                result.QualifiedName ==
+                    "DebuggerBreakpointTarget.RunAsync");
+        var document = await backend.DecompileAsync(
+            target.Symbol,
+            DecompilerLanguage.CSharp);
+        var point = Assert.Single(
+            document.DebugMap!.SequencePoints,
+            candidate =>
+                document.Text.Substring(
+                    candidate.StartOffset,
+                    candidate.Length)
+                    .Contains("await Task.Yield", StringComparison.Ordinal));
+
+        Assert.NotEqual(
+            asyncMethod.Symbol.MetadataToken,
+            point.Location.Method.MetadataToken);
+        using var stream = File.OpenRead(worker);
+        using var peReader = new PEReader(stream);
+        var metadata = peReader.GetMetadataReader();
+        var runtimeMethod = metadata.GetMethodDefinition(
+            (MethodDefinitionHandle)MetadataTokens.EntityHandle(
+                point.Location.Method.MetadataToken));
+        var body = peReader.GetMethodBody(
+            runtimeMethod.RelativeVirtualAddress);
+        var il = body.GetILBytes();
+        Assert.NotNull(il);
+        var codeSize = il.Length;
+        Assert.InRange(point.Location.ILOffset, 0, codeSize - 1);
+        Assert.InRange(
+            (point.BreakpointLocation ?? point.Location).ILOffset,
+            0,
+            codeSize - 1);
     }
 
     [Fact]
@@ -141,6 +251,67 @@ public sealed class DecompilerBackendTests
         Assert.DoesNotMatch(@"/\*\s*[0-9A-Fa-f]{8}\s*\*/", hiddenIl.Text);
         Assert.Contains("// C#:", hiddenCombined.Text, StringComparison.Ordinal);
         Assert.DoesNotMatch(@"/\*\s*[0-9A-Fa-f]{8}\s*\*/", hiddenCombined.Text);
+    }
+
+    [Fact]
+    public async Task Dnspy_member_order_groups_by_kind_in_the_configured_order()
+    {
+        var displaySettings = new RuntimeDisplaySettings();
+        await using var backend = new DecompilerBackend(displaySettings);
+        await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
+        var type = Assert.Single(await backend.SearchAsync(nameof(SampleMembers)), result =>
+            result.Kind == "Type" && result.QualifiedName == "DnSpyXDX.Tests.SampleMembers");
+
+        var ilspy = await backend.DecompileAsync(type.Symbol, DecompilerLanguage.CSharp);
+        displaySettings.MemberOrder = MemberOrder.DnSpy;
+        var dnspy = await backend.DecompileAsync(type.Symbol, DecompilerLanguage.CSharp);
+
+        Assert.NotEqual(ilspy.Text, dnspy.Text);
+
+        // dnSpy groups members by kind into contiguous blocks, in the default order Methods, Properties,
+        // Events, Fields, Nested Types. Within a block members keep declaration order (so the three properties
+        // stay in source order). This guards the grouping and that fields/nested types are not floated to the
+        // top by their low metadata-table tokens.
+        int At(string text) => dnspy.Text.IndexOf(text, StringComparison.Ordinal);
+        var blocks = new[] { "void SampleMethod", "int SampleProperty", "event Action", "public int SampleField;", "class SampleNested" };
+        var positions = blocks.Select(At).ToList();
+        Assert.DoesNotContain(-1, positions);
+        Assert.Equal(positions.OrderBy(p => p).ToList(), positions);
+        // Declaration order within the Properties block.
+        Assert.True(At("int SampleProperty") < At("int CalculatedProperty") && At("int CalculatedProperty") < At("int AfterEventProperty"));
+
+        // dnSpy mode also spells out a calculated getter-only property as a full accessor block instead of
+        // ILSpy's expression body.
+        Assert.Contains("public int CalculatedProperty => SampleField;", ilspy.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("=> SampleField;", dnspy.Text, StringComparison.Ordinal);
+        Assert.Matches(@"public int CalculatedProperty\s*\{\s*get\s*\{\s*return SampleField;", dnspy.Text);
+
+        Assert.Equal(MemberOrder.Ilspy, new RuntimeDisplaySettings().MemberOrder);
+        Assert.Equal(MemberOrder.Ilspy, new UiSessionState().MemberOrder);
+        Assert.Equal(MemberGroups.DefaultOrder, new RuntimeDisplaySettings().MemberGroupOrder);
+        Assert.Null(new UiSessionState().MemberGroupOrder);
+    }
+
+    [Fact]
+    public async Task Dnspy_member_group_order_is_configurable()
+    {
+        var displaySettings = new RuntimeDisplaySettings { MemberOrder = MemberOrder.DnSpy };
+        await using var backend = new DecompilerBackend(displaySettings);
+        await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
+        var type = Assert.Single(await backend.SearchAsync(nameof(SampleMembers)), result =>
+            result.Kind == "Type" && result.QualifiedName == "DnSpyXDX.Tests.SampleMembers");
+
+        var defaultOrder = await backend.DecompileAsync(type.Symbol, DecompilerLanguage.CSharp);
+        // Reverse the groups: fields and nested types to the top, methods to the bottom.
+        displaySettings.MemberGroupOrder =
+            [MemberGroup.Fields, MemberGroup.NestedTypes, MemberGroup.Events, MemberGroup.Properties, MemberGroup.Methods];
+        var reordered = await backend.DecompileAsync(type.Symbol, DecompilerLanguage.CSharp);
+
+        Assert.NotEqual(defaultOrder.Text, reordered.Text);
+        int At(string text) => reordered.Text.IndexOf(text, StringComparison.Ordinal);
+        Assert.True(At("public int SampleField;") < At("class SampleNested"), "Fields should now precede nested types.");
+        Assert.True(At("class SampleNested") < At("int SampleProperty"), "Nested types should now precede properties.");
+        Assert.True(At("int SampleProperty") < At("void SampleMethod"), "Methods should now come last.");
     }
 
     [Fact]
@@ -220,6 +391,25 @@ public sealed class DecompilerBackendTests
         Assert.DoesNotContain("// C#: using ", combined.Text, StringComparison.Ordinal);
         Assert.Contains("IL_0000:", combined.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("// Decompiled C# reference", combined.Text, StringComparison.Ordinal);
+        Assert.NotNull(il.DebugMap);
+        Assert.NotEmpty(il.DebugMap.SequencePoints);
+        Assert.NotNull(combined.DebugMap);
+        Assert.NotEmpty(combined.DebugMap.SequencePoints);
+        Assert.All(il.DebugMap.SequencePoints.Concat(combined.DebugMap.SequencePoints), point =>
+        {
+            Assert.Equal(type.Symbol.ModuleMvid, point.Location.Method.ModuleMvid);
+            Assert.Equal(0x06, point.Location.Method.MetadataToken >> 24);
+            Assert.Equal(
+                $"IL_{point.Location.ILOffset:X4}:",
+                point.Length >= 8
+                    ? il.Text.Substring(
+                        il.DebugMap.SequencePoints
+                            .First(candidate =>
+                                candidate.Location == point.Location).StartOffset,
+                        8)
+                    : "",
+                ignoreCase: true);
+        });
         Assert.Empty(hex.Text);
         Assert.NotNull(hex.Binary);
         Assert.Equal([0x4D, 0x5A], hex.Binary![..2]);
@@ -314,7 +504,7 @@ public sealed class DecompilerBackendTests
         Assert.Contains(members, m => m.Name == nameof(SampleMembers.SampleMethod));
 
         // They are reachable by expanding the property or event that owns them.
-        var property = members.Single(m => m.Kind == TreeNodeKind.Property);
+        var property = members.Single(m => m.Kind == TreeNodeKind.Property && m.Name == nameof(SampleMembers.SampleProperty));
         Assert.True(property.HasChildren);
         var accessors = await backend.GetChildrenAsync(property.Id);
         Assert.Equal(["get_SampleProperty", "set_SampleProperty"], accessors.Select(a => a.Name));
@@ -561,7 +751,9 @@ public sealed class SampleMembers
 {
     public int SampleField;
     public int SampleProperty { get; set; }
+    public int CalculatedProperty => SampleField;
     public event Action? SampleEvent;
+    public int AfterEventProperty => SampleField;
     public void SampleMethod() { }
     public void CallsLater() => Later();
     public void Later() { }

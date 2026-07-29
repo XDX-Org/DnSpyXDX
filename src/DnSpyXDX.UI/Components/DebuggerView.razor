@@ -1,0 +1,272 @@
+@implements IAsyncDisposable
+@inject DebuggerWorkspace Debugger
+@inject IJSRuntime JS
+
+<div class="debugger-view">
+  <header class="debugger-session">
+    <span class="debugger-session-state status-@Debugger.Snapshot.Status.ToString().ToLowerInvariant()"></span>
+    <strong>@SessionTitle</strong>
+    @if (Debugger.Snapshot.Stop is { } stop)
+    {
+      <span class="debugger-stop-reason">@StopReason(stop)</span>
+    }
+    @if (!string.IsNullOrWhiteSpace(Debugger.Error))
+    {
+      <span class="debugger-session-error" title="@Debugger.Error">@Debugger.Error</span>
+    }
+  </header>
+
+  <div class="debugger-sections" @ref="sections">
+    <section class="debugger-section debugger-threads">
+      <header><strong>Threads</strong><small>@Debugger.Threads.Count</small></header>
+      <div class="debugger-list">
+        @if (Debugger.Threads.Count == 0)
+        {
+          <div class="debugger-empty">@(Debugger.Snapshot.Status == DebugSessionStatus.Paused ? "No managed threads." : "Pause target to inspect threads.")</div>
+        }
+        else
+        {
+          @foreach (var thread in Debugger.Threads)
+          {
+            <button class="debugger-row debugger-thread-row @(Debugger.SelectedThread == thread.Id ? "selected" : null)"
+                    title="@thread.Name"
+                    @onclick="() => Debugger.SelectThreadAsync(thread)">
+              <span class="debugger-thread-state @(thread.IsStopped ? "stopped" : null)"></span>
+              <strong>@thread.Name</strong>
+              <small>#@thread.Id.Value</small>
+            </button>
+          }
+        }
+      </div>
+    </section>
+
+    <div class="debugger-section-resizer"
+         role="separator"
+         aria-label="Resize Threads and Call Stack"
+         aria-orientation="vertical"
+         tabindex="0"
+         title="Drag to resize · Double-click to reset"></div>
+
+    <section class="debugger-section debugger-callstack">
+      <header><strong>Call Stack</strong><small>@Debugger.Frames.Count</small></header>
+      <div class="debugger-list">
+        @if (Debugger.Frames.Count == 0)
+        {
+          <div class="debugger-empty">@(Debugger.Snapshot.Status == DebugSessionStatus.Paused ? "No managed frames." : "Pause target to inspect frames.")</div>
+        }
+        else
+        {
+          @foreach (var frame in Debugger.Frames)
+          {
+            <button class="debugger-row @(Debugger.SelectedFrame == frame.Id ? "selected" : null)"
+                    title="@FrameTitle(frame)"
+                    @onclick="() => SelectFrameAsync(frame)">
+              <strong>@frame.Name</strong>
+              <small>@FrameLocation(frame)</small>
+            </button>
+          }
+        }
+      </div>
+    </section>
+
+    <div class="debugger-section-resizer"
+         role="separator"
+         aria-label="Resize Call Stack and Variables"
+         aria-orientation="vertical"
+         tabindex="0"
+         title="Drag to resize · Double-click to reset"></div>
+
+    <section class="debugger-section debugger-locals">
+      <header><strong>Variables</strong><small>@Debugger.Variables.Count</small></header>
+      <div class="debugger-table">
+        @if (Debugger.Variables.Count == 0)
+        {
+          <div class="debugger-empty">@(Debugger.Snapshot.Status == DebugSessionStatus.Paused ? "No variables in this frame." : "Pause target to inspect variables.")</div>
+        }
+        else
+        {
+          @foreach (var entry in VisibleVariables())
+          {
+            var expandable = entry.Variable.Variables.Value != 0;
+            var expanded = Debugger.TryGetVariableChildren(entry.Variable.Variables, out _);
+            <button class="debugger-variable"
+                    style="@($"--debug-depth:{entry.Depth}")"
+                    disabled="@(!expandable)"
+                    title="@(expandable ? expanded ? "Collapse value" : "Expand value" : entry.Variable.Value)"
+                    @onclick="() => Debugger.ToggleVariableAsync(entry.Variable)">
+              <span class="debugger-variable-name">
+                <i class="@(expandable ? expanded ? "expanded" : "expandable" : null)"></i>
+                @entry.Variable.Name
+              </span>
+              <code>@entry.Variable.Value</code>
+              <small>@entry.Variable.Type</small>
+            </button>
+          }
+        }
+      </div>
+    </section>
+
+    <div class="debugger-section-resizer"
+         role="separator"
+         aria-label="Resize Variables and Breakpoints"
+         aria-orientation="vertical"
+         tabindex="0"
+         title="Drag to resize · Double-click to reset"></div>
+
+    <section class="debugger-section debugger-breakpoints">
+      <header><strong>Breakpoints</strong><small>@Debugger.Breakpoints.Count</small></header>
+      <div class="debugger-list">
+        @if (Debugger.Breakpoints.Count == 0)
+        {
+          <div class="debugger-empty">Click a source gutter to add a breakpoint.</div>
+        }
+        else
+        {
+          @foreach (var breakpoint in Debugger.Breakpoints)
+          {
+            var binding = Debugger.BindingFor(breakpoint.Id);
+            <div class="debugger-breakpoint-row" title="@binding?.Message">
+              <input type="checkbox"
+                     checked="@breakpoint.Enabled"
+                     aria-label="Enable breakpoint"
+                     @onchange="e => SetBreakpointEnabledAsync(breakpoint, e)" />
+              <button class="debugger-breakpoint-link"
+                      @onclick="() => OnNavigateLocation.InvokeAsync(breakpoint.Location)">
+                <span class="debugger-breakpoint-state @(binding?.IsVerified == true ? "verified" : null)"></span>
+                <code>@($"0x{breakpoint.Location.Method.MetadataToken:X8} + {breakpoint.Location.ILOffset:X}")</code>
+                <small>@(binding?.IsVerified == true ? "Bound" : binding?.Message ?? "Pending")</small>
+              </button>
+              <button class="debugger-remove"
+                      title="Remove breakpoint"
+                      aria-label="Remove breakpoint"
+                      @onclick="() => Debugger.RemoveBreakpointAsync(breakpoint.Id)">×</button>
+            </div>
+          }
+        }
+      </div>
+    </section>
+
+    <div class="debugger-section-resizer"
+         role="separator"
+         aria-label="Resize Breakpoints and Debug Output"
+         aria-orientation="vertical"
+         tabindex="0"
+         title="Drag to resize · Double-click to reset"></div>
+
+    <section class="debugger-section debugger-output">
+      <header><strong>Debug Output</strong><button @onclick="Debugger.ClearOutput">Clear</button></header>
+      <div class="debugger-console">
+        @if (Debugger.Output.Count == 0)
+        {
+          <div class="debugger-empty">No debugger output.</div>
+        }
+        else
+        {
+          @foreach (var message in Debugger.Output)
+          {
+            <div><small>@message.Category</small><span>@message.Message</span></div>
+          }
+        }
+      </div>
+    </section>
+  </div>
+</div>
+
+@code {
+  [Parameter] public EventCallback<DebugCodeLocation> OnNavigateLocation { get; set; }
+
+  private ElementReference sections;
+
+  private string SessionTitle
+  {
+    get
+    {
+      var runtime = Debugger.Snapshot.Runtime?.ToString() ?? "Debugger";
+      var process = Debugger.Snapshot.ProcessId is { } processId ? $" · PID {processId}" : "";
+      return $"{runtime} · {Debugger.Snapshot.Status}{process}";
+    }
+  }
+
+  protected override void OnInitialized() => Debugger.Changed += Refresh;
+
+  protected override async Task OnAfterRenderAsync(bool firstRender)
+  {
+    if (firstRender)
+      await JS.InvokeVoidAsync("dnSpyXdx.initDebuggerResize", sections);
+  }
+
+  private async Task SelectFrameAsync(DebugStackFrame frame)
+  {
+    await Debugger.SelectFrameAsync(frame);
+  }
+
+  private Task SetBreakpointEnabledAsync(
+    DebugBreakpoint breakpoint,
+    ChangeEventArgs value) =>
+    Debugger.SetBreakpointEnabledAsync(
+      breakpoint.Id,
+      value.Value is true);
+
+  private IEnumerable<VisibleVariable> VisibleVariables()
+  {
+    var visited = new HashSet<DebugVariableReference>();
+    foreach (var variable in Debugger.Variables)
+      foreach (var visible in Flatten(variable, 0, visited))
+        yield return visible;
+  }
+
+  private IEnumerable<VisibleVariable> Flatten(
+    DebugVariable variable,
+    int depth,
+    HashSet<DebugVariableReference> visited)
+  {
+    yield return new(variable, depth);
+    if (variable.Variables.Value == 0 ||
+        !visited.Add(variable.Variables) ||
+        !Debugger.TryGetVariableChildren(variable.Variables, out var children))
+      yield break;
+    foreach (var child in children)
+      foreach (var visible in Flatten(child, depth + 1, visited))
+        yield return visible;
+  }
+
+  private static string FrameLocation(DebugStackFrame frame) =>
+    frame.SourcePath is not null
+      ? $"{Path.GetFileName(frame.SourcePath)}:{frame.SourceLine}"
+      : frame.Location is { } location
+        ? $"{frame.ModuleName ?? "module"} · IL_{location.ILOffset:X4}"
+        : frame.ModuleName ?? "";
+
+  private static string FrameTitle(DebugStackFrame frame) =>
+    frame.SourcePath is not null
+      ? $"{frame.Name} — {frame.SourcePath}:{frame.SourceLine}"
+      : frame.Name;
+
+  private static string StopReason(DebugStopInfo stop) =>
+    stop.Description ?? stop.Reason switch
+    {
+      DebugStopReason.Breakpoint => "Breakpoint hit",
+      DebugStopReason.Step => "Step complete",
+      DebugStopReason.Pause => "Paused",
+      DebugStopReason.Exception => "Exception",
+      DebugStopReason.Entry => "Stopped at entry",
+      _ => stop.Reason.ToString()
+    };
+
+  private void Refresh() => _ = InvokeAsync(StateHasChanged);
+
+  public async ValueTask DisposeAsync()
+  {
+    Debugger.Changed -= Refresh;
+    try
+    {
+      await JS.InvokeVoidAsync("dnSpyXdx.disposeDebuggerResize", sections);
+    }
+    catch (JSDisconnectedException)
+    {
+      // The WebView can disappear before Blazor tears down the component.
+    }
+  }
+
+  private sealed record VisibleVariable(DebugVariable Variable, int Depth);
+}

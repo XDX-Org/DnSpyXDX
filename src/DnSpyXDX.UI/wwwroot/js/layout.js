@@ -69,16 +69,22 @@ window.dnSpyXdx.initSearchResize = function (panel, dotNet) {
   if (!panel || panel.dataset.resizeReady) return;
   panel.dataset.resizeReady = "true";
   const handle = panel.querySelector(".search-resizer");
+  const limits = () => ({ minimum: 120, maximum: window.innerHeight * 0.65 });
+  const setHeight = height => {
+    const { minimum, maximum } = limits();
+    const next = Math.max(minimum, Math.min(maximum, height));
+    panel.style.height = next + "px";
+    handle.setAttribute("aria-valuenow", Math.round(next).toString());
+    return next;
+  };
   handle.addEventListener("pointerdown", event => {
+    if (event.button !== 0) return;
     event.preventDefault();
     handle.setPointerCapture(event.pointerId);
     document.body.classList.add("resizing-search");
     const startY = event.clientY;
     const startHeight = panel.getBoundingClientRect().height;
-    const move = moveEvent => {
-      const maximum = window.innerHeight * 0.65;
-      panel.style.height = Math.max(120, Math.min(maximum, startHeight + startY - moveEvent.clientY)) + "px";
-    };
+    const move = moveEvent => setHeight(startHeight + startY - moveEvent.clientY);
     const stop = () => {
       document.body.classList.remove("resizing-search");
       if (dotNet) dotNet.invokeMethodAsync("SearchPanelResized", panel.getBoundingClientRect().height);
@@ -90,6 +96,151 @@ window.dnSpyXdx.initSearchResize = function (panel, dotNet) {
     handle.addEventListener("pointerup", stop);
     handle.addEventListener("pointercancel", stop);
   });
+  handle.addEventListener("keydown", event => {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    event.preventDefault();
+    const direction = event.key === "ArrowUp" ? 1 : -1;
+    const height = setHeight(panel.getBoundingClientRect().height + direction * 32);
+    if (dotNet) dotNet.invokeMethodAsync("SearchPanelResized", height);
+  });
+  handle.addEventListener("dblclick", event => {
+    event.preventDefault();
+    const { maximum } = limits();
+    const current = panel.getBoundingClientRect().height;
+    let height;
+    if (current >= maximum - 8) {
+      height = Number.parseFloat(panel.dataset.restoreHeight) || 230;
+    } else {
+      panel.dataset.restoreHeight = current.toString();
+      height = maximum;
+    }
+    height = setHeight(height);
+    if (dotNet) dotNet.invokeMethodAsync("SearchPanelResized", height);
+  });
+};
+window.dnSpyXdx.initDebuggerResize = function (sections) {
+  if (!sections || sections._dnSpyXdxDebuggerResize) return;
+
+  const panes = Array.from(sections.querySelectorAll(":scope > .debugger-section"));
+  const handles = Array.from(sections.querySelectorAll(":scope > .debugger-section-resizer"));
+  const storageKey = "dnspyxdx.debugger-pane-weights";
+  const property = index => `--debugger-pane-${index}-weight`;
+  const minimumWidths = [110, 150, 190, 170, 180];
+
+  const setWeights = weights => {
+    if (!Array.isArray(weights) || weights.length !== panes.length ||
+        weights.some(weight => !Number.isFinite(weight) || weight <= 0)) return false;
+    weights.forEach((weight, index) => sections.style.setProperty(property(index), `${weight}fr`));
+    return true;
+  };
+  const currentWidths = () => panes.map(pane => pane.getBoundingClientRect().width);
+  const save = () => {
+    const widths = currentWidths();
+    const total = widths.reduce((sum, width) => sum + width, 0);
+    if (total <= 0) return;
+    try { localStorage.setItem(storageKey, JSON.stringify(widths.map(width => width / total))); } catch { }
+  };
+  const reset = () => {
+    panes.forEach((_, index) => sections.style.removeProperty(property(index)));
+    handles.forEach(handle => {
+      handle.removeAttribute("aria-valuemin");
+      handle.removeAttribute("aria-valuemax");
+      handle.removeAttribute("aria-valuenow");
+    });
+    try { localStorage.removeItem(storageKey); } catch { }
+  };
+  const beginResize = (handle, startX, pointerId) => {
+    const index = handles.indexOf(handle);
+    if (index < 0) return null;
+
+    const widths = currentWidths();
+    // Lock every current track to a proportional weight before changing the adjacent pair.
+    setWeights(widths);
+    const leftWidth = widths[index];
+    const rightWidth = widths[index + 1];
+    const pairWidth = leftWidth + rightWidth;
+    let latestX = startX;
+    let animationFrame = 0;
+    const apply = () => {
+      animationFrame = 0;
+      const leftMinimum = minimumWidths[index];
+      const rightMinimum = minimumWidths[index + 1];
+      const left = Math.max(
+        leftMinimum,
+        Math.min(pairWidth - rightMinimum, leftWidth + latestX - startX));
+      sections.style.setProperty(property(index), `${left}fr`);
+      sections.style.setProperty(property(index + 1), `${pairWidth - left}fr`);
+      handle.setAttribute("aria-valuemin", leftMinimum.toString());
+      handle.setAttribute("aria-valuemax", Math.round(pairWidth - rightMinimum).toString());
+      handle.setAttribute("aria-valuenow", Math.round(left).toString());
+    };
+    const move = event => {
+      latestX = event.clientX;
+      if (!animationFrame) animationFrame = requestAnimationFrame(apply);
+    };
+    const stop = () => {
+      if (animationFrame) {
+        cancelAnimationFrame(animationFrame);
+        apply();
+      }
+      document.body.classList.remove("resizing-debugger");
+      save();
+      if (pointerId !== null && handle.hasPointerCapture?.(pointerId))
+        handle.releasePointerCapture(pointerId);
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", stop);
+      handle.removeEventListener("pointercancel", stop);
+    };
+    return { move, stop };
+  };
+
+  try {
+    const stored = JSON.parse(localStorage.getItem(storageKey));
+    setWeights(stored);
+  } catch { }
+
+  const listeners = handles.map(handle => {
+    const pointerdown = event => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      handle.setPointerCapture(event.pointerId);
+      document.body.classList.add("resizing-debugger");
+      const drag = beginResize(handle, event.clientX, event.pointerId);
+      if (!drag) return;
+      handle.addEventListener("pointermove", drag.move);
+      handle.addEventListener("pointerup", drag.stop);
+      handle.addEventListener("pointercancel", drag.stop);
+    };
+    const keydown = event => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const drag = beginResize(handle, 0, null);
+      if (!drag) return;
+      drag.move({ clientX: event.key === "ArrowLeft" ? -24 : 24 });
+      drag.stop();
+    };
+    const doubleclick = event => {
+      event.preventDefault();
+      reset();
+    };
+    handle.addEventListener("pointerdown", pointerdown);
+    handle.addEventListener("keydown", keydown);
+    handle.addEventListener("dblclick", doubleclick);
+    return { handle, pointerdown, keydown, doubleclick };
+  });
+
+  sections._dnSpyXdxDebuggerResize = { listeners };
+};
+window.dnSpyXdx.disposeDebuggerResize = function (sections) {
+  const state = sections?._dnSpyXdxDebuggerResize;
+  if (!state) return;
+  for (const listener of state.listeners) {
+    listener.handle.removeEventListener("pointerdown", listener.pointerdown);
+    listener.handle.removeEventListener("keydown", listener.keydown);
+    listener.handle.removeEventListener("dblclick", listener.doubleclick);
+  }
+  document.body.classList.remove("resizing-debugger");
+  delete sections._dnSpyXdxDebuggerResize;
 };
 window.dnSpyXdx.initHistoryButtons = function (dotNet) {
   if (window.dnSpyXdx.historyReady) return;
@@ -121,6 +272,37 @@ window.dnSpyXdx.initPanelHorizontalWheel = function () {
     event.preventDefault();
     panel.scrollLeft += (event.deltaY || event.deltaX) * 0.5;
   }, { passive: false });
+};
+// Ctrl/Cmd+A selects every assembly and Delete unloads the current selection, but only while focus is inside
+// the assembly tree — so these never steal select-all or delete from the source view, search box, or elsewhere.
+window.dnSpyXdx.initExplorerKeys = function (dotNet) {
+  window.dnSpyXdx.explorerKeysTarget = dotNet;
+  if (window.dnSpyXdx.explorerKeysReady) return;
+  window.dnSpyXdx.explorerKeysReady = true;
+  // The tree only takes keyboard focus once a row is clicked, but dnSpy lets Ctrl+A / Delete act on the
+  // assembly list whenever the pointer is over it. Track hover so hovering the tree is enough — every
+  // mouseover recomputes whether the cursor is inside it.
+  window.addEventListener("mouseover", event => { window.dnSpyXdx.explorerHovered = !!event.target?.closest?.(".explorer-tree"); });
+  window.addEventListener("keydown", event => {
+    const target = window.dnSpyXdx.explorerKeysTarget;
+    if (!target) return;
+    const active = document.activeElement;
+    // Never steal these keys while typing in a field (e.g. the search box), even if the cursor is over the tree.
+    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA" || active.isContentEditable)) return;
+    if (!active?.closest?.(".explorer-tree") && !window.dnSpyXdx.explorerHovered) return;
+    if ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "a") {
+      event.preventDefault();
+      event.stopPropagation();
+      // Selecting assemblies must not also select the page text: cancel the browser's select-all and drop any
+      // selection that formed anyway.
+      window.getSelection?.()?.removeAllRanges();
+      target.invokeMethodAsync("SelectAllAssemblies");
+    } else if (event.key === "Delete" && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      target.invokeMethodAsync("UnloadSelectedAssemblies");
+    }
+  });
 };
 window.dnSpyXdx.setSourceScroll = async function (source, top, left) {
   if (!source) return;
@@ -190,23 +372,67 @@ window.dnSpyXdx.initSourceHover = function (viewport) {
   if (!viewport || viewport._dnSpyXdxHover) return;
   let highlighted = [];
   let current = null;
-  const clear = () => {
+  let debugTarget = null;
+  let debugTooltip = null;
+  const clearHighlight = () => {
     for (const element of highlighted) element.classList.remove("code-link-active");
     highlighted = [];
     current = null;
   };
+  const hideDebugTooltip = () => {
+    debugTooltip?.remove();
+    debugTooltip = null;
+    debugTarget = null;
+  };
+  const clear = () => {
+    clearHighlight();
+    hideDebugTooltip();
+  };
   const apply = symbol => {
     if (symbol === current) return;
-    clear();
+    clearHighlight();
     if (!symbol) return;
     current = symbol;
     const selector = "[data-symbol=\"" + (window.CSS && CSS.escape ? CSS.escape(symbol) : symbol) + "\"]";
     highlighted = Array.from(viewport.querySelectorAll(selector));
     for (const element of highlighted) element.classList.add("code-link-active");
   };
+  const showDebugTooltip = element => {
+    if (element === debugTarget) return;
+    hideDebugTooltip();
+    if (!element) return;
+    debugTarget = element;
+    debugTooltip = document.createElement("div");
+    debugTooltip.className = "debug-value-tooltip";
+    debugTooltip.setAttribute("role", "tooltip");
+
+    const name = document.createElement("strong");
+    name.textContent = element.dataset.debugLocal || "";
+    const value = document.createElement("code");
+    value.textContent = element.dataset.debugValue || "";
+    debugTooltip.append(name, value);
+    if (element.dataset.debugType) {
+      const type = document.createElement("small");
+      type.textContent = element.dataset.debugType;
+      debugTooltip.append(type);
+    }
+    document.body.append(debugTooltip);
+
+    const target = element.getBoundingClientRect();
+    const tooltip = debugTooltip.getBoundingClientRect();
+    const left = Math.max(8, Math.min(window.innerWidth - tooltip.width - 8, target.left));
+    const below = target.bottom + 7;
+    const top = below + tooltip.height <= window.innerHeight - 8
+      ? below
+      : Math.max(8, target.top - tooltip.height - 7);
+    debugTooltip.style.left = left + "px";
+    debugTooltip.style.top = top + "px";
+  };
   const over = event => {
     const element = event.target?.closest?.("[data-symbol]");
     apply(element && viewport.contains(element) ? element.getAttribute("data-symbol") : null);
+    const debugElement = event.target?.closest?.("[data-debug-local]");
+    showDebugTooltip(debugElement && viewport.contains(debugElement) ? debugElement : null);
   };
   viewport.addEventListener("mouseover", over, { passive: true });
   viewport.addEventListener("mouseleave", clear, { passive: true });
@@ -257,6 +483,61 @@ window.dnSpyXdx.scrollHexToRow = function (viewport, row, totalRows, rowHeight) 
   const maximumRow = Math.max(0, totalRows - visibleRows);
   const ratio = Math.min(Math.max(row, 0), maximumRow) / Math.max(1, maximumRow);
   viewport.scrollTop = ratio * Math.max(0, viewport.scrollHeight - viewport.clientHeight);
+};
+// Driven by the native drag-drop handler (which took over WebView2's drop target, so the page no longer sees
+// HTML drag events). Native fires this repeatedly with `on=true` while a file hovers; the timeout hides the
+// overlay shortly after the hover stops, and `on=false` (a drop, or leaving) clears it at once.
+window.dnSpyXdx.setDropOverlay = function (on) {
+  const body = document.body;
+  clearTimeout(window.dnSpyXdx.dropOverlayTimer);
+  if (on) {
+    body.classList.add("app-drag-over");
+    window.dnSpyXdx.dropOverlayTimer = setTimeout(() => body.classList.remove("app-drag-over"), 400);
+  } else {
+    body.classList.remove("app-drag-over");
+  }
+};
+window.dnSpyXdx.initFileDrop = function (dotNet) {
+  if (window.dnSpyXdx.fileDropReady) return;
+  window.dnSpyXdx.fileDropReady = true;
+  const assembly = /\.(dll|exe|winmd)$/i;
+  let depth = 0;
+  const hasFiles = event => Array.from(event.dataTransfer?.types || []).includes("Files");
+  const setOverlay = on => document.body.classList.toggle("app-drag-over", on);
+  window.addEventListener("dragenter", event => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    depth++;
+    setOverlay(true);
+  });
+  window.addEventListener("dragover", event => {
+    if (!hasFiles(event)) return;
+    // Stops the webview from navigating to the dropped file and allows the drop to land here instead.
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  });
+  window.addEventListener("dragleave", event => {
+    if (!hasFiles(event)) return;
+    depth = Math.max(0, depth - 1);
+    if (depth === 0) setOverlay(false);
+  });
+  window.addEventListener("drop", async event => {
+    if (!hasFiles(event)) return;
+    event.preventDefault();
+    depth = 0;
+    setOverlay(false);
+    const files = Array.from(event.dataTransfer.files).filter(file => assembly.test(file.name));
+    if (files.length === 0) return;
+    // Stage every dropped file into one folder first so sibling references resolve, then open them.
+    const batch = (crypto.randomUUID && crypto.randomUUID()) || String(Date.now());
+    const names = [];
+    for (const file of files) {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      await dotNet.invokeMethodAsync("StageDroppedAssembly", batch, file.name, bytes);
+      names.push(file.name);
+    }
+    await dotNet.invokeMethodAsync("OpenDroppedAssemblies", batch, names);
+  });
 };
 window.dnSpyXdx.copyText = async function (text) {
   await navigator.clipboard.writeText(text);

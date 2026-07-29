@@ -6,11 +6,11 @@ namespace DnSpyXDX.Host;
 
 public sealed class PhotinoFileDialogService(PhotinoExWindow window) : IFileDialogService
 {
-    public async Task<string?> OpenAssemblyAsync()
+    public async Task<string?> OpenAssemblyAsync(string? initialDirectory = null)
     {
         var files = await window.ShowOpenFileDialogAsync(
             "Open .NET assembly",
-            string.Empty,
+            defaultPath: string.IsNullOrEmpty(initialDirectory) || !Directory.Exists(initialDirectory) ? null : initialDirectory,
             multiSelect: false,
             filterPatterns: [new FileFilter(".NET assemblies (*.dll;*.exe)", "*.dll;*.exe")]
         );

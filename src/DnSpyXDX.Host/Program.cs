@@ -1,5 +1,6 @@
 using DnSpyXDX.Application;
 using DnSpyXDX.Decompilation;
+using DnSpyXDX.Debugging;
 using DnSpyXDX.Export;
 using DnSpyXDX.Host.Mcp;
 using DnSpyXDX.UI;
@@ -32,7 +33,25 @@ internal static class Program
         // A disk-backed decompile cache so restoring a session (or reopening a type) loads its source without
         // re-running ILSpy. Injected into DecompilerBackend's two-argument constructor.
         builder.Services.AddSingleton(PersistentDecompileCache.Default());
-        builder.Services.AddSingleton<IDecompilerBackend, DecompilerBackend>();
+        // dnSpy loads referenced assemblies on demand and surfaces them in the Assembly Explorer; enabling this
+        // makes DnSpyXDX promote app-local neighbors to their own sessions as the decompiler resolves them, so
+        // cross-assembly analysis and navigation see the whole application.
+        builder.Services.AddSingleton(new NeighborLoadingSettings { AutoLoadReferencedAssemblies = true });
+        // Explicit factory so the three-argument constructor (and therefore auto-load) is used regardless of
+        // how the container ranks constructors.
+        builder.Services.AddSingleton<IDecompilerBackend>(services => new DecompilerBackend(
+            services.GetRequiredService<RuntimeDisplaySettings>(),
+            services.GetRequiredService<PersistentDecompileCache>(),
+            services.GetRequiredService<NeighborLoadingSettings>()));
+        builder.Services.AddSingleton(new CoreClrDebuggerOptions());
+        builder.Services.AddSingleton<IDebuggerEngineProvider, NetCoreDbgEngineProvider>();
+        builder.Services.AddSingleton(new MonoSoftDebuggerOptions());
+        builder.Services.AddSingleton<IDebuggerEngineProvider, MonoSoftDebuggerEngineProvider>();
+        builder.Services.AddSingleton<IDebuggerEngineRegistry>(services =>
+            new DebuggerEngineRegistry(
+                services.GetServices<IDebuggerEngineProvider>()));
+        builder.Services.AddSingleton<IDebuggerService, DebuggerService>();
+        builder.Services.AddSingleton<DebuggerWorkspace>();
         builder.Services.AddSingleton<IProjectExportService, ProjectExportService>();
         builder.Services.AddSingleton<WorkspaceState>();
         builder.Services.AddSingleton<SourceViewStateStore>();
@@ -74,6 +93,24 @@ internal static class Program
         fileDropService.Attach(app.MainWindow);
         applicationLifetime.Attach(app.MainWindow);
         WindowStateManager.Attach(app.MainWindow);
+        // The WebView hides real paths from HTML drag-drop, so a dropped assembly is staged to a temp folder
+        // and its siblings can't resolve. This native OLE drop target reads the real CF_HDROP paths and opens
+        // from the original folder, so siblings resolve like they do in dnSpy. Windows only.
+        if (OperatingSystem.IsWindows())
+        {
+            var assemblies = app.Services.GetRequiredService<WorkspaceAssemblyService>();
+            var workspace = app.Services.GetRequiredService<WorkspaceState>();
+            var dropLogger = app.Services.GetRequiredService<ILoggerFactory>().CreateLogger("DnSpyXDX.FileDrop");
+            WindowsFileDrop.Attach(app.MainWindow, files =>
+            {
+                foreach (var path in files)
+                {
+                    var extension = Path.GetExtension(path);
+                    if (!extension.Equals(".dll", StringComparison.OrdinalIgnoreCase) && !extension.Equals(".exe", StringComparison.OrdinalIgnoreCase)) continue;
+                    _ = assemblies.OpenAsync(path, "drag and drop");
+                }
+            }, active => workspace.SetDragActive(active), dropLogger);
+        }
         app.Run();
     }
 }

@@ -42,11 +42,13 @@ public sealed class ProjectExportServiceTests
     private sealed class ExportBackendStub(AssemblyDescriptor descriptor) : IDecompilerBackend
     {
         public IReadOnlyList<AssemblyDescriptor> Assemblies => [descriptor];
+        public event Action? AssembliesChanged { add { } remove { } }
         public bool TryGetAssembly(Guid sessionId, out AssemblyDescriptor? assembly) { assembly = sessionId == descriptor.SessionId ? descriptor : null; return assembly is not null; }
         public Task<AssemblyDescriptor> OpenAsync(string path, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<AssemblyDescriptor> OpenReferenceAsync(NodeId reference, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<AssemblyDescriptor> OpenAssemblyForSymbolAsync(SymbolId symbol, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task CloseAsync(Guid sessionId) => Task.CompletedTask;
+        public Task CloseAllAsync() => Task.CompletedTask;
         public Task<IReadOnlyList<TreeNodeDescriptor>> GetChildrenAsync(NodeId parent, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<ResourceDocument> GetResourceAsync(NodeId resource, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<DecompilerDocument> DecompileAsync(SymbolId symbol, DecompilerLanguage language, CancellationToken cancellationToken = default) => throw new NotSupportedException();

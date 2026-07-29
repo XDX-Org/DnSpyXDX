@@ -22,7 +22,7 @@ internal static class SemanticHighlighter
     public static (string Text, IReadOnlyList<ClassifiedSpan> Spans, IReadOnlyList<ReferenceSpan> References) Highlight(SyntaxTree tree, CSharpFormattingOptions formatting)
     {
         var buffer = new StringWriter { NewLine = "\n" };
-        var inner = new TextWriterTokenWriter(buffer) { IndentationString = "\t" };
+        var inner = TokenWriter.CreateWriterThatSetsLocationsInAST(buffer, "\t");
         var writer = new HighlightingTokenWriter(inner, buffer.GetStringBuilder());
         tree.AcceptVisitor(new CSharpOutputVisitor(writer, formatting));
         return (buffer.ToString(), writer.Spans, writer.References);
@@ -31,7 +31,7 @@ internal static class SemanticHighlighter
     private static readonly HashSet<string> ControlKeywords =
         ["break", "case", "catch", "continue", "do", "else", "finally", "for", "foreach", "goto", "if", "in", "lock", "return", "switch", "throw", "try", "when", "while", "yield"];
 
-    private sealed class HighlightingTokenWriter(TextWriterTokenWriter inner, StringBuilder buffer) : DecoratingTokenWriter(inner)
+    private sealed class HighlightingTokenWriter(TokenWriter inner, StringBuilder buffer) : DecoratingTokenWriter(inner)
     {
         private readonly List<ClassifiedSpan> spans = [];
         private readonly List<ReferenceSpan> references = [];

@@ -10,6 +10,7 @@
   <ItemGroup>
     <ProjectReference Include="../DnSpyXDX.Application/DnSpyXDX.Application.csproj" />
     <ProjectReference Include="../DnSpyXDX.Decompilation/DnSpyXDX.Decompilation.csproj" />
+    <ProjectReference Include="../DnSpyXDX.Debugging/DnSpyXDX.Debugging.csproj" />
     <ProjectReference Include="../DnSpyXDX.Export/DnSpyXDX.Export.csproj" />
     <ProjectReference Include="../DnSpyXDX.UI/DnSpyXDX.UI.csproj" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" />
@@ -22,5 +23,12 @@
       CopyToOutputDirectory="PreserveNewest"
       CopyToPublishDirectory="PreserveNewest"
     />
+    <Content
+      Include="../../licenses/Mono-Debugger-Libs-LICENSE.txt"
+      Link="licenses/Mono-Debugger-Libs-LICENSE.txt"
+      CopyToOutputDirectory="PreserveNewest"
+      CopyToPublishDirectory="PreserveNewest"
+    />
   </ItemGroup>
+  <Import Project="../../eng/NetCoreDbg.targets" />
 </Project>
