@@ -85,6 +85,7 @@ public sealed class McpServerService(
                 var sessionId = context.Request.Headers["Mcp-Session-Id"].ToString();
                 var clientName = request?.ClientName ?? (sessionId.Length > 0 && clients.TryGetValue(sessionId, out var knownClient) ? knownClient : null);
                 using var clientScope = activity.UseClient(clientName);
+                using var sessionScope = activity.UseClientSession(sessionId);
                 var track = request is not null;
                 var started = DateTimeOffset.UtcNow;
                 if (track) activity.Begin(request!.Operation, request.Target, clientName);

@@ -13,12 +13,16 @@ Implemented on the `debug` branch:
 - local name origin, IL slot and lifetime metadata, plus shared decompiler-name projection;
 - Unity multicast endpoint discovery, version profiles, remote confirmation, and IL2CPP rejection;
 - MCP launch, attach, breakpoint, wait, status, thread, stack, scope, variable, evaluation,
-  execution-control, and stop tools with path/endpoint limits and session leases;
+  execution-control, and stop tools with path/endpoint limits, per-connection ownership, and
+  session leases;
 - opt-in metadata-only worker traces that omit message bodies and debugger values.
 
 Live Unity attachment and assembly-reload verification remain in the opt-in live matrix because
 they require a Unity Editor/development-player fixture. Deterministic tests cover discovery packet
 parsing, compatibility selection, explicit endpoint translation, and IL2CPP rejection.
+
+The deterministic suite includes an HTTP MCP client driving a detached CoreCLR worker through
+launch, ownership rejection, IL breakpoint binding, pause, stack, local variables, and stop.
 
 ## Goal
 

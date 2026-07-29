@@ -63,6 +63,7 @@ public sealed class McpActivityLog(int capacity = 500)
     private readonly List<McpActivityEntry> entries = [];
     private readonly AsyncLocal<Stack<Guid>?> current = new();
     private readonly AsyncLocal<string?> currentClient = new();
+    private readonly AsyncLocal<string?> currentClientSession = new();
     private int requestCount;
     private int activeCalls;
 
@@ -71,6 +72,7 @@ public sealed class McpActivityLog(int capacity = 500)
     public IReadOnlyList<McpActivityEntry> Entries { get { lock (gate) return entries.ToArray(); } }
     public int RequestCount => Volatile.Read(ref requestCount);
     public int ActiveCalls => Volatile.Read(ref activeCalls);
+    public string? CurrentClientSession => currentClientSession.Value;
 
     public void Begin(string operation, string? target = null, string? clientName = null, bool countRequest = true)
     {
@@ -115,6 +117,13 @@ public sealed class McpActivityLog(int capacity = 500)
         var previous = currentClient.Value;
         currentClient.Value = clientName;
         return new ClientScope(() => currentClient.Value = previous);
+    }
+
+    public IDisposable UseClientSession(string? sessionId)
+    {
+        var previous = currentClientSession.Value;
+        currentClientSession.Value = sessionId;
+        return new ClientScope(() => currentClientSession.Value = previous);
     }
 
     private void Trim()

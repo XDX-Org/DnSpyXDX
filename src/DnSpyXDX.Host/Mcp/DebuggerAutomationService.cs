@@ -17,6 +17,7 @@ public sealed class DebuggerAutomationService : IDisposable
     private TaskCompletionSource changed = NewSignal();
     private DateTimeOffset lastAccess;
     private DebugSessionStatus lastStatus;
+    private DebugStopInfo? lastStop;
     private int waiting;
     private bool disposed;
 
@@ -160,12 +161,12 @@ public sealed class DebuggerAutomationService : IDisposable
         {
             while (true)
             {
+                Task signal;
+                lock (gate) signal = changed.Task;
                 var status = Status(requestedSession);
                 if (status.Status is DebugSessionStatus.Paused or
                     DebugSessionStatus.Terminated or DebugSessionStatus.Faulted)
                     return status;
-                Task signal;
-                lock (gate) signal = changed.Task;
                 try
                 {
                     await signal.WaitAsync(timeout.Token);
@@ -331,11 +332,14 @@ public sealed class DebuggerAutomationService : IDisposable
         lock (gate)
         {
             if (sessionId == Guid.Empty) return;
-            if (snapshot.Status is DebugSessionStatus.Paused or
-                DebugSessionStatus.Terminated or DebugSessionStatus.Faulted ||
-                lastStatus == DebugSessionStatus.Paused)
+            if ((snapshot.Status == DebugSessionStatus.Paused &&
+                    (lastStatus != DebugSessionStatus.Paused || snapshot.Stop != lastStop)) ||
+                snapshot.Status is DebugSessionStatus.Terminated or DebugSessionStatus.Faulted ||
+                (lastStatus == DebugSessionStatus.Paused &&
+                    snapshot.Status != DebugSessionStatus.Paused))
                 stopGeneration++;
             lastStatus = snapshot.Status;
+            lastStop = snapshot.Stop;
             if (snapshot.Status is DebugSessionStatus.Terminated or DebugSessionStatus.Faulted)
                 releaseControl = true;
             signal = changed;

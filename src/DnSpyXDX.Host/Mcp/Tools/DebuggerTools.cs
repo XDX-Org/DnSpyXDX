@@ -2,7 +2,8 @@ using System.ComponentModel;
 using System.Net;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
-using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
+using System.Text;
 using DnSpyXDX.Application;
 using ModelContextProtocol.Server;
 
@@ -15,8 +16,6 @@ public sealed class DebuggerTools(
     McpServerSettings settings,
     McpActivityLog activity)
 {
-    private static readonly ConditionalWeakTable<McpServer, OwnerIdentity> Owners = new();
-
     [McpServerTool(Name = "debug_launch", Destructive = true, UseStructuredContent = true)]
     [Description("Launches an allowed managed DLL or executable in a detached CoreCLR debugger worker.")]
     public Task<McpDebugStatus> LaunchAsync(
@@ -73,7 +72,7 @@ public sealed class DebuggerTools(
 
     [McpServerTool(Name = "debug_set_breakpoints", Destructive = true, Idempotent = true, UseStructuredContent = true)]
     [Description("Replaces all breakpoints for the active debugger session using exact MVID, MethodDef token and IL offset identities.")]
-    public Task<IReadOnlyList<DebugBreakpointBinding>> SetBreakpointsAsync(
+    public Task<McpDebugBreakpoints> SetBreakpointsAsync(
         Guid sessionId,
         IReadOnlyList<McpDebugBreakpoint> breakpoints,
         McpServer server,
@@ -81,10 +80,10 @@ public sealed class DebuggerTools(
         RunAsync(
             "debug_set_breakpoints",
             sessionId.ToString("D"),
-            async token => await debugger.SetBreakpointsAsync(
+            async token => new McpDebugBreakpoints(await debugger.SetBreakpointsAsync(
                 sessionId,
                 await ResolveBreakpointsAsync(breakpoints, token),
-                token),
+                token)),
             server,
             cancellationToken);
 
@@ -110,43 +109,45 @@ public sealed class DebuggerTools(
     }
 
     [McpServerTool(Name = "debug_get_threads", ReadOnly = true, UseStructuredContent = true)]
-    public Task<IReadOnlyList<DebugThread>> ThreadsAsync(
+    public Task<McpDebugThreads> ThreadsAsync(
         Guid sessionId,
         McpServer server,
         CancellationToken cancellationToken = default) =>
         RunAsync("debug_get_threads", sessionId.ToString("D"),
-            token => debugger.ThreadsAsync(sessionId, token), server, cancellationToken);
+            async token => new McpDebugThreads(await debugger.ThreadsAsync(sessionId, token)),
+            server,
+            cancellationToken);
 
     [McpServerTool(Name = "debug_get_stack", ReadOnly = true, UseStructuredContent = true)]
-    public Task<IReadOnlyList<DebugStackFrame>> StackAsync(
+    public Task<McpDebugFrames> StackAsync(
         Guid sessionId,
         long stopGeneration,
         long threadId,
         McpServer server,
         CancellationToken cancellationToken = default) =>
         RunAsync("debug_get_stack", sessionId.ToString("D"),
-            token => debugger.StackAsync(
+            async token => new McpDebugFrames(await debugger.StackAsync(
                 sessionId,
                 stopGeneration,
                 new(threadId),
-                token), server, cancellationToken);
+                token)), server, cancellationToken);
 
     [McpServerTool(Name = "debug_get_scopes", ReadOnly = true, UseStructuredContent = true)]
-    public Task<IReadOnlyList<DebugScope>> ScopesAsync(
+    public Task<McpDebugScopes> ScopesAsync(
         Guid sessionId,
         long stopGeneration,
         long frameId,
         McpServer server,
         CancellationToken cancellationToken = default) =>
         RunAsync("debug_get_scopes", sessionId.ToString("D"),
-            token => debugger.ScopesAsync(
+            async token => new McpDebugScopes(await debugger.ScopesAsync(
                 sessionId,
                 stopGeneration,
                 new(frameId),
-                token), server, cancellationToken);
+                token)), server, cancellationToken);
 
     [McpServerTool(Name = "debug_get_variables", ReadOnly = true, UseStructuredContent = true)]
-    public Task<IReadOnlyList<McpDebugScopeVariables>> VariablesAsync(
+    public Task<McpDebugVariables> VariablesAsync(
         Guid sessionId,
         long stopGeneration,
         long frameId,
@@ -155,13 +156,13 @@ public sealed class DebuggerTools(
         int maximumDepth = 1,
         CancellationToken cancellationToken = default) =>
         RunAsync("debug_get_variables", sessionId.ToString("D"),
-            token => debugger.VariablesAsync(
+            async token => new McpDebugVariables(await debugger.VariablesAsync(
                 sessionId,
                 stopGeneration,
                 new(frameId),
                 maximumVariables,
                 maximumDepth,
-                token),
+                token)),
             server,
             cancellationToken);
 
@@ -259,10 +260,16 @@ public sealed class DebuggerTools(
         }
     }
 
-    private static Guid Owner(McpServer server) =>
-        Owners.GetValue(server, _ => new(Guid.NewGuid())).Id;
-
-    private sealed record OwnerIdentity(Guid Id);
+    private Guid Owner(McpServer server)
+    {
+        _ = server;
+        var session = activity.CurrentClientSession;
+        if (string.IsNullOrWhiteSpace(session))
+            throw new UnauthorizedAccessException("MCP session identity is unavailable.");
+        Span<byte> hash = stackalloc byte[32];
+        SHA256.HashData(Encoding.UTF8.GetBytes(session), hash);
+        return new Guid(hash[..16]);
+    }
 
     private async Task<IReadOnlyList<DebugBreakpoint>> ResolveBreakpointsAsync(
         IReadOnlyList<McpDebugBreakpoint> requested,
@@ -339,6 +346,14 @@ public sealed class DebuggerTools(
                 ? StringComparison.OrdinalIgnoreCase
                 : StringComparison.Ordinal);
 }
+
+public sealed record McpDebugBreakpoints(
+    IReadOnlyList<DebugBreakpointBinding> Breakpoints);
+public sealed record McpDebugThreads(IReadOnlyList<DebugThread> Threads);
+public sealed record McpDebugFrames(IReadOnlyList<DebugStackFrame> Frames);
+public sealed record McpDebugScopes(IReadOnlyList<DebugScope> Scopes);
+public sealed record McpDebugVariables(
+    IReadOnlyList<McpDebugScopeVariables> Scopes);
 
 public sealed record McpDebugBreakpoint(
     Guid Id,

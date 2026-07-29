@@ -231,6 +231,10 @@ Paused handles require the current stop generation and become stale on resume. O
 allowed per session, abandoned sessions expire by lease, and the UI displays MCP ownership while
 disabling competing execution commands.
 
+An end-to-end test uses the real HTTP MCP transport, server, automation service, detached worker,
+and fake DAP adapter to verify launch, ownership isolation, IL breakpoints, stop waiting, stack,
+local variables, and shutdown.
+
 Set `DNSPYXDX_DEBUG_TRACE_DIRECTORY` to an absolute directory to write one sanitized JSONL trace
 per session. Traces retain message/session/generation/sequence, lifecycle event, breakpoint
 revision/UUID and structured error code metadata while omitting message bodies, expressions,
@@ -290,5 +294,5 @@ The main coverage is in:
 `tests/DnSpyXDX.Debugger.TestWorker` is a controllable DAP child process used for protocol and
 worker integration tests. Live NetCoreDbg tests use `DNSPYXDX_NETCOREDBG_PATH` when configured.
 
-The missing regression test most relevant to the current fault is a stale `xdx/ilBreakpoint`
-event delivered after the complete breakpoint set has been replaced.
+The stale `xdx/ilBreakpoint` regression is covered by delivering a delayed event after the complete
+breakpoint set has been replaced.
