@@ -1,7 +1,7 @@
 # Debugger current implementation
 
 Reviewed on 2026-07-29 from the `debug` branch. This describes the code as it exists, including
-the local NetCoreDbg integration and current defects. It is not a proposed architecture.
+the pinned NetCoreDbg integration and current defects. It is not a proposed architecture.
 
 ## Runtime identity
 
@@ -35,7 +35,7 @@ NetCoreDbgEngine              MonoSoftDebuggerEngine
         |                           |
 DebuggerWorker + DapConnection     Mono.Debugger.Soft
         |
-local netcoredbg process
+pinned netcoredbg process
 ```
 
 ### Application contract
@@ -90,17 +90,15 @@ The provider is unavailable if no candidate exists.
 
 ### Build integration
 
-`eng/NetCoreDbg.targets` currently defaults `UseLocalNetCoreDbg` to `true`. Its default local input
-is the sibling repository directory `../../netcoredbg/bin/`. Build and publish validate the local
-executable and copy that directory to:
+`eng/NetCoreDbg.targets` downloads the pinned XDX-Org NetCoreDbg release, verifies its SHA-256,
+extracts it under `obj`, and copies it to:
 
 ```text
 <output>/debuggers/netcoredbg/<rid>/
 ```
 
-Set `-p:UseLocalNetCoreDbg=false` to use the pinned release download instead. The release path
-downloads an archive, verifies its SHA-256, extracts it under `obj`, and copies it to the same
-runtime location.
+Set `-p:BundleNetCoreDbg=false` only when an external packager intentionally supplies the adapter.
+There is no sibling-repository or arbitrary local-build input.
 
 ### Worker and transport
 

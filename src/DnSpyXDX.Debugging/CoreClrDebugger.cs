@@ -623,7 +623,7 @@ internal sealed class NetCoreDbgEngine(
                 nameof(request));
         if (attach.Host is not null || attach.Port is not null)
             throw new NotSupportedException(
-                "CoreCLR remote attach is not supported by the local NetCoreDbg provider.");
+                "CoreCLR remote attach is not supported by the NetCoreDbg provider.");
         if (attach.ProcessId is not > 0)
             throw new ArgumentException(
                 "CoreCLR attach requires a positive process ID.",

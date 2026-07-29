@@ -1,8 +1,6 @@
 <Project>
   <PropertyGroup>
     <BundleNetCoreDbg Condition="'$(BundleNetCoreDbg)' == ''">true</BundleNetCoreDbg>
-    <UseLocalNetCoreDbg Condition="'$(UseLocalNetCoreDbg)' == ''">true</UseLocalNetCoreDbg>
-    <NetCoreDbgLocalDir Condition="'$(NetCoreDbgLocalDir)' == ''">$(MSBuildThisFileDirectory)../../netcoredbg/bin/</NetCoreDbgLocalDir>
     <NetCoreDbgRepository Condition="'$(NetCoreDbgRepository)' == ''">XDX-Org/netcoredbg</NetCoreDbgRepository>
     <NetCoreDbgVersion Condition="'$(NetCoreDbgVersion)' == ''">xdx-3.2.0-1092.2</NetCoreDbgVersion>
     <NetCoreDbgCommit Condition="'$(NetCoreDbgCommit)' == ''">7be52ab5cf348c75ad028e3578d2fb0b96df748d</NetCoreDbgCommit>
@@ -24,7 +22,7 @@
   </PropertyGroup>
 
   <Target Name="AcquireNetCoreDbg"
-          Condition="'$(BundleNetCoreDbg)' == 'true' and '$(UseLocalNetCoreDbg)' != 'true'"
+          Condition="'$(BundleNetCoreDbg)' == 'true'"
           BeforeTargets="Build;Publish">
     <Error Condition="'$(_NetCoreDbgPlatform)' == ''"
            Text="Bundled NetCoreDbg supports win-x64 and linux-x64. Set BundleNetCoreDbg=false for unsupported RID '$(_NetCoreDbgRid)'." />
@@ -53,24 +51,12 @@
            Text="NetCoreDbg archive did not contain expected executable '$(_NetCoreDbgExecutable)'." />
   </Target>
 
-  <Target Name="ValidateLocalNetCoreDbg"
-          Condition="'$(BundleNetCoreDbg)' == 'true' and '$(UseLocalNetCoreDbg)' == 'true'"
-          BeforeTargets="Build;Publish">
-    <PropertyGroup>
-      <_LocalNetCoreDbgExecutable Condition="'$(_NetCoreDbgRid)' == 'win-x64'">$(NetCoreDbgLocalDir)netcoredbg.exe</_LocalNetCoreDbgExecutable>
-      <_LocalNetCoreDbgExecutable Condition="'$(_NetCoreDbgRid)' == 'linux-x64'">$(NetCoreDbgLocalDir)netcoredbg</_LocalNetCoreDbgExecutable>
-    </PropertyGroup>
-    <Error Condition="!Exists('$(_LocalNetCoreDbgExecutable)')"
-           Text="Local NetCoreDbg was not found at '$(_LocalNetCoreDbgExecutable)'. Build the sibling netcoredbg repository first or set UseLocalNetCoreDbg=false." />
-  </Target>
-
   <Target Name="CopyNetCoreDbgToOutput"
           Condition="'$(BundleNetCoreDbg)' == 'true'"
-          DependsOnTargets="AcquireNetCoreDbg;ValidateLocalNetCoreDbg"
+          DependsOnTargets="AcquireNetCoreDbg"
           AfterTargets="Build">
     <ItemGroup>
-      <_NetCoreDbgFiles Condition="'$(UseLocalNetCoreDbg)' == 'true'" Include="$(NetCoreDbgLocalDir)**/*" />
-      <_NetCoreDbgFiles Condition="'$(UseLocalNetCoreDbg)' != 'true'" Include="$(_NetCoreDbgExtractDir)netcoredbg/**/*" />
+      <_NetCoreDbgFiles Include="$(_NetCoreDbgExtractDir)netcoredbg/**/*" />
     </ItemGroup>
     <Copy SourceFiles="@(_NetCoreDbgFiles)"
           DestinationFiles="@(_NetCoreDbgFiles->'$(OutDir)debuggers/netcoredbg/$(_NetCoreDbgRid)/%(RecursiveDir)%(Filename)%(Extension)')"
@@ -82,11 +68,10 @@
 
   <Target Name="CopyNetCoreDbgToPublish"
           Condition="'$(BundleNetCoreDbg)' == 'true'"
-          DependsOnTargets="AcquireNetCoreDbg;ValidateLocalNetCoreDbg"
+          DependsOnTargets="AcquireNetCoreDbg"
           AfterTargets="Publish">
     <ItemGroup>
-      <_NetCoreDbgPublishFiles Condition="'$(UseLocalNetCoreDbg)' == 'true'" Include="$(NetCoreDbgLocalDir)**/*" />
-      <_NetCoreDbgPublishFiles Condition="'$(UseLocalNetCoreDbg)' != 'true'" Include="$(_NetCoreDbgExtractDir)netcoredbg/**/*" />
+      <_NetCoreDbgPublishFiles Include="$(_NetCoreDbgExtractDir)netcoredbg/**/*" />
     </ItemGroup>
     <Copy SourceFiles="@(_NetCoreDbgPublishFiles)"
           DestinationFiles="@(_NetCoreDbgPublishFiles->'$(PublishDir)debuggers/netcoredbg/$(_NetCoreDbgRid)/%(RecursiveDir)%(Filename)%(Extension)')"

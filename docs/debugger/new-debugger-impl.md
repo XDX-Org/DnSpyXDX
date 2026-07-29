@@ -170,7 +170,7 @@ Exit criteria:
    DnSpyXDX worker messages.
 6. Replace the current NetCoreDbg UUID-only breakpoint extension with revision-aware messages, or
    have the worker enforce revisions around the existing extension.
-7. Keep local and pinned NetCoreDbg packaging, but package it with the CoreCLR worker payload.
+7. Keep pinned XDX-Org NetCoreDbg packaging, but package it with the CoreCLR worker payload.
 8. Remove direct NetCoreDbg and DAP references from the host after parity tests pass.
 
 Exit criteria:
@@ -383,7 +383,7 @@ Minimum automated coverage:
 | Lifecycle | launch, attach, detach, terminate, repeated sessions |
 | Breakpoints | pending, bind, remove, disable, stale revision, reload, moved offset |
 | Paused data | threads, frames, scopes, nested variables, invalidated handles |
-| CoreCLR | symbol-less assembly, optimized code, local NetCoreDbg fork |
+| CoreCLR | symbol-less assembly, optimized code, pinned XDX-Org NetCoreDbg fork |
 | Mono | direct attach, assembly load/unload, protocol disconnect |
 | Unity Mono | discovery, version profiles, domain/assembly reload, IL2CPP rejection |
 | Local names | runtime/PDB/decompiler precedence, reused slots, UI/MCP parity |
