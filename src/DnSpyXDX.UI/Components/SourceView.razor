@@ -31,14 +31,14 @@ else
       {
         @foreach (var line in wrappedLines)
         {
-          <SourceLineView @key="line.Number" Line="line" LineHeight="LineHeight" WrapLines="true" Matches="FindSpans(line.Number)" ActiveMatchOffset="ActiveMatchOffset" FocusedLine="focusedLine" OnNavigate="NavigateAsync" OnNavigateOffset="NavigateOffsetAsync" OnAnalyze="OnAnalyze" DebugPoint="DebugPoint(line.Number)" Breakpoint="Breakpoint(line.Number)" Binding="BreakpointBinding(line.Number)" IsCurrentStatement="IsCurrentStatement(line.Number)" OnToggleBreakpoint="ToggleBreakpointAsync" />
+          <SourceLineView @key="line.Number" Line="line" LineHeight="LineHeight" WrapLines="true" Matches="FindSpans(line.Number)" ActiveMatchOffset="ActiveMatchOffset" FocusedLine="focusedLine" OnNavigate="NavigateAsync" OnNavigateOffset="NavigateOffsetAsync" OnAnalyze="OnAnalyze" DebugVariables="debugVariables" DebugPoint="DebugPoint(line.Number)" Breakpoint="Breakpoint(line.Number)" Binding="BreakpointBinding(line.Number)" IsCurrentStatement="IsCurrentStatement(line.Number)" OnToggleBreakpoint="ToggleBreakpointAsync" />
         }
       }
       else
       {
         <Virtualize @key="model.Key" @ref="virtualizer" ItemsProvider="LoadLinesAsync" ItemSize="LineHeight" OverscanCount="Overscan">
           <ItemContent Context="line">
-            <SourceLineView @key="line.Number" Line="line" LineHeight="LineHeight" Matches="FindSpans(line.Number)" ActiveMatchOffset="ActiveMatchOffset" FocusedLine="focusedLine" OnNavigate="NavigateAsync" OnNavigateOffset="NavigateOffsetAsync" OnAnalyze="OnAnalyze" DebugPoint="DebugPoint(line.Number)" Breakpoint="Breakpoint(line.Number)" Binding="BreakpointBinding(line.Number)" IsCurrentStatement="IsCurrentStatement(line.Number)" OnToggleBreakpoint="ToggleBreakpointAsync" />
+            <SourceLineView @key="line.Number" Line="line" LineHeight="LineHeight" Matches="FindSpans(line.Number)" ActiveMatchOffset="ActiveMatchOffset" FocusedLine="focusedLine" OnNavigate="NavigateAsync" OnNavigateOffset="NavigateOffsetAsync" OnAnalyze="OnAnalyze" DebugVariables="debugVariables" DebugPoint="DebugPoint(line.Number)" Breakpoint="Breakpoint(line.Number)" Binding="BreakpointBinding(line.Number)" IsCurrentStatement="IsCurrentStatement(line.Number)" OnToggleBreakpoint="ToggleBreakpointAsync" />
           </ItemContent>
           <Placeholder Context="placeholder">
             <div class="source-line source-line-placeholder" style="height:@(LineHeight)px" aria-hidden="true">
@@ -89,6 +89,8 @@ else
   private bool modelWrapLines;
   private IReadOnlyList<SourceTokenizedLine> wrappedLines = [];
   private int? currentStatementLine;
+  private IReadOnlyDictionary<string, DebugVariable> debugVariables =
+    new Dictionary<string, DebugVariable>();
 
   private string CanvasWidth => $"max(100%, calc(74px + {Math.Min(model?.MaximumVisualColumns ?? 0, MaximumCanvasColumns)}ch))";
   private int ActiveMatchOffset => matchIndex >= 0 && matchIndex < matches.Count ? matches[matchIndex] : -1;
@@ -139,6 +141,7 @@ else
         Document.DebugMap,
         prepared,
         Debugger.CurrentLocation);
+      UpdateDebugVariables();
       revealCurrentStatement = currentStatementLine is not null;
       if (WrapLines) wrappedLines = await LoadWrappedLinesAsync(prepared, token);
       modelLease = Cache.Activate(key);
@@ -390,12 +393,31 @@ else
         nextLine != currentStatementLine;
       currentStatementLine = nextLine;
     }
+    UpdateDebugVariables();
     _ = InvokeAsync(async () =>
     {
       if (virtualizer is not null) await virtualizer.RefreshDataAsync();
       StateHasChanged();
     });
   }
+
+  private void UpdateDebugVariables()
+  {
+    if (Debugger.Snapshot.Status != DebugSessionStatus.Paused ||
+        currentStatementLine is null)
+    {
+      debugVariables = new Dictionary<string, DebugVariable>();
+      return;
+    }
+
+    debugVariables = Debugger.Variables
+      .Where(variable => !string.IsNullOrWhiteSpace(variable.Name))
+      .GroupBy(variable => NormalizeVariableName(variable.Name), StringComparer.Ordinal)
+      .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+  }
+
+  private static string NormalizeVariableName(string name) =>
+    name.StartsWith('@') ? name[1..] : name;
 
   private static IReadOnlyDictionary<int, IReadOnlyList<SourceFindSpan>> BuildFindSpans(SourceDocumentModel document, IReadOnlyList<int> offsets, int length)
   {

@@ -1,5 +1,6 @@
-@implements IDisposable
+@implements IAsyncDisposable
 @inject DebuggerWorkspace Debugger
+@inject IJSRuntime JS
 
 <div class="debugger-view">
   <header class="debugger-session">
@@ -15,7 +16,7 @@
     }
   </header>
 
-  <div class="debugger-sections">
+  <div class="debugger-sections" @ref="sections">
     <section class="debugger-section debugger-threads">
       <header><strong>Threads</strong><small>@Debugger.Threads.Count</small></header>
       <div class="debugger-list">
@@ -39,6 +40,13 @@
       </div>
     </section>
 
+    <div class="debugger-section-resizer"
+         role="separator"
+         aria-label="Resize Threads and Call Stack"
+         aria-orientation="vertical"
+         tabindex="0"
+         title="Drag to resize · Double-click to reset"></div>
+
     <section class="debugger-section debugger-callstack">
       <header><strong>Call Stack</strong><small>@Debugger.Frames.Count</small></header>
       <div class="debugger-list">
@@ -60,6 +68,13 @@
         }
       </div>
     </section>
+
+    <div class="debugger-section-resizer"
+         role="separator"
+         aria-label="Resize Call Stack and Variables"
+         aria-orientation="vertical"
+         tabindex="0"
+         title="Drag to resize · Double-click to reset"></div>
 
     <section class="debugger-section debugger-locals">
       <header><strong>Variables</strong><small>@Debugger.Variables.Count</small></header>
@@ -90,6 +105,13 @@
         }
       </div>
     </section>
+
+    <div class="debugger-section-resizer"
+         role="separator"
+         aria-label="Resize Variables and Breakpoints"
+         aria-orientation="vertical"
+         tabindex="0"
+         title="Drag to resize · Double-click to reset"></div>
 
     <section class="debugger-section debugger-breakpoints">
       <header><strong>Breakpoints</strong><small>@Debugger.Breakpoints.Count</small></header>
@@ -124,6 +146,13 @@
       </div>
     </section>
 
+    <div class="debugger-section-resizer"
+         role="separator"
+         aria-label="Resize Breakpoints and Debug Output"
+         aria-orientation="vertical"
+         tabindex="0"
+         title="Drag to resize · Double-click to reset"></div>
+
     <section class="debugger-section debugger-output">
       <header><strong>Debug Output</strong><button @onclick="Debugger.ClearOutput">Clear</button></header>
       <div class="debugger-console">
@@ -146,6 +175,8 @@
 @code {
   [Parameter] public EventCallback<DebugCodeLocation> OnNavigateLocation { get; set; }
 
+  private ElementReference sections;
+
   private string SessionTitle
   {
     get
@@ -157,6 +188,12 @@
   }
 
   protected override void OnInitialized() => Debugger.Changed += Refresh;
+
+  protected override async Task OnAfterRenderAsync(bool firstRender)
+  {
+    if (firstRender)
+      await JS.InvokeVoidAsync("dnSpyXdx.initDebuggerResize", sections);
+  }
 
   private async Task SelectFrameAsync(DebugStackFrame frame)
   {
@@ -217,7 +254,19 @@
     };
 
   private void Refresh() => _ = InvokeAsync(StateHasChanged);
-  public void Dispose() => Debugger.Changed -= Refresh;
+
+  public async ValueTask DisposeAsync()
+  {
+    Debugger.Changed -= Refresh;
+    try
+    {
+      await JS.InvokeVoidAsync("dnSpyXdx.disposeDebuggerResize", sections);
+    }
+    catch (JSDisconnectedException)
+    {
+      // The WebView can disappear before Blazor tears down the component.
+    }
+  }
 
   private sealed record VisibleVariable(DebugVariable Variable, int Depth);
 }

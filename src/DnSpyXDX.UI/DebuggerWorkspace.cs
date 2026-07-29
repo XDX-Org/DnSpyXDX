@@ -218,6 +218,13 @@ public sealed class DebuggerWorkspace : IDisposable
         NotifyChanged();
     }
 
+    public void ClearError()
+    {
+        if (Error is null) return;
+        Error = null;
+        NotifyChanged();
+    }
+
     public void Dispose()
     {
         if (disposed) return;

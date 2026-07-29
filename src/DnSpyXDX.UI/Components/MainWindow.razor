@@ -80,7 +80,12 @@
       </div>
       @if (bottomOpen) {
         <section class="bottom-panel" @ref="searchPanel" style="height:@(searchPanelHeight.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))px">
-          <div class="search-resizer" title="Drag to resize the panel"></div>
+          <div class="search-resizer"
+               role="separator"
+               aria-label="Resize bottom panel"
+               aria-orientation="horizontal"
+               tabindex="0"
+               title="Drag to resize · Double-click to maximize"></div>
           <div class="bottom-tabs" role="tablist">
             <button class="bottom-tab @(bottomTab == "search" ? "active" : null)" role="tab" aria-selected="@(bottomTab == "search")" disabled="@(Backend.Assemblies.Count == 0)" @onclick='() => SwitchBottomTab("search")'>Search</button>
             <button class="bottom-tab @(bottomTab == "analyzer" ? "active" : null)" role="tab" aria-selected="@(bottomTab == "analyzer")" disabled="@(Backend.Assemblies.Count == 0)" @onclick='() => SwitchBottomTab("analyzer")'>Analyzer</button>
@@ -194,7 +199,13 @@
         <label><span>Mode</span><select @bind="debugStartMode"><option value="launch">Launch CoreCLR</option><option value="attach">Attach CoreCLR</option><option value="mono">Attach Mono</option></select></label>
         @if (debugStartMode == "launch")
         {
-          <label><span>Managed executable or DLL</span><input @bind="debugLaunchPath" placeholder="path/to/application.dll" /></label>
+          <label>
+            <span>Managed executable or entry-point DLL</span>
+            <span class="debug-path-input">
+              <input @bind="debugLaunchPath" @bind:after="ClearDebugDialogError" placeholder="path/to/application.exe" />
+              <button type="button" title="Browse for debug target" aria-label="Browse for debug target" @onclick="BrowseDebugTargetAsync">…</button>
+            </span>
+          </label>
           <label><span>Arguments <small>one per line</small></span><textarea @bind="debugArguments" rows="3"></textarea></label>
           <label class="debug-check"><input type="checkbox" @bind="debugStopAtEntry" /><span>Stop at entry</span></label>
         }
@@ -208,7 +219,7 @@
           <label><span>Debugger agent port</span><input @bind="debugMonoPort" inputmode="numeric" placeholder="55555" /></label>
           <small>Start Mono with <code>--debug --debugger-agent=transport=dt_socket,server=y,address=127.0.0.1:55555</code></small>
         }
-        @if (!string.IsNullOrWhiteSpace(Debugger.Error)) { <div class="debug-dialog-error">@Debugger.Error</div> }
+        @if (!string.IsNullOrWhiteSpace(debugDialogError ?? Debugger.Error)) { <div class="debug-dialog-error">@(debugDialogError ?? Debugger.Error)</div> }
       </div>
       <footer><button @onclick="CloseDebugDialog">Cancel</button><button class="primary" disabled="@Debugger.IsBusy" @onclick="StartDebuggerAsync">Start</button></footer>
     </section>
@@ -242,6 +253,7 @@
   private string debugProcessId = "";
   private string debugMonoHost = "127.0.0.1";
   private string debugMonoPort = "55555";
+  private string? debugDialogError;
   private (Guid SessionId, DebugCodeLocation Location)? revealedDebuggerStop;
   private bool debugStopAtEntry = true;
   private bool focusSearch;
@@ -461,13 +473,32 @@
   private void CloseSettings() => settingsOpen = false;
   private void OpenDebugDialog()
   {
-    debugLaunchPath = Workspace.ActiveTab is { } active
+    var preferred = Workspace.ActiveTab is { } active
       ? Backend.Assemblies.FirstOrDefault(value =>
           value.ModuleMvid == active.Document.Symbol.ModuleMvid)?.Path ?? debugLaunchPath
       : debugLaunchPath;
+    var inspection = DebugLaunchTargetInspector.Inspect(preferred);
+    debugLaunchPath = inspection.IsLaunchable
+      ? preferred
+      : inspection.SuggestedPath ?? preferred;
+    ClearDebugDialogError();
     debugDialogOpen = true;
   }
   private void CloseDebugDialog() => debugDialogOpen = false;
+  private void ClearDebugDialogError()
+  {
+    debugDialogError = null;
+    Debugger.ClearError();
+  }
+  private async Task BrowseDebugTargetAsync()
+  {
+    var directory = File.Exists(debugLaunchPath)
+      ? Path.GetDirectoryName(Path.GetFullPath(debugLaunchPath))
+      : lastOpenDirectory;
+    if (await Dialogs.OpenAssemblyAsync(directory) is not { } selected) return;
+    debugLaunchPath = selected;
+    ClearDebugDialogError();
+  }
   private async Task StartDebuggerAsync()
   {
     if (debugStartMode == "attach")
@@ -492,6 +523,13 @@
     }
     else
     {
+      var inspection = DebugLaunchTargetInspector.Inspect(debugLaunchPath);
+      if (!inspection.IsLaunchable)
+      {
+        debugDialogError = inspection.Error;
+        return;
+      }
+      debugDialogError = null;
       var arguments = debugArguments
         .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
       await Assemblies.TryOpenDebuggerModuleAsync(debugLaunchPath);

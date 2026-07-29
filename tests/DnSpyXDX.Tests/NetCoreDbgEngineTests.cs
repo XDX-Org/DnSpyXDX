@@ -13,6 +13,43 @@ namespace DnSpyXDX.Tests;
 public sealed class NetCoreDbgEngineTests
 {
     [Fact]
+    public void Launch_target_inspector_rejects_class_libraries()
+    {
+        var classLibrary = typeof(DebugLaunchTargetInspector)
+            .Assembly.Location;
+
+        var rejected = DebugLaunchTargetInspector.Inspect(classLibrary);
+        var accepted = DebugLaunchTargetInspector.Inspect(TestWorkerPath());
+
+        Assert.False(rejected.IsLaunchable);
+        Assert.Contains(
+            "class library",
+            rejected.Error,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.True(accepted.IsLaunchable, accepted.Error);
+    }
+
+    [Fact]
+    public async Task Launch_rejects_class_library_before_adapter_start()
+    {
+        var provider = Provider();
+        await using var engine = await provider.CreateAsync(
+            CancellationToken.None);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => engine.StartAsync(
+                new DebugLaunchRequest(
+                    DebugRuntimeKind.CoreClr,
+                    typeof(DebugLaunchTargetInspector).Assembly.Location),
+                CancellationToken.None));
+
+        Assert.Contains(
+            "class library",
+            exception.Message,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Provider_reports_explicit_missing_adapter()
     {
         var path = Path.Combine(

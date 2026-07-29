@@ -527,8 +527,9 @@ internal sealed class NetCoreDbgEngine(
         if (request is DebugLaunchRequest launch)
         {
             var program = Path.GetFullPath(launch.ExecutablePath);
-            if (!File.Exists(program))
-                throw new FileNotFoundException("Debug target was not found.", program);
+            var inspection = DebugLaunchTargetInspector.Inspect(program);
+            if (!inspection.IsLaunchable)
+                throw new InvalidOperationException(inspection.Error);
             var arguments = new JsonObject
             {
                 ["program"] = program,
