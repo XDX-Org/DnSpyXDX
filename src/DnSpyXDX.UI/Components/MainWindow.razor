@@ -14,6 +14,7 @@
 @inject RuntimeDisplaySettings DisplaySettings
 @inject McpServerSettings McpSettings
 @inject IMcpServerService McpServer
+@inject DebuggerWorkspace Debugger
 
 <div class="app-shell">
   <header class="toolbar">
@@ -39,6 +40,15 @@
     <button class="toolbar-icon search-toolbar-button @(bottomOpen ? "active" : null)" title="@(bottomOpen ? "Close bottom panel" : Backend.Assemblies.Count == 0 ? "Open MCP activity" : "Open search")" aria-label="@(bottomOpen ? "Close bottom panel" : Backend.Assemblies.Count == 0 ? "Open MCP activity" : "Open search")" aria-pressed="@bottomOpen" @onclick="ToggleBottomPanel">
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="1.5"></rect><path d="M3 14h18"></path><path d="m9 17 3 3 3-3"></path></svg>
     </button>
+    <div class="debug-toolbar" aria-label="Debugger controls">
+      <button class="toolbar-icon" title="@(DebuggerActive ? "Stop the active session before starting another" : "Start or attach debugger")" aria-label="Start or attach debugger" disabled="@(Debugger.IsBusy || DebuggerActive)" @onclick="OpenDebugDialog">▶</button>
+      <button class="toolbar-icon" title="Continue" aria-label="Continue" disabled="@(Debugger.IsBusy || Debugger.Snapshot.Status != DebugSessionStatus.Paused)" @onclick="() => Debugger.ContinueAsync()">▷</button>
+      <button class="toolbar-icon" title="Pause" aria-label="Pause" disabled="@(Debugger.IsBusy || Debugger.Snapshot.Status != DebugSessionStatus.Running)" @onclick="() => Debugger.PauseAsync()">Ⅱ</button>
+      <button class="toolbar-icon" title="Stop debugging" aria-label="Stop debugging" disabled="@(!DebuggerActive)" @onclick="() => Debugger.TerminateAsync()">■</button>
+      <button class="toolbar-icon debug-step" title="Step into" aria-label="Step into" disabled="@(!DebuggerPaused)" @onclick="() => Debugger.StepAsync(DebugStepKind.Into)">↓</button>
+      <button class="toolbar-icon debug-step" title="Step over" aria-label="Step over" disabled="@(!DebuggerPaused)" @onclick="() => Debugger.StepAsync(DebugStepKind.Over)">↷</button>
+      <button class="toolbar-icon debug-step" title="Step out" aria-label="Step out" disabled="@(!DebuggerPaused)" @onclick="() => Debugger.StepAsync(DebugStepKind.Out)">↑</button>
+    </div>
     <label class="language-selector"><span>Language</span><select value="@language" @onchange="LanguageChangedAsync"><option value="@DecompilerLanguage.CSharp">C#</option><option value="@DecompilerLanguage.IL">IL</option><option value="@DecompilerLanguage.ILWithCSharp">IL with C#</option><option value="@DecompilerLanguage.Hex">Hex</option></select></label>
   </header>
   <main>
@@ -70,11 +80,17 @@
       </div>
       @if (bottomOpen) {
         <section class="bottom-panel" @ref="searchPanel" style="height:@(searchPanelHeight.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture))px">
-          <div class="search-resizer" title="Drag to resize the panel"></div>
+          <div class="search-resizer"
+               role="separator"
+               aria-label="Resize bottom panel"
+               aria-orientation="horizontal"
+               tabindex="0"
+               title="Drag to resize · Double-click to maximize"></div>
           <div class="bottom-tabs" role="tablist">
             <button class="bottom-tab @(bottomTab == "search" ? "active" : null)" role="tab" aria-selected="@(bottomTab == "search")" disabled="@(Backend.Assemblies.Count == 0)" @onclick='() => SwitchBottomTab("search")'>Search</button>
             <button class="bottom-tab @(bottomTab == "analyzer" ? "active" : null)" role="tab" aria-selected="@(bottomTab == "analyzer")" disabled="@(Backend.Assemblies.Count == 0)" @onclick='() => SwitchBottomTab("analyzer")'>Analyzer</button>
             <button class="bottom-tab @(bottomTab == "mcp" ? "active" : null)" role="tab" aria-selected="@(bottomTab == "mcp")" @onclick='() => SwitchBottomTab("mcp")'>MCP Activity</button>
+            <button class="bottom-tab @(bottomTab == "debugger" ? "active" : null)" role="tab" aria-selected="@(bottomTab == "debugger")" @onclick='() => SwitchBottomTab("debugger")'>Debugger</button>
             <button class="bottom-close" title="Close panel" aria-label="Close panel" @onclick="CloseBottom">×</button>
           </div>
           <div class="search-panel search-embedded @(bottomTab == "search" ? null : "panel-hidden")">
@@ -95,11 +111,14 @@
             <AnalyzerView @ref="analyzerView" OnNavigate="NavigateFromSourceAsync" InitialRoots="analyzerRoots" OnRootsChanged="AnalyzerRootsChanged" />
           </div>
           <div class="analyzer-body @(bottomTab == "mcp" ? null : "panel-hidden")"><McpActivityPanel /></div>
+          <div class="analyzer-body @(bottomTab == "debugger" ? null : "panel-hidden")">
+            <DebuggerView OnNavigateLocation="NavigateDebuggerLocationAsync" />
+          </div>
         </section>
       }
     </section>
   </main>
-  <footer><span class="status-dot @(Workspace.IsBusy ? "busy" : null)"></span>@Workspace.Status</footer>
+  <footer><span class="status-dot @(Workspace.IsBusy || Debugger.IsBusy ? "busy" : null)"></span>@Workspace.Status <span class="debug-status">@DebugStatus</span></footer>
   @if (contextAssembly is not null)
   {
     <div class="context-menu-dismiss" @onclick="CloseAssemblyContextMenu" @oncontextmenu:preventDefault></div>
@@ -171,6 +190,40 @@
       <label class="settings-row mcp-roots-setting"><span><strong>MCP allowed roots</strong><small>One absolute directory per line</small></span><textarea value="@mcpAllowedRoots" @onchange="McpRootsChangedAsync" placeholder="/path/to/assemblies"></textarea></label>
     </section>
   }
+  @if (debugDialogOpen)
+  {
+    <div class="modal-dismiss" @onclick="CloseDebugDialog"></div>
+    <section class="settings-dialog debug-dialog" role="dialog" aria-modal="true" aria-labelledby="debug-dialog-title">
+      <header><strong id="debug-dialog-title">Start Debugging</strong><button title="Close debugger dialog" aria-label="Close debugger dialog" @onclick="CloseDebugDialog">×</button></header>
+      <div class="debug-dialog-body">
+        <label><span>Mode</span><select @bind="debugStartMode"><option value="launch">Launch CoreCLR</option><option value="attach">Attach CoreCLR</option><option value="mono">Attach Mono</option></select></label>
+        @if (debugStartMode == "launch")
+        {
+          <label>
+            <span>Managed executable or entry-point DLL</span>
+            <span class="debug-path-input">
+              <input @bind="debugLaunchPath" @bind:after="ClearDebugDialogError" placeholder="path/to/application.exe" />
+              <button type="button" title="Browse for debug target" aria-label="Browse for debug target" @onclick="BrowseDebugTargetAsync">…</button>
+            </span>
+          </label>
+          <label><span>Arguments <small>one per line</small></span><textarea @bind="debugArguments" rows="3"></textarea></label>
+          <label class="debug-check"><input type="checkbox" @bind="debugStopAtEntry" /><span>Stop at entry</span></label>
+        }
+        else if (debugStartMode == "attach")
+        {
+          <label><span>Process ID</span><input @bind="debugProcessId" inputmode="numeric" placeholder="1234" /></label>
+        }
+        else
+        {
+          <label><span>Host</span><input @bind="debugMonoHost" placeholder="127.0.0.1" /></label>
+          <label><span>Debugger agent port</span><input @bind="debugMonoPort" inputmode="numeric" placeholder="55555" /></label>
+          <small>Start Mono with <code>--debug --debugger-agent=transport=dt_socket,server=y,address=127.0.0.1:55555</code></small>
+        }
+        @if (!string.IsNullOrWhiteSpace(debugDialogError ?? Debugger.Error)) { <div class="debug-dialog-error">@(debugDialogError ?? Debugger.Error)</div> }
+      </div>
+      <footer><button @onclick="CloseDebugDialog">Cancel</button><button class="primary" disabled="@Debugger.IsBusy" @onclick="StartDebuggerAsync">Start</button></footer>
+    </section>
+  }
 </div>
 
 @code {
@@ -193,6 +246,16 @@
   private string searchScope = "All";
   private bool menuOpen;
   private bool settingsOpen;
+  private bool debugDialogOpen;
+  private string debugStartMode = "launch";
+  private string debugLaunchPath = "";
+  private string debugArguments = "";
+  private string debugProcessId = "";
+  private string debugMonoHost = "127.0.0.1";
+  private string debugMonoPort = "55555";
+  private string? debugDialogError;
+  private (Guid SessionId, DebugCodeLocation Location)? revealedDebuggerStop;
+  private bool debugStopAtEntry = true;
   private bool focusSearch;
   private bool uiInitializationFailed;
   private ElementReference searchInput;
@@ -233,12 +296,27 @@
   private bool sessionRestoreStarted;
   private string mcpAllowedRoots = "";
   private string lastOpenDirectory = "";
+  private bool DebuggerActive => Debugger.Snapshot.Status is DebugSessionStatus.Running or DebugSessionStatus.Paused or DebugSessionStatus.Starting;
+  private bool DebuggerPaused => !Debugger.IsBusy && Debugger.Snapshot.Status == DebugSessionStatus.Paused;
+  private string DebugStatus
+  {
+    get
+    {
+      var snapshot = Debugger.Snapshot;
+      if (snapshot.Status == DebugSessionStatus.Created) return "Debugger idle";
+      var runtime = snapshot.Runtime?.ToString() ?? "Debugger";
+      var process = snapshot.ProcessId is { } processId ? $" · PID {processId}" : "";
+      var reason = snapshot.Stop is { } stop ? $" · {stop.Reason}" : "";
+      return $"{runtime}: {snapshot.Status}{reason}{process}";
+    }
+  }
   protected override async Task OnInitializedAsync()
   {
     Workspace.Changed += Refresh;
     Backend.AssembliesChanged += Refresh;
     Workspace.DragActiveChanged += OnDragActive;
     Assemblies.Closing += AssemblyClosing;
+    Debugger.Changed += DebuggerRefresh;
     restoring = true;
     Workspace.SetBusy(true, "Restoring session…");
     try
@@ -248,7 +326,7 @@
       explorerWidth = Math.Clamp(ui.ExplorerWidth, 190, 1200);
       searchPanelHeight = Math.Clamp(ui.SearchPanelHeight, 120, 900);
       bottomOpen = ui.SearchOpen;
-      bottomTab = ui.BottomTab is "search" or "analyzer" or "mcp" ? ui.BottomTab : "search";
+      bottomTab = ui.BottomTab is "search" or "analyzer" or "mcp" or "debugger" ? ui.BottomTab : "search";
       McpSettings.Enabled = ui.McpEnabled;
       McpSettings.SetAllowedRoots(ui.McpAllowedRoots ?? []);
       mcpAllowedRoots = string.Join(Environment.NewLine, McpSettings.AllowedRoots);
@@ -303,6 +381,31 @@
     catch (Exception ex) { uiInitializationFailed = true; Workspace.SetBusy(false, $"UI initialization warning: {ex.Message}"); }
   }
   private void Refresh() { InvokeAsync(StateHasChanged); if (!restoring) ScheduleSave(); }
+  private void DebuggerRefresh() => _ = InvokeAsync(async () =>
+  {
+    var snapshot = Debugger.Snapshot;
+    if (snapshot.Status is DebugSessionStatus.Starting or DebugSessionStatus.Running or DebugSessionStatus.Paused)
+    {
+      bottomOpen = true;
+      bottomTab = "debugger";
+    }
+    if (snapshot.Status != DebugSessionStatus.Paused)
+      revealedDebuggerStop = null;
+    StateHasChanged();
+    if (snapshot.Status == DebugSessionStatus.Paused &&
+        Debugger.CurrentLocation is { } location)
+    {
+      var stop = (snapshot.SessionId, location);
+      if (revealedDebuggerStop != stop)
+      {
+        if (await EnsureDebuggerLocationAssemblyAsync(location))
+        {
+          revealedDebuggerStop = stop;
+          await NavigateDebuggerLocationAsync(location);
+        }
+      }
+    }
+  });
   // The native drag-drop handler owns the drop surface, so the drag overlay is driven from here rather than
   // from HTML drag events (which WebView2 no longer raises for us).
   private void OnDragActive(bool active) => _ = InvokeAsync(() => JS.InvokeVoidAsync("dnSpyXdx.setDropOverlay", active).AsTask());
@@ -368,6 +471,74 @@
   private void CloseMenu() => menuOpen = false;
   private void OpenSettings() { menuOpen = false; settingsOpen = true; }
   private void CloseSettings() => settingsOpen = false;
+  private void OpenDebugDialog()
+  {
+    var preferred = Workspace.ActiveTab is { } active
+      ? Backend.Assemblies.FirstOrDefault(value =>
+          value.ModuleMvid == active.Document.Symbol.ModuleMvid)?.Path ?? debugLaunchPath
+      : debugLaunchPath;
+    var inspection = DebugLaunchTargetInspector.Inspect(preferred);
+    debugLaunchPath = inspection.IsLaunchable
+      ? preferred
+      : inspection.SuggestedPath ?? preferred;
+    ClearDebugDialogError();
+    debugDialogOpen = true;
+  }
+  private void CloseDebugDialog() => debugDialogOpen = false;
+  private void ClearDebugDialogError()
+  {
+    debugDialogError = null;
+    Debugger.ClearError();
+  }
+  private async Task BrowseDebugTargetAsync()
+  {
+    var directory = File.Exists(debugLaunchPath)
+      ? Path.GetDirectoryName(Path.GetFullPath(debugLaunchPath))
+      : lastOpenDirectory;
+    if (await Dialogs.OpenAssemblyAsync(directory) is not { } selected) return;
+    debugLaunchPath = selected;
+    ClearDebugDialogError();
+  }
+  private async Task StartDebuggerAsync()
+  {
+    if (debugStartMode == "attach")
+    {
+      if (!int.TryParse(debugProcessId, out var processId) || processId <= 0)
+      {
+        Workspace.SetBusy(false, "Debugger requires a positive process ID.");
+        return;
+      }
+      await Debugger.AttachAsync(processId);
+    }
+    else if (debugStartMode == "mono")
+    {
+      if (string.IsNullOrWhiteSpace(debugMonoHost) ||
+          !int.TryParse(debugMonoPort, out var port) ||
+          port is <= 0 or > 65535)
+      {
+        Workspace.SetBusy(false, "Mono attach requires a host and port from 1 through 65535.");
+        return;
+      }
+      await Debugger.AttachMonoAsync(debugMonoHost.Trim(), port);
+    }
+    else
+    {
+      var inspection = DebugLaunchTargetInspector.Inspect(debugLaunchPath);
+      if (!inspection.IsLaunchable)
+      {
+        debugDialogError = inspection.Error;
+        return;
+      }
+      debugDialogError = null;
+      var arguments = debugArguments
+        .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+      await Assemblies.TryOpenDebuggerModuleAsync(debugLaunchPath);
+      await Debugger.LaunchAsync(debugLaunchPath, arguments, debugStopAtEntry);
+    }
+    if (Debugger.Snapshot.Status is DebugSessionStatus.Running or
+        DebugSessionStatus.Paused)
+      debugDialogOpen = false;
+  }
   private async Task Exit()
   {
     menuOpen = false;
@@ -564,6 +735,57 @@
     await OpenSymbolAsync(declaringType, request.NewTab, IsTypeSymbol(request.Symbol) ? request.DisplayName : null, true, IsTypeSymbol(request.Symbol) ? null : request.Symbol);
     StateHasChanged();
   }
+  private Task NavigateDebuggerLocationAsync(DebugCodeLocation location) =>
+    NavigateFromSourceAsync(new NavigationRequest(
+      new SymbolId(
+        location.Method.ModuleMvid,
+        location.Method.MetadataToken),
+      NewTab: false));
+  private async Task<bool> EnsureDebuggerLocationAssemblyAsync(
+    DebugCodeLocation location)
+  {
+    if (Backend.Assemblies.Any(
+        assembly => assembly.ModuleMvid == location.Method.ModuleMvid))
+      return true;
+
+    var modulePaths = Debugger.Frames
+      .Where(frame =>
+        frame.Location?.Method.ModuleMvid == location.Method.ModuleMvid)
+      .Select(frame => frame.ModulePath)
+      .Where(path => !string.IsNullOrWhiteSpace(path))
+      .Cast<string>();
+    if (Debugger.StartRequest is DebugLaunchRequest launch)
+      modulePaths = modulePaths.Prepend(launch.ExecutablePath);
+
+    foreach (var path in modulePaths.Distinct(
+      OperatingSystem.IsWindows()
+        ? StringComparer.OrdinalIgnoreCase
+        : StringComparer.Ordinal))
+    {
+      var assembly = await Assemblies.TryOpenDebuggerModuleAsync(
+        path,
+        location.Method.ModuleMvid);
+      if (assembly is not null) return true;
+    }
+
+    try
+    {
+      await Backend.OpenAssemblyForSymbolAsync(new SymbolId(
+        location.Method.ModuleMvid,
+        location.Method.MetadataToken));
+      return true;
+    }
+    catch (Exception exception) when (
+      exception is FileNotFoundException or
+        BadImageFormatException or
+        IOException or
+        UnauthorizedAccessException or
+        InvalidOperationException)
+    {
+      return false;
+    }
+  }
+
   private void TabMouseUp(MouseEventArgs e, string id) { if (e.Button == 1) CloseTab(id); }
   private static bool IsTypeSymbol(SymbolId symbol) => (symbol.MetadataToken >> 24) == 0x02;
   private async Task DecompileTypeIntoTabAsync(string tabId, SymbolId symbol, SymbolId? focusSymbol, CancellationTokenSource cancellation)
@@ -819,5 +1041,5 @@
     }
     catch (Exception ex) { Workspace.SetBusy(false, $"Solution extraction failed: {ex.Message}"); }
   }
-  public void Dispose() { Workspace.Changed -= Refresh; Backend.AssembliesChanged -= Refresh; Workspace.DragActiveChanged -= OnDragActive; Assemblies.Closing -= AssemblyClosing; saveDelay?.Cancel(); saveDelay?.Dispose(); searchDelay?.Cancel(); searchDelay?.Dispose(); CancelAllDecompilations(); selfReference?.Dispose(); }
+  public void Dispose() { Workspace.Changed -= Refresh; Backend.AssembliesChanged -= Refresh; Workspace.DragActiveChanged -= OnDragActive; Assemblies.Closing -= AssemblyClosing; Debugger.Changed -= DebuggerRefresh; saveDelay?.Cancel(); saveDelay?.Dispose(); searchDelay?.Cancel(); searchDelay?.Dispose(); CancelAllDecompilations(); selfReference?.Dispose(); }
 }

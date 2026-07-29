@@ -69,16 +69,22 @@ window.dnSpyXdx.initSearchResize = function (panel, dotNet) {
   if (!panel || panel.dataset.resizeReady) return;
   panel.dataset.resizeReady = "true";
   const handle = panel.querySelector(".search-resizer");
+  const limits = () => ({ minimum: 120, maximum: window.innerHeight * 0.65 });
+  const setHeight = height => {
+    const { minimum, maximum } = limits();
+    const next = Math.max(minimum, Math.min(maximum, height));
+    panel.style.height = next + "px";
+    handle.setAttribute("aria-valuenow", Math.round(next).toString());
+    return next;
+  };
   handle.addEventListener("pointerdown", event => {
+    if (event.button !== 0) return;
     event.preventDefault();
     handle.setPointerCapture(event.pointerId);
     document.body.classList.add("resizing-search");
     const startY = event.clientY;
     const startHeight = panel.getBoundingClientRect().height;
-    const move = moveEvent => {
-      const maximum = window.innerHeight * 0.65;
-      panel.style.height = Math.max(120, Math.min(maximum, startHeight + startY - moveEvent.clientY)) + "px";
-    };
+    const move = moveEvent => setHeight(startHeight + startY - moveEvent.clientY);
     const stop = () => {
       document.body.classList.remove("resizing-search");
       if (dotNet) dotNet.invokeMethodAsync("SearchPanelResized", panel.getBoundingClientRect().height);
@@ -90,6 +96,151 @@ window.dnSpyXdx.initSearchResize = function (panel, dotNet) {
     handle.addEventListener("pointerup", stop);
     handle.addEventListener("pointercancel", stop);
   });
+  handle.addEventListener("keydown", event => {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    event.preventDefault();
+    const direction = event.key === "ArrowUp" ? 1 : -1;
+    const height = setHeight(panel.getBoundingClientRect().height + direction * 32);
+    if (dotNet) dotNet.invokeMethodAsync("SearchPanelResized", height);
+  });
+  handle.addEventListener("dblclick", event => {
+    event.preventDefault();
+    const { maximum } = limits();
+    const current = panel.getBoundingClientRect().height;
+    let height;
+    if (current >= maximum - 8) {
+      height = Number.parseFloat(panel.dataset.restoreHeight) || 230;
+    } else {
+      panel.dataset.restoreHeight = current.toString();
+      height = maximum;
+    }
+    height = setHeight(height);
+    if (dotNet) dotNet.invokeMethodAsync("SearchPanelResized", height);
+  });
+};
+window.dnSpyXdx.initDebuggerResize = function (sections) {
+  if (!sections || sections._dnSpyXdxDebuggerResize) return;
+
+  const panes = Array.from(sections.querySelectorAll(":scope > .debugger-section"));
+  const handles = Array.from(sections.querySelectorAll(":scope > .debugger-section-resizer"));
+  const storageKey = "dnspyxdx.debugger-pane-weights";
+  const property = index => `--debugger-pane-${index}-weight`;
+  const minimumWidths = [110, 150, 190, 170, 180];
+
+  const setWeights = weights => {
+    if (!Array.isArray(weights) || weights.length !== panes.length ||
+        weights.some(weight => !Number.isFinite(weight) || weight <= 0)) return false;
+    weights.forEach((weight, index) => sections.style.setProperty(property(index), `${weight}fr`));
+    return true;
+  };
+  const currentWidths = () => panes.map(pane => pane.getBoundingClientRect().width);
+  const save = () => {
+    const widths = currentWidths();
+    const total = widths.reduce((sum, width) => sum + width, 0);
+    if (total <= 0) return;
+    try { localStorage.setItem(storageKey, JSON.stringify(widths.map(width => width / total))); } catch { }
+  };
+  const reset = () => {
+    panes.forEach((_, index) => sections.style.removeProperty(property(index)));
+    handles.forEach(handle => {
+      handle.removeAttribute("aria-valuemin");
+      handle.removeAttribute("aria-valuemax");
+      handle.removeAttribute("aria-valuenow");
+    });
+    try { localStorage.removeItem(storageKey); } catch { }
+  };
+  const beginResize = (handle, startX, pointerId) => {
+    const index = handles.indexOf(handle);
+    if (index < 0) return null;
+
+    const widths = currentWidths();
+    // Lock every current track to a proportional weight before changing the adjacent pair.
+    setWeights(widths);
+    const leftWidth = widths[index];
+    const rightWidth = widths[index + 1];
+    const pairWidth = leftWidth + rightWidth;
+    let latestX = startX;
+    let animationFrame = 0;
+    const apply = () => {
+      animationFrame = 0;
+      const leftMinimum = minimumWidths[index];
+      const rightMinimum = minimumWidths[index + 1];
+      const left = Math.max(
+        leftMinimum,
+        Math.min(pairWidth - rightMinimum, leftWidth + latestX - startX));
+      sections.style.setProperty(property(index), `${left}fr`);
+      sections.style.setProperty(property(index + 1), `${pairWidth - left}fr`);
+      handle.setAttribute("aria-valuemin", leftMinimum.toString());
+      handle.setAttribute("aria-valuemax", Math.round(pairWidth - rightMinimum).toString());
+      handle.setAttribute("aria-valuenow", Math.round(left).toString());
+    };
+    const move = event => {
+      latestX = event.clientX;
+      if (!animationFrame) animationFrame = requestAnimationFrame(apply);
+    };
+    const stop = () => {
+      if (animationFrame) {
+        cancelAnimationFrame(animationFrame);
+        apply();
+      }
+      document.body.classList.remove("resizing-debugger");
+      save();
+      if (pointerId !== null && handle.hasPointerCapture?.(pointerId))
+        handle.releasePointerCapture(pointerId);
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", stop);
+      handle.removeEventListener("pointercancel", stop);
+    };
+    return { move, stop };
+  };
+
+  try {
+    const stored = JSON.parse(localStorage.getItem(storageKey));
+    setWeights(stored);
+  } catch { }
+
+  const listeners = handles.map(handle => {
+    const pointerdown = event => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      handle.setPointerCapture(event.pointerId);
+      document.body.classList.add("resizing-debugger");
+      const drag = beginResize(handle, event.clientX, event.pointerId);
+      if (!drag) return;
+      handle.addEventListener("pointermove", drag.move);
+      handle.addEventListener("pointerup", drag.stop);
+      handle.addEventListener("pointercancel", drag.stop);
+    };
+    const keydown = event => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const drag = beginResize(handle, 0, null);
+      if (!drag) return;
+      drag.move({ clientX: event.key === "ArrowLeft" ? -24 : 24 });
+      drag.stop();
+    };
+    const doubleclick = event => {
+      event.preventDefault();
+      reset();
+    };
+    handle.addEventListener("pointerdown", pointerdown);
+    handle.addEventListener("keydown", keydown);
+    handle.addEventListener("dblclick", doubleclick);
+    return { handle, pointerdown, keydown, doubleclick };
+  });
+
+  sections._dnSpyXdxDebuggerResize = { listeners };
+};
+window.dnSpyXdx.disposeDebuggerResize = function (sections) {
+  const state = sections?._dnSpyXdxDebuggerResize;
+  if (!state) return;
+  for (const listener of state.listeners) {
+    listener.handle.removeEventListener("pointerdown", listener.pointerdown);
+    listener.handle.removeEventListener("keydown", listener.keydown);
+    listener.handle.removeEventListener("dblclick", listener.doubleclick);
+  }
+  document.body.classList.remove("resizing-debugger");
+  delete sections._dnSpyXdxDebuggerResize;
 };
 window.dnSpyXdx.initHistoryButtons = function (dotNet) {
   if (window.dnSpyXdx.historyReady) return;
@@ -221,23 +372,67 @@ window.dnSpyXdx.initSourceHover = function (viewport) {
   if (!viewport || viewport._dnSpyXdxHover) return;
   let highlighted = [];
   let current = null;
-  const clear = () => {
+  let debugTarget = null;
+  let debugTooltip = null;
+  const clearHighlight = () => {
     for (const element of highlighted) element.classList.remove("code-link-active");
     highlighted = [];
     current = null;
   };
+  const hideDebugTooltip = () => {
+    debugTooltip?.remove();
+    debugTooltip = null;
+    debugTarget = null;
+  };
+  const clear = () => {
+    clearHighlight();
+    hideDebugTooltip();
+  };
   const apply = symbol => {
     if (symbol === current) return;
-    clear();
+    clearHighlight();
     if (!symbol) return;
     current = symbol;
     const selector = "[data-symbol=\"" + (window.CSS && CSS.escape ? CSS.escape(symbol) : symbol) + "\"]";
     highlighted = Array.from(viewport.querySelectorAll(selector));
     for (const element of highlighted) element.classList.add("code-link-active");
   };
+  const showDebugTooltip = element => {
+    if (element === debugTarget) return;
+    hideDebugTooltip();
+    if (!element) return;
+    debugTarget = element;
+    debugTooltip = document.createElement("div");
+    debugTooltip.className = "debug-value-tooltip";
+    debugTooltip.setAttribute("role", "tooltip");
+
+    const name = document.createElement("strong");
+    name.textContent = element.dataset.debugLocal || "";
+    const value = document.createElement("code");
+    value.textContent = element.dataset.debugValue || "";
+    debugTooltip.append(name, value);
+    if (element.dataset.debugType) {
+      const type = document.createElement("small");
+      type.textContent = element.dataset.debugType;
+      debugTooltip.append(type);
+    }
+    document.body.append(debugTooltip);
+
+    const target = element.getBoundingClientRect();
+    const tooltip = debugTooltip.getBoundingClientRect();
+    const left = Math.max(8, Math.min(window.innerWidth - tooltip.width - 8, target.left));
+    const below = target.bottom + 7;
+    const top = below + tooltip.height <= window.innerHeight - 8
+      ? below
+      : Math.max(8, target.top - tooltip.height - 7);
+    debugTooltip.style.left = left + "px";
+    debugTooltip.style.top = top + "px";
+  };
   const over = event => {
     const element = event.target?.closest?.("[data-symbol]");
     apply(element && viewport.contains(element) ? element.getAttribute("data-symbol") : null);
+    const debugElement = event.target?.closest?.("[data-debug-local]");
+    showDebugTooltip(debugElement && viewport.contains(debugElement) ? debugElement : null);
   };
   viewport.addEventListener("mouseover", over, { passive: true });
   viewport.addEventListener("mouseleave", clear, { passive: true });

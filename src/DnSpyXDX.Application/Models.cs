@@ -151,7 +151,8 @@ public sealed record DecompilerDocument(
     IReadOnlyList<BinaryRegion>? BinaryRegions = null,
     ResourceDocument? Resource = null,
     IReadOnlyDictionary<int, int>? SymbolLocations = null,
-    IReadOnlyList<ClassifiedSpan>? SemanticSpans = null);
+    IReadOnlyList<ClassifiedSpan>? SemanticSpans = null,
+    DebugDocumentMap? DebugMap = null);
 
 /// <summary><paramref name="Display"/> is the label shown for the result's kind. It defaults to
 /// <paramref name="Kind"/>, but a type carries its C# keyword (class/struct/interface/enum/delegate) so the

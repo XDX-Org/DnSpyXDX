@@ -1,5 +1,6 @@
 using DnSpyXDX.Application;
 using DnSpyXDX.Decompilation;
+using DnSpyXDX.Debugging;
 using DnSpyXDX.Export;
 using DnSpyXDX.Host;
 using DnSpyXDX.Host.Mcp;
@@ -39,6 +40,15 @@ internal static class Program
             services.GetRequiredService<RuntimeDisplaySettings>(),
             services.GetRequiredService<PersistentDecompileCache>(),
             services.GetRequiredService<NeighborLoadingSettings>()));
+        builder.Services.AddSingleton(new CoreClrDebuggerOptions());
+        builder.Services.AddSingleton<IDebuggerEngineProvider, NetCoreDbgEngineProvider>();
+        builder.Services.AddSingleton(new MonoSoftDebuggerOptions());
+        builder.Services.AddSingleton<IDebuggerEngineProvider, MonoSoftDebuggerEngineProvider>();
+        builder.Services.AddSingleton<IDebuggerEngineRegistry>(services =>
+            new DebuggerEngineRegistry(
+                services.GetServices<IDebuggerEngineProvider>()));
+        builder.Services.AddSingleton<IDebuggerService, DebuggerService>();
+        builder.Services.AddSingleton<DebuggerWorkspace>();
         builder.Services.AddSingleton<IProjectExportService, ProjectExportService>();
         builder.Services.AddSingleton<WorkspaceState>();
         builder.Services.AddSingleton<SourceViewStateStore>();

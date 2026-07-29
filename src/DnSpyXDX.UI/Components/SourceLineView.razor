@@ -1,4 +1,10 @@
 <div class="source-line @(WrapLines ? "wrap-lines" : null) @(IsFocused ? "code-search-focus" : null)" style="@LineStyle" data-source-line="@Line.Number" role="row">
+  <button type="button"
+          class="source-breakpoint-gutter @(Breakpoint is null ? null : "set") @(Binding?.IsVerified == true ? "verified" : null) @(IsCurrentStatement ? "current" : null)"
+          title="@BreakpointTitle"
+          aria-label="@BreakpointTitle"
+          disabled="@(DebugPoint is null)"
+          @onclick="ToggleBreakpointAsync"></button>
   <span class="source-line-number" aria-hidden="true">@(Line.Number + 1)</span>
   <code>
     @foreach (var brace in VisibleGuides())
@@ -9,17 +15,18 @@
     {
       var text = Line.Text.Substring(segment.Start, segment.Length);
       var matchClass = segment.IsActiveMatch ? "source-find-match active" : segment.IsMatch ? "source-find-match" : null;
+      var debugVariable = DebugVariableFor(segment.Token);
       if (segment.Token.Target is { } target)
       {
-        <button type="button" class="source-token @CssClass(segment.Token) code-link @matchClass" data-symbol="@segment.Token.SymbolName" title="@(segment.Token.Tooltip ?? $"Go to {segment.Token.SymbolName}")" @onclick="e => NavigateAsync(target, e)" @oncontextmenu="e => AnalyzeAsync(target, segment.Token, e)" @oncontextmenu:preventDefault="@(AnalyzableKind(segment.Token.Kind) is not null)">@text</button>
+        <button type="button" class="source-token @CssClass(segment.Token) code-link @(debugVariable is null ? null : "debug-local") @matchClass" data-symbol="@segment.Token.SymbolName" data-debug-local="@debugVariable?.Name" data-debug-value="@debugVariable?.Value" data-debug-type="@debugVariable?.Type" title="@(debugVariable is null ? segment.Token.Tooltip ?? $"Go to {segment.Token.SymbolName}" : null)" aria-label="@DebugVariableTitle(debugVariable)" @onclick="e => NavigateAsync(target, e)" @oncontextmenu="e => AnalyzeAsync(target, segment.Token, e)" @oncontextmenu:preventDefault="@(AnalyzableKind(segment.Token.Kind) is not null)">@text</button>
       }
       else if (segment.Token.DocumentOffset is { } offset)
       {
-        <button type="button" class="source-token @CssClass(segment.Token) code-link @matchClass" title="@(segment.Token.Tooltip ?? "Go to IL instruction")" @onclick="e => NavigateOffsetAsync(offset, e)">@text</button>
+        <button type="button" class="source-token @CssClass(segment.Token) code-link @(debugVariable is null ? null : "debug-local") @matchClass" data-debug-local="@debugVariable?.Name" data-debug-value="@debugVariable?.Value" data-debug-type="@debugVariable?.Type" title="@(debugVariable is null ? segment.Token.Tooltip ?? "Go to IL instruction" : null)" aria-label="@DebugVariableTitle(debugVariable)" @onclick="e => NavigateOffsetAsync(offset, e)">@text</button>
       }
       else
       {
-        <span class="source-token @CssClass(segment.Token) @(segment.Token.SymbolName is null ? null : "code-link") @matchClass" data-symbol="@segment.Token.SymbolName">@text</span>
+        <span class="source-token @CssClass(segment.Token) @(segment.Token.SymbolName is null ? null : "code-link") @(debugVariable is null ? null : "debug-local") @matchClass" data-symbol="@segment.Token.SymbolName" data-debug-local="@debugVariable?.Name" data-debug-value="@debugVariable?.Value" data-debug-type="@debugVariable?.Type" aria-label="@DebugVariableTitle(debugVariable)">@text</span>
       }
     }
   </code>
@@ -32,14 +39,29 @@
   [Parameter] public EventCallback<NavigationRequest> OnNavigate { get; set; }
   [Parameter] public EventCallback<int> OnNavigateOffset { get; set; }
   [Parameter] public EventCallback<AnalyzeRequest> OnAnalyze { get; set; }
+  [Parameter] public IReadOnlyDictionary<string, DebugVariable> DebugVariables { get; set; } =
+    new Dictionary<string, DebugVariable>();
   [Parameter] public IReadOnlyList<SourceFindSpan> Matches { get; set; } = [];
   [Parameter] public int ActiveMatchOffset { get; set; } = -1;
   [Parameter] public int FocusedLine { get; set; } = -1;
   [Parameter] public int LineHeight { get; set; } = 20;
   [Parameter] public bool WrapLines { get; set; }
+  [Parameter] public DebugDocumentSequencePoint? DebugPoint { get; set; }
+  [Parameter] public DebugBreakpoint? Breakpoint { get; set; }
+  [Parameter] public DebugBreakpointBinding? Binding { get; set; }
+  [Parameter] public bool IsCurrentStatement { get; set; }
+  [Parameter] public EventCallback<DebugCodeLocation> OnToggleBreakpoint { get; set; }
 
   private bool IsFocused => FocusedLine == Line.Number;
+  private string BreakpointTitle => DebugPoint is null
+    ? "No executable statement on this line"
+    : Breakpoint is null
+      ? "Add breakpoint"
+      : Binding?.Message ?? (Binding?.IsVerified == true ? "Bound breakpoint" : "Remove breakpoint");
   private string LineStyle => WrapLines ? $"--continuation-indent:{LeadingColumns() + SourceDocumentModel.TabWidth}ch" : $"height:{LineHeight}px";
+  private Task ToggleBreakpointAsync() => DebugPoint is { } point
+    ? OnToggleBreakpoint.InvokeAsync(point.BreakpointLocation ?? point.Location)
+    : Task.CompletedTask;
 
   private int LeadingColumns()
   {
@@ -62,6 +84,22 @@
     AnalyzableKind(token.Kind) is { } kind
       ? OnAnalyze.InvokeAsync(new AnalyzeRequest(target, token.SymbolName ?? "", kind, e.ClientX, e.ClientY))
       : Task.CompletedTask;
+
+  private DebugVariable? DebugVariableFor(SourceToken token)
+  {
+    if (token.Kind != SourceTokenKind.Identifier || DebugVariables.Count == 0)
+      return null;
+    var name = Line.Text.Substring(token.Start, token.Length);
+    if (name.StartsWith('@')) name = name[1..];
+    return DebugVariables.TryGetValue(name, out var variable) ? variable : null;
+  }
+
+  private static string? DebugVariableTitle(DebugVariable? variable) =>
+    variable is null
+      ? null
+      : string.IsNullOrWhiteSpace(variable.Type)
+        ? $"{variable.Name} = {variable.Value}"
+        : $"{variable.Name} = {variable.Value}{Environment.NewLine}{variable.Type}";
 
   // References the analyzer can act on (types and members) get an Analyze context menu.
   private static TreeNodeKind? AnalyzableKind(SourceTokenKind kind) => kind switch

@@ -6,11 +6,17 @@ flowchart LR
     APP --> API["Decompiler contracts"]
     API --> ILSPY["ILSpy adapter"]
     API --> EXPORT["Project exporter"]
+    APP --> DEBUGAPI["Debugger contracts"]
+    DEBUGAPI --> DEBUG["Runtime debugger engines"]
     HOST["Photino host"] --> UI
     HOST --> APP
 ```
 
 Keep Photino at the edge. Razor components should not call `PEFile`, `CSharpDecompiler`, or the filesystem directly.
+
+Debugger native APIs and runtime protocols also stay at the edge. Razor components call
+`IDebuggerService`; runtime engines run behind `IDebuggerEngine` and eventually in dedicated
+worker processes. See [Debugger architecture](debugger-architecture.md).
 
 ### Suggested solution layout
 

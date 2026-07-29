@@ -1,3 +1,6 @@
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
+using System.Reflection.PortableExecutable;
 using DnSpyXDX.Application;
 using DnSpyXDX.Decompilation;
 using DnSpyXDX.UI;
@@ -57,6 +60,108 @@ public sealed class DecompilerBackendTests
         Assert.Contains("namespace DnSpyXDX.Tests;", document.Text, StringComparison.Ordinal);
         Assert.False(new RuntimeDisplaySettings().ShowMetadataTokens);
         Assert.False(new UiSessionState().ShowMetadataTokens);
+        Assert.NotNull(document.DebugMap);
+        Assert.Equal(document.Symbol, document.DebugMap.Document);
+        Assert.NotEmpty(document.DebugMap.SequencePoints);
+        Assert.All(document.DebugMap.SequencePoints, point =>
+        {
+            Assert.Equal(assembly.ModuleMvid, point.Location.Method.ModuleMvid);
+            Assert.Equal(0x06, point.Location.Method.MetadataToken >> 24);
+            Assert.True(point.Location.ILOffset >= 0);
+            Assert.True(point.EndILOffset > point.Location.ILOffset);
+            Assert.InRange(point.StartOffset, 0, document.Text.Length - 1);
+            Assert.InRange(point.StartOffset + point.Length, 1, document.Text.Length);
+        });
+    }
+
+    [Fact]
+    public async Task Decompiled_breakpoints_use_control_flow_join_offsets()
+    {
+        var worker = Path.Combine(
+            AppContext.BaseDirectory,
+            "DnSpyXDX.Debugger.TestWorker.dll");
+        Assert.True(File.Exists(worker), $"Missing test worker: {worker}");
+        await using var backend = new DecompilerBackend();
+        var assembly = await backend.OpenAsync(worker);
+        var target = Assert.Single(
+            await backend.SearchAsync("DebuggerBreakpointTarget"),
+            result =>
+                result.Kind == "Type" &&
+                result.Name == "DebuggerBreakpointTarget" &&
+                result.Symbol.ModuleMvid == assembly.ModuleMvid);
+
+        var document = await backend.DecompileAsync(
+            target.Symbol,
+            DecompilerLanguage.CSharp);
+        var runMethod = Assert.Single(
+            await backend.SearchAsync("Run"),
+            result =>
+                result.Kind == "Method" &&
+                result.QualifiedName == "DebuggerBreakpointTarget.Run");
+        var point = Assert.Single(
+            document.DebugMap!.SequencePoints,
+            candidate =>
+                candidate.Location.Method.MetadataToken ==
+                    runMethod.Symbol.MetadataToken &&
+                document.Text.Substring(
+                    candidate.StartOffset,
+                    candidate.Length)
+                    .Contains("return value", StringComparison.Ordinal));
+
+        Assert.Equal(0x0B, point.Location.ILOffset);
+        Assert.Equal(0x10, point.BreakpointLocation?.ILOffset);
+    }
+
+    [Fact]
+    public async Task Decompiled_async_breakpoints_use_move_next_method_body()
+    {
+        var worker = Path.Combine(
+            AppContext.BaseDirectory,
+            "DnSpyXDX.Debugger.TestWorker.dll");
+        await using var backend = new DecompilerBackend();
+        var assembly = await backend.OpenAsync(worker);
+        var target = Assert.Single(
+            await backend.SearchAsync("DebuggerBreakpointTarget"),
+            result =>
+                result.Kind == "Type" &&
+                result.Name == "DebuggerBreakpointTarget" &&
+                result.Symbol.ModuleMvid == assembly.ModuleMvid);
+        var asyncMethod = Assert.Single(
+            await backend.SearchAsync("RunAsync"),
+            result =>
+                result.Kind == "Method" &&
+                result.QualifiedName ==
+                    "DebuggerBreakpointTarget.RunAsync");
+        var document = await backend.DecompileAsync(
+            target.Symbol,
+            DecompilerLanguage.CSharp);
+        var point = Assert.Single(
+            document.DebugMap!.SequencePoints,
+            candidate =>
+                document.Text.Substring(
+                    candidate.StartOffset,
+                    candidate.Length)
+                    .Contains("await Task.Yield", StringComparison.Ordinal));
+
+        Assert.NotEqual(
+            asyncMethod.Symbol.MetadataToken,
+            point.Location.Method.MetadataToken);
+        using var stream = File.OpenRead(worker);
+        using var peReader = new PEReader(stream);
+        var metadata = peReader.GetMetadataReader();
+        var runtimeMethod = metadata.GetMethodDefinition(
+            (MethodDefinitionHandle)MetadataTokens.EntityHandle(
+                point.Location.Method.MetadataToken));
+        var body = peReader.GetMethodBody(
+            runtimeMethod.RelativeVirtualAddress);
+        var il = body.GetILBytes();
+        Assert.NotNull(il);
+        var codeSize = il.Length;
+        Assert.InRange(point.Location.ILOffset, 0, codeSize - 1);
+        Assert.InRange(
+            (point.BreakpointLocation ?? point.Location).ILOffset,
+            0,
+            codeSize - 1);
     }
 
     [Fact]
@@ -245,6 +350,25 @@ public sealed class DecompilerBackendTests
         Assert.DoesNotContain("// C#: using ", combined.Text, StringComparison.Ordinal);
         Assert.Contains("IL_0000:", combined.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("// Decompiled C# reference", combined.Text, StringComparison.Ordinal);
+        Assert.NotNull(il.DebugMap);
+        Assert.NotEmpty(il.DebugMap.SequencePoints);
+        Assert.NotNull(combined.DebugMap);
+        Assert.NotEmpty(combined.DebugMap.SequencePoints);
+        Assert.All(il.DebugMap.SequencePoints.Concat(combined.DebugMap.SequencePoints), point =>
+        {
+            Assert.Equal(type.Symbol.ModuleMvid, point.Location.Method.ModuleMvid);
+            Assert.Equal(0x06, point.Location.Method.MetadataToken >> 24);
+            Assert.Equal(
+                $"IL_{point.Location.ILOffset:X4}:",
+                point.Length >= 8
+                    ? il.Text.Substring(
+                        il.DebugMap.SequencePoints
+                            .First(candidate =>
+                                candidate.Location == point.Location).StartOffset,
+                        8)
+                    : "",
+                ignoreCase: true);
+        });
         Assert.Empty(hex.Text);
         Assert.NotNull(hex.Binary);
         Assert.Equal([0x4D, 0x5A], hex.Binary![..2]);
