@@ -20,7 +20,7 @@ namespace DnSpyXDX.Decompilation;
 /// </summary>
 public sealed class PersistentDecompileCache
 {
-    private const int SchemaVersion = 3;
+    private const int SchemaVersion = 5;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull

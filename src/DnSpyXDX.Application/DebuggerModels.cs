@@ -55,9 +55,17 @@ public sealed record DebugDocumentSequencePoint(
     int EndILOffset,
     DebugCodeLocation? BreakpointLocation = null);
 
+public sealed record DebugDocumentLocalName(
+    DebugMethodId Method,
+    int Slot,
+    string Name,
+    int StartILOffset = 0,
+    int EndILOffset = int.MaxValue);
+
 public sealed record DebugDocumentMap(
     SymbolId Document,
-    IReadOnlyList<DebugDocumentSequencePoint> SequencePoints);
+    IReadOnlyList<DebugDocumentSequencePoint> SequencePoints,
+    IReadOnlyList<DebugDocumentLocalName>? LocalNames = null);
 
 public static class DebugDocumentMaps
 {

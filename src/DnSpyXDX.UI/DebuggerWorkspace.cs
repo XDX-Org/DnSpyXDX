@@ -18,6 +18,8 @@ public sealed class DebuggerWorkspace : IDisposable
     private IReadOnlyList<DebugVariable> variables = [];
     private readonly Dictionary<DebugVariableReference, IReadOnlyList<DebugVariable>>
         variableChildren = [];
+    private readonly Dictionary<(DebugMethodId Method, int Slot), List<DebugDocumentLocalName>>
+        localNames = [];
     private IReadOnlyList<DebugOutputMessage> output = [];
     private DebugThreadId? selectedThread;
     private DebugFrameId? selectedFrame;
@@ -49,6 +51,50 @@ public sealed class DebuggerWorkspace : IDisposable
     public string? Error { get; private set; }
 
     public event Action? Changed;
+
+    public void RegisterDebugMap(DebugDocumentMap? map)
+    {
+        if (map?.LocalNames is not { Count: > 0 }) return;
+        var changed = false;
+        foreach (var local in map.LocalNames)
+        {
+            var key = (local.Method, local.Slot);
+            if (!localNames.TryGetValue(key, out var candidates))
+                localNames[key] = candidates = [];
+            if (candidates.Contains(local)) continue;
+            candidates.Add(local);
+            changed = true;
+        }
+        if (changed && Snapshot.Status == DebugSessionStatus.Paused)
+            NotifyChanged();
+    }
+
+    public DebugVariable DisplayVariable(DebugVariable variable)
+    {
+        if (!TryParseSyntheticLocal(variable.Name, out var slot) ||
+            CurrentLocation is not { } location ||
+            !localNames.TryGetValue((location.Method, slot), out var candidates))
+            return variable;
+        var local = candidates
+            .Where(candidate =>
+                candidate.StartILOffset <= location.ILOffset &&
+                location.ILOffset < candidate.EndILOffset)
+            .OrderBy(candidate => candidate.EndILOffset - candidate.StartILOffset)
+            .FirstOrDefault() ?? candidates
+                .OrderBy(candidate => Math.Abs(
+                    (long)candidate.StartILOffset - location.ILOffset))
+                .First();
+        return variable with { Name = local.Name };
+    }
+
+    private static bool TryParseSyntheticLocal(string name, out int slot)
+    {
+        slot = -1;
+        return name.Length > 2 &&
+            name.StartsWith("V_", StringComparison.Ordinal) &&
+            int.TryParse(name.AsSpan(2), out slot) &&
+            slot >= 0;
+    }
 
     public DebugBreakpointBinding? BindingFor(Guid breakpointId) =>
         bindings.FirstOrDefault(value => value.BreakpointId == breakpointId);

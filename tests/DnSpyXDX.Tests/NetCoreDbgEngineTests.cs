@@ -977,9 +977,12 @@ public sealed class NetCoreDbgEngineTests
             Path.GetTempPath(),
             $"DnSpyXDX-symbol-less-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
+        var executableName = OperatingSystem.IsWindows()
+            ? "DnSpyXDX.Debugger.TestWorker.exe"
+            : "DnSpyXDX.Debugger.TestWorker";
         foreach (var fileName in new[]
         {
-            "DnSpyXDX.Debugger.TestWorker.exe",
+            executableName,
             "DnSpyXDX.Debugger.TestWorker.dll",
             "DnSpyXDX.Debugger.TestWorker.deps.json",
             "DnSpyXDX.Debugger.TestWorker.runtimeconfig.json"
@@ -1073,7 +1076,9 @@ public sealed class NetCoreDbgEngineTests
             "DnSpyXDX.Debugger.TestWorker.dll");
         public string ExecutablePath { get; } = Path.Combine(
             directory,
-            "DnSpyXDX.Debugger.TestWorker.exe");
+            OperatingSystem.IsWindows()
+                ? "DnSpyXDX.Debugger.TestWorker.exe"
+                : "DnSpyXDX.Debugger.TestWorker.dll");
 
         public void Dispose()
         {

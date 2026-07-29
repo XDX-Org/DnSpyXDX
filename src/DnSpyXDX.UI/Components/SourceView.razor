@@ -137,6 +137,7 @@ else
       var prepared = await Cache.GetModelAsync(key, Document.Text, token);
       token.ThrowIfCancellationRequested();
       model = prepared;
+      Debugger.RegisterDebugMap(Document.DebugMap);
       currentStatementLine = DebuggerSourceMap.FindLine(
         Document.DebugMap,
         prepared,
@@ -411,6 +412,7 @@ else
     }
 
     debugVariables = Debugger.Variables
+      .Select(Debugger.DisplayVariable)
       .Where(variable => !string.IsNullOrWhiteSpace(variable.Name))
       .GroupBy(variable => NormalizeVariableName(variable.Name), StringComparer.Ordinal)
       .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);

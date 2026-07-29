@@ -1,6 +1,7 @@
 using System.Reflection.Metadata;
 using System.Reflection.Metadata.Ecma335;
 using System.Reflection.PortableExecutable;
+using System.Text.RegularExpressions;
 using DnSpyXDX.Application;
 using DnSpyXDX.Decompilation;
 using DnSpyXDX.UI;
@@ -151,6 +152,28 @@ public sealed class DecompilerBackendTests
             breakpointLocation.ILOffset,
             point.Location.ILOffset + 1,
             point.EndILOffset - 1);
+
+        var local = Assert.Single(
+            document.DebugMap.LocalNames!,
+            candidate =>
+                candidate.Method == point.Location.Method &&
+                candidate.Slot == 0);
+        Assert.Contains(local.Name, document.Text, StringComparison.Ordinal);
+
+        var il = await backend.DecompileAsync(
+            target.Symbol,
+            DecompilerLanguage.IL);
+        var combined = await backend.DecompileAsync(
+            target.Symbol,
+            DecompilerLanguage.ILWithCSharp);
+        Assert.Matches(
+            $@"(?m)^\s*\[0\].*// {Regex.Escape(local.Name)}$",
+            il.Text);
+        Assert.Contains($"// {local.Name}", combined.Text, StringComparison.Ordinal);
+        Assert.Contains(il.DebugMap!.LocalNames!, candidate =>
+            candidate.Method == local.Method &&
+            candidate.Slot == local.Slot &&
+            candidate.Name == local.Name);
     }
 
     [Fact]

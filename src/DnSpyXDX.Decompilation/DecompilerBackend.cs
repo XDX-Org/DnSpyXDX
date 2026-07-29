@@ -14,6 +14,7 @@ using ICSharpCode.Decompiler.CSharp;
 using ICSharpCode.Decompiler.CSharp.OutputVisitor;
 using ICSharpCode.Decompiler.CSharp.Syntax;
 using ICSharpCode.Decompiler.Disassembler;
+using ICSharpCode.Decompiler.IL;
 using ICSharpCode.Decompiler.Metadata;
 using ICSharpCode.Decompiler.Semantics;
 using ICSharpCode.Decompiler.TypeSystem;
@@ -1126,7 +1127,64 @@ internal sealed class AssemblySession : IDisposable
                 .ThenBy(point => point.Length)
                 .ThenBy(point => point.Location.Method.MetadataToken)
                 .ThenBy(point => point.Location.ILOffset)
-                .ToArray());
+                .ToArray(),
+            BuildLocalNames(tree));
+    }
+
+    private IReadOnlyList<DebugDocumentLocalName> BuildLocalNames(SyntaxTree tree)
+    {
+        var variables = new HashSet<ILVariable>();
+        foreach (var node in tree.Descendants)
+        {
+            var variable = node switch
+            {
+                VariableInitializer initializer => initializer.GetILVariable(),
+                IdentifierExpression identifier => identifier.GetILVariable(),
+                ForeachStatement statement => statement.GetILVariable(),
+                _ => null
+            };
+            if (variable?.Index is not { } slot ||
+                slot < 0 ||
+                string.IsNullOrWhiteSpace(variable.Name) ||
+                variable.Kind is not (VariableKind.Local or
+                    VariableKind.PinnedLocal or
+                    VariableKind.PinnedRegionLocal or
+                    VariableKind.UsingLocal or
+                    VariableKind.ForeachLocal or
+                    VariableKind.DisplayClassLocal or
+                    VariableKind.PatternLocal) ||
+                variable.Function?.Method?.MetadataToken is not { } token ||
+                token.Kind != HandleKind.MethodDefinition)
+                continue;
+            variables.Add(variable);
+        }
+        return variables
+            .Select(variable =>
+            {
+                var instructions = variable.LoadInstructions.Cast<ILInstruction>()
+                    .Concat(variable.StoreInstructions.Cast<ILInstruction>())
+                    .Concat(variable.AddressInstructions.Cast<ILInstruction>())
+                    .ToArray();
+                var start = instructions.Length == 0
+                    ? 0
+                    : instructions.Min(instruction => instruction.StartILOffset);
+                var end = instructions.Length == 0
+                    ? int.MaxValue
+                    : instructions.Max(instruction => instruction.EndILOffset);
+                return new DebugDocumentLocalName(
+                    new DebugMethodId(
+                        Descriptor.ModuleMvid,
+                        MetadataTokens.GetToken(
+                            variable.Function!.Method!.MetadataToken)),
+                    variable.Index.GetValueOrDefault(),
+                    variable.Name!,
+                    start,
+                    Math.Max(start + 1, end));
+            })
+            .OrderBy(entry => entry.Method.MetadataToken)
+            .ThenBy(entry => entry.Slot)
+            .ThenBy(entry => entry.StartILOffset)
+            .ToArray();
     }
 
     private void InsertNamespaceLine(List<ClassifiedLine> lines, TypeDefinitionHandle typeHandle)
@@ -1361,6 +1419,7 @@ internal sealed class AssemblySession : IDisposable
         CancellationToken ct,
         bool showMetadataTokens)
     {
+        var localNames = BuildLocalNames(decompiler.Decompile([handle]));
         var raw = Disassemble(
             handle,
             ct,
@@ -1379,6 +1438,14 @@ internal sealed class AssemblySession : IDisposable
                 ? FormatMetadataTokens(rawLine)
                 : InlineMetadataToken.Replace(rawLine, "");
             var instruction = InstructionOffset.Match(rawLine);
+            var instructionOffset = instruction.Success
+                ? Convert.ToInt32(instruction.Groups[1].Value, 16)
+                : (int?)null;
+            line = AnnotateILLocals(
+                line,
+                methodToken,
+                instructionOffset,
+                localNames);
             if (instruction.Success && methodToken is { } token)
             {
                 var renderedInstruction = InstructionOffset.Match(line);
@@ -1396,7 +1463,7 @@ internal sealed class AssemblySession : IDisposable
             }
             output.AppendLine(line);
         }
-        return (output.ToString(), BuildILDebugMap(document, points));
+        return (output.ToString(), BuildILDebugMap(document, points, localNames));
     }
 
     private (string Text, DebugDocumentMap DebugMap) DisassembleWithCSharp(
@@ -1406,6 +1473,7 @@ internal sealed class AssemblySession : IDisposable
         bool showMetadataTokens)
     {
         var syntaxTree = decompiler.Decompile([handle]);
+        var localNames = BuildLocalNames(syntaxTree);
         using var writer = new StringWriter();
         var tokenWriter = TokenWriter.CreateWriterThatSetsLocationsInAST(writer, "");
         syntaxTree.AcceptVisitor(new CSharpOutputVisitor(tokenWriter, settings.CSharpFormattingOptions));
@@ -1452,6 +1520,13 @@ internal sealed class AssemblySession : IDisposable
             var renderedLine = showMetadataTokens
                 ? FormatMetadataTokens(line)
                 : InlineMetadataToken.Replace(line, "");
+            renderedLine = AnnotateILLocals(
+                renderedLine,
+                methodToken,
+                instruction.Success
+                    ? Convert.ToInt32(instruction.Groups[1].Value, 16)
+                    : null,
+                localNames);
             if (instruction.Success && methodToken is { } token)
             {
                 var renderedInstruction = InstructionOffset.Match(renderedLine);
@@ -1469,12 +1544,52 @@ internal sealed class AssemblySession : IDisposable
             }
             output.AppendLine(renderedLine);
         }
-        return (output.ToString(), BuildILDebugMap(document, debugPoints));
+        return (output.ToString(), BuildILDebugMap(document, debugPoints, localNames));
+    }
+
+    private static string AnnotateILLocals(
+        string line,
+        int? methodToken,
+        int? ilOffset,
+        IReadOnlyList<DebugDocumentLocalName> localNames)
+    {
+        if (methodToken is not { } token) return line;
+        int? slot = null;
+        if (ILLocalDeclaration.Match(line) is { Success: true } declaration)
+            slot = int.Parse(declaration.Groups[1].Value);
+        else if (ILLocalInstruction.Match(line) is { Success: true } instruction)
+            slot = int.Parse(instruction.Groups[1].Success
+                ? instruction.Groups[1].Value
+                : instruction.Groups[2].Value);
+        if (slot is not { } localSlot) return line;
+        var candidates = localNames
+            .Where(local =>
+                local.Method.MetadataToken == token &&
+                local.Slot == localSlot)
+            .ToArray();
+        if (candidates.Length == 0) return line;
+        string name;
+        if (ilOffset is { } offset)
+            name = candidates
+                .Where(local =>
+                    local.StartILOffset <= offset &&
+                    offset < local.EndILOffset)
+                .OrderBy(local => local.EndILOffset - local.StartILOffset)
+                .FirstOrDefault()?.Name ?? candidates
+                .OrderBy(local => Math.Abs((long)local.StartILOffset - offset))
+                .First().Name;
+        else
+            name = string.Join(" / ", candidates
+                .OrderBy(local => local.StartILOffset)
+                .Select(local => local.Name)
+                .Distinct(StringComparer.Ordinal));
+        return $"{line} // {name}";
     }
 
     private DebugDocumentMap BuildILDebugMap(
         SymbolId document,
-        IReadOnlyList<ILDocumentPoint> points)
+        IReadOnlyList<ILDocumentPoint> points,
+        IReadOnlyList<DebugDocumentLocalName>? localNames = null)
     {
         var mapped = new List<DebugDocumentSequencePoint>(points.Count);
         foreach (var method in points.GroupBy(point => point.MethodToken))
@@ -1497,7 +1612,8 @@ internal sealed class AssemblySession : IDisposable
         }
         return new DebugDocumentMap(
             document,
-            mapped.OrderBy(point => point.StartOffset).ToArray());
+            mapped.OrderBy(point => point.StartOffset).ToArray(),
+            localNames);
     }
 
     private readonly record struct ILDocumentPoint(
@@ -1538,6 +1654,8 @@ internal sealed class AssemblySession : IDisposable
 
     private static readonly Regex MethodToken = new(@"\.method\s+/\*\s*([0-9A-Fa-f]{8})\s*\*/", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex InstructionOffset = new(@"\bIL_([0-9A-Fa-f]+):", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex ILLocalDeclaration = new(@"^\s*\[(\d+)\]", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex ILLocalInstruction = new(@"\b(?:ldloc|stloc|ldloca)(?:\.s)?(?:\.(\d+)|\s+(?:V_)?(\d+))\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex MetadataTokenLine = new(@"(?m)^([ \t]*)(.*?/\*\s*[0-9A-Fa-f]{8}\s*\*/.*)$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex InlineMetadataToken = new(@"\s*/\*\s*([0-9A-Fa-f]{8})\s*\*/", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex TokenCommentLine = new(@"^\s*//\s*Token:\s*0x([0-9A-Fa-f]{8})\b", RegexOptions.Compiled | RegexOptions.CultureInvariant);

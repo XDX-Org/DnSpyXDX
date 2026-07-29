@@ -96,7 +96,7 @@
                     @onclick="() => Debugger.ToggleVariableAsync(entry.Variable)">
               <span class="debugger-variable-name">
                 <i class="@(expandable ? expanded ? "expanded" : "expandable" : null)"></i>
-                @entry.Variable.Name
+                @Debugger.DisplayVariable(entry.Variable).Name
               </span>
               <code>@entry.Variable.Value</code>
               <small>@entry.Variable.Type</small>
@@ -164,7 +164,13 @@
         {
           @foreach (var message in Debugger.Output)
           {
-            <div><small>@message.Category</small><span>@message.Message</span></div>
+            <div>
+              @if (!string.Equals(message.Category, "stdout", StringComparison.OrdinalIgnoreCase))
+              {
+                <small>@message.Category</small>
+              }
+              <span>@message.Message</span>
+            </div>
           }
         }
       </div>

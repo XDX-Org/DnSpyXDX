@@ -151,6 +151,40 @@ public sealed class DebuggerWorkspaceTests
     }
 
     [Fact]
+    public void Decompiled_local_name_is_displayed_without_changing_debugger_identity()
+    {
+        var method = new DebugMethodId(Guid.NewGuid(), 0x06000001);
+        var debugger = new FakeDebuggerService();
+        using var workspace = new DebuggerWorkspace(debugger);
+        workspace.RegisterDebugMap(new DebugDocumentMap(
+            new SymbolId(method.ModuleMvid, 0x02000001),
+            [],
+            [new DebugDocumentLocalName(method, 0, "original")]));
+        debugger.ThreadResults =
+            [new DebugThread(new DebugThreadId(1), "Main", true)];
+        var frame = new DebugStackFrame(
+            new DebugFrameId(1),
+            debugger.ThreadResults[0].Id,
+            "Run",
+            new DebugCodeLocation(method, 4));
+        debugger.FrameResults[debugger.ThreadResults[0].Id] = [frame];
+
+        debugger.PublishPaused(debugger.ThreadResults[0].Id);
+
+        var variable = new DebugVariable(
+            "V_0",
+            "40",
+            "int",
+            default,
+            "V_0",
+            true);
+        var displayed = workspace.DisplayVariable(variable);
+        Assert.Equal("original", displayed.Name);
+        Assert.Equal("V_0", displayed.EvaluateName);
+        Assert.True(displayed.CanSetValue);
+    }
+
+    [Fact]
     public void Empty_scope_does_not_request_reserved_zero_variable_reference()
     {
         var thread = new DebugThread(new DebugThreadId(2), "Main", true);
@@ -207,7 +241,7 @@ public sealed class DebuggerWorkspaceTests
         public IReadOnlyList<DebugBreakpointBinding> Breakpoints { get; private set; } = [];
         public IReadOnlyList<DebugBreakpoint> LastBreakpoints { get; private set; } = [];
         public DebugStartRequest? LastStartRequest { get; private set; }
-        public IReadOnlyList<DebugThread> ThreadResults { get; init; } = [];
+        public IReadOnlyList<DebugThread> ThreadResults { get; set; } = [];
         public Dictionary<DebugThreadId, IReadOnlyList<DebugStackFrame>>
             FrameResults { get; } = [];
         public Dictionary<DebugFrameId, IReadOnlyList<DebugScope>>
