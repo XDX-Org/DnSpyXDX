@@ -7,19 +7,26 @@ public sealed class DebuggerAutomationService : IDisposable
 {
     private readonly IDebuggerService debugger;
     private readonly DebuggerWorkspace workspace;
+    private readonly McpServerSettings settings;
+    private readonly Timer leaseTimer;
     private readonly object gate = new();
     private Guid sessionId;
     private long stopGeneration;
     private TaskCompletionSource changed = NewSignal();
+    private DateTimeOffset lastAccess;
+    private int waiting;
     private bool disposed;
 
     public DebuggerAutomationService(
         IDebuggerService debugger,
-        DebuggerWorkspace workspace)
+        DebuggerWorkspace workspace,
+        McpServerSettings settings)
     {
         this.debugger = debugger;
         this.workspace = workspace;
+        this.settings = settings;
         debugger.StateChanged += OnStateChanged;
+        leaseTimer = new(_ => _ = ExpireLeaseAsync(), null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
     }
 
     public async Task<McpDebugStatus> LaunchAsync(
@@ -36,6 +43,7 @@ public sealed class DebuggerAutomationService : IDisposable
                 throw new InvalidOperationException("A debugger automation session is already active.");
             sessionId = Guid.NewGuid();
             stopGeneration = 0;
+            lastAccess = DateTimeOffset.UtcNow;
         }
         try
         {
@@ -64,6 +72,8 @@ public sealed class DebuggerAutomationService : IDisposable
         int? processId,
         string? host,
         int? port,
+        string? runtimeVersion,
+        DebugScriptingBackend scriptingBackend,
         CancellationToken cancellationToken)
     {
         lock (gate)
@@ -73,11 +83,18 @@ public sealed class DebuggerAutomationService : IDisposable
                 throw new InvalidOperationException("A debugger automation session is already active.");
             sessionId = Guid.NewGuid();
             stopGeneration = 0;
+            lastAccess = DateTimeOffset.UtcNow;
         }
         try
         {
             await debugger.StartAsync(
-                new DebugAttachRequest(runtime, processId, host, port),
+                new DebugAttachRequest(
+                    runtime,
+                    processId,
+                    host,
+                    port,
+                    runtimeVersion,
+                    scriptingBackend),
                 cancellationToken);
             return Status(sessionId);
         }
@@ -112,28 +129,38 @@ public sealed class DebuggerAutomationService : IDisposable
         CancellationToken cancellationToken)
     {
         RequireSession(requestedSession);
+        if (Interlocked.CompareExchange(ref waiting, 1, 0) != 0)
+            throw new InvalidOperationException(
+                "A wait is already active for this debugger session.");
         if (timeoutMilliseconds is <= 0 or > 300_000)
             throw new ArgumentOutOfRangeException(
                 nameof(timeoutMilliseconds),
                 "Timeout must be between 1 and 300000 milliseconds.");
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(timeoutMilliseconds);
-        while (true)
+        try
         {
-            var status = Status(requestedSession);
-            if (status.Status is DebugSessionStatus.Paused or
-                DebugSessionStatus.Terminated or DebugSessionStatus.Faulted)
-                return status;
-            Task signal;
-            lock (gate) signal = changed.Task;
-            try
+            while (true)
             {
-                await signal.WaitAsync(timeout.Token);
+                var status = Status(requestedSession);
+                if (status.Status is DebugSessionStatus.Paused or
+                    DebugSessionStatus.Terminated or DebugSessionStatus.Faulted)
+                    return status;
+                Task signal;
+                lock (gate) signal = changed.Task;
+                try
+                {
+                    await signal.WaitAsync(timeout.Token);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    throw new TimeoutException("The target did not stop before the timeout.");
+                }
             }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                throw new TimeoutException("The target did not stop before the timeout.");
-            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref waiting, 0);
         }
     }
 
@@ -156,32 +183,51 @@ public sealed class DebuggerAutomationService : IDisposable
 
     public async Task<IReadOnlyList<DebugStackFrame>> StackAsync(
         Guid requestedSession,
+        long requestedStopGeneration,
         DebugThreadId thread,
         CancellationToken cancellationToken)
     {
-        RequirePaused(requestedSession);
+        RequirePaused(requestedSession, requestedStopGeneration);
         return await debugger.GetStackTraceAsync(thread, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<DebugScope>> ScopesAsync(
+        Guid requestedSession,
+        long requestedStopGeneration,
+        DebugFrameId frame,
+        CancellationToken cancellationToken)
+    {
+        RequirePaused(requestedSession, requestedStopGeneration);
+        return await debugger.GetScopesAsync(frame, cancellationToken);
     }
 
     public async Task<IReadOnlyList<McpDebugScopeVariables>> VariablesAsync(
         Guid requestedSession,
+        long requestedStopGeneration,
         DebugFrameId frame,
         int maximumVariables,
+        int maximumDepth,
         CancellationToken cancellationToken)
     {
-        RequirePaused(requestedSession);
+        RequirePaused(requestedSession, requestedStopGeneration);
         if (maximumVariables is <= 0 or > 1_000)
             throw new ArgumentOutOfRangeException(nameof(maximumVariables));
+        if (maximumDepth is < 0 or > 3)
+            throw new ArgumentOutOfRangeException(nameof(maximumDepth));
+        var remaining = maximumVariables;
+        var visited = new HashSet<DebugVariableReference>();
         var result = new List<McpDebugScopeVariables>();
         foreach (var scope in await debugger.GetScopesAsync(frame, cancellationToken))
         {
-            var variables = scope.Variables.Value == 0
+            var variables = scope.Variables.Value == 0 || remaining == 0
                 ? []
-                : (await debugger.GetVariablesAsync(scope.Variables, cancellationToken))
-                    .Take(maximumVariables)
-                    .Select(workspace.DisplayVariable)
-                    .Select(McpDebugVariable.From)
-                    .ToArray();
+                : await ReadVariablesAsync(
+                    scope.Variables,
+                    maximumDepth,
+                    visited,
+                    () => remaining,
+                    value => remaining = value,
+                    cancellationToken);
             result.Add(new(scope.Name, variables));
         }
         return result;
@@ -189,11 +235,12 @@ public sealed class DebuggerAutomationService : IDisposable
 
     public async Task<DebugEvaluationResult> EvaluateAsync(
         Guid requestedSession,
+        long requestedStopGeneration,
         string expression,
         DebugFrameId? frame,
         CancellationToken cancellationToken)
     {
-        RequirePaused(requestedSession);
+        RequirePaused(requestedSession, requestedStopGeneration);
         return await debugger.EvaluateAsync(expression, frame, cancellationToken);
     }
 
@@ -217,11 +264,12 @@ public sealed class DebuggerAutomationService : IDisposable
 
     public async Task<McpDebugStatus> StepAsync(
         Guid requestedSession,
+        long requestedStopGeneration,
         DebugThreadId thread,
         DebugStepKind kind,
         CancellationToken cancellationToken)
     {
-        RequirePaused(requestedSession);
+        RequirePaused(requestedSession, requestedStopGeneration);
         await debugger.StepAsync(thread, kind, cancellationToken);
         return Status(requestedSession);
     }
@@ -244,6 +292,7 @@ public sealed class DebuggerAutomationService : IDisposable
         if (disposed) return;
         disposed = true;
         debugger.StateChanged -= OnStateChanged;
+        leaseTimer.Dispose();
     }
 
     private void OnStateChanged(DebugSessionSnapshot snapshot)
@@ -261,18 +310,76 @@ public sealed class DebuggerAutomationService : IDisposable
         signal.TrySetResult();
     }
 
-    private void RequirePaused(Guid requestedSession)
+    private void RequirePaused(Guid requestedSession, long? requestedStopGeneration = null)
     {
         RequireSession(requestedSession);
         if (debugger.Snapshot.Status != DebugSessionStatus.Paused)
             throw new InvalidOperationException("The debug target must be paused.");
+        lock (gate)
+            if (requestedStopGeneration is { } value && value != stopGeneration)
+                throw new InvalidOperationException(
+                    "stale_reference: the target has resumed or stopped again.");
     }
 
     private void RequireSession(Guid requestedSession)
     {
         lock (gate)
+        {
             if (requestedSession == Guid.Empty || requestedSession != sessionId)
                 throw new KeyNotFoundException("The debugger automation session is unknown or expired.");
+            lastAccess = DateTimeOffset.UtcNow;
+        }
+    }
+
+    private async Task<IReadOnlyList<McpDebugVariable>> ReadVariablesAsync(
+        DebugVariableReference reference,
+        int depth,
+        HashSet<DebugVariableReference> visited,
+        Func<int> getRemaining,
+        Action<int> setRemaining,
+        CancellationToken cancellationToken)
+    {
+        if (reference.Value == 0 || getRemaining() == 0 || !visited.Add(reference)) return [];
+        var source = await debugger.GetVariablesAsync(reference, cancellationToken);
+        var result = new List<McpDebugVariable>();
+        foreach (var raw in source)
+        {
+            var remaining = getRemaining();
+            if (remaining == 0) break;
+            setRemaining(remaining - 1);
+            var variable = workspace.DisplayVariable(raw);
+            var children = depth > 0
+                ? await ReadVariablesAsync(
+                    variable.Variables,
+                    depth - 1,
+                    visited,
+                    getRemaining,
+                    setRemaining,
+                    cancellationToken)
+                : [];
+            result.Add(McpDebugVariable.From(variable, children));
+        }
+        return result;
+    }
+
+    private async Task ExpireLeaseAsync()
+    {
+        lock (gate)
+        {
+            if (disposed || sessionId == Guid.Empty ||
+                settings.DebugSessionLease <= TimeSpan.Zero ||
+                DateTimeOffset.UtcNow - lastAccess < settings.DebugSessionLease)
+                return;
+            sessionId = Guid.Empty;
+        }
+        try
+        {
+            if (debugger.Snapshot.Status is DebugSessionStatus.Running or DebugSessionStatus.Paused)
+                await debugger.TerminateAsync();
+        }
+        catch
+        {
+        }
     }
 
     private static TaskCompletionSource NewSignal() =>
@@ -298,16 +405,20 @@ public sealed record McpDebugVariable(
     long VariablesReference,
     string? EvaluateName,
     DebugVariableNameOrigin NameOrigin,
-    int? Slot)
+    int? Slot,
+    IReadOnlyList<McpDebugVariable> Children)
 {
-    public static McpDebugVariable From(DebugVariable value) => new(
+    public static McpDebugVariable From(
+        DebugVariable value,
+        IReadOnlyList<McpDebugVariable>? children = null) => new(
         value.Name,
         value.Value.Length <= 4096 ? value.Value : value.Value[..4096],
         value.Type,
         value.Variables.Value,
         value.EvaluateName,
         value.NameOrigin,
-        value.Slot);
+        value.Slot,
+        children ?? []);
 }
 
 public sealed record McpDebugScopeVariables(

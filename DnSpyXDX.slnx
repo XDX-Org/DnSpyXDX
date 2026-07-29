@@ -3,7 +3,9 @@
     <Project Path="src/DnSpyXDX.Application/DnSpyXDX.Application.csproj" />
     <Project Path="src/DnSpyXDX.Decompilation/DnSpyXDX.Decompilation.csproj" />
     <Project Path="src/DnSpyXDX.Debugging/DnSpyXDX.Debugging.csproj" />
-    <Project Path="src/DnSpyXDX.Debugging.Backends/DnSpyXDX.Debugging.Backends.csproj" />
+    <Project Path="src/DnSpyXDX.Debugging.CoreClr/DnSpyXDX.Debugging.CoreClr.csproj" />
+    <Project Path="src/DnSpyXDX.Debugging.Mono/DnSpyXDX.Debugging.Mono.csproj" />
+    <Project Path="src/DnSpyXDX.Debugging.UnityMono/DnSpyXDX.Debugging.UnityMono.csproj" />
     <Project Path="src/DnSpyXDX.Debugging.Protocol/DnSpyXDX.Debugging.Protocol.csproj" />
     <Project Path="src/DnSpyXDX.Debugger.Worker/DnSpyXDX.Debugger.Worker.csproj" />
     <Project Path="src/DnSpyXDX.Export/DnSpyXDX.Export.csproj" />

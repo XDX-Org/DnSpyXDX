@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../DnSpyXDX.Application/DnSpyXDX.Application.csproj" />
+    <ProjectReference Include="../DnSpyXDX.Debugging/DnSpyXDX.Debugging.csproj" />
+    <ProjectReference Include="../../third_party/debugger-libs/Mono.Debugger.Soft/Mono.Debugger.Soft.csproj" />
+    <PackageReference Include="Mono.Cecil" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../DnSpyXDX.Debugging/MonoSoftDebugger.cs" Link="MonoSoftDebugger.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="DnSpyXDX.Tests" />
+  </ItemGroup>
+</Project>

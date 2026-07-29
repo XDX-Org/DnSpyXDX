@@ -139,6 +139,57 @@ public sealed class MonoSoftDebuggerEngineTests
                 default));
     }
 
+    [Theory]
+    [InlineData("2019.4.40f1", "legacy")]
+    [InlineData("2022.3.20f1", "lts")]
+    [InlineData("6000.0.1f1", "unity6")]
+    public void Unity_selects_compatible_mono_profile(string version, string expected)
+    {
+        Assert.Equal(expected, UnityMonoCompatibilityProfile.Select(version)?.Name);
+    }
+
+    [Fact]
+    public async Task Unity_rejects_il2cpp_before_connecting()
+    {
+        var factory = new FakeSessionFactory(new FakeSession());
+        var monoProvider = new MonoSoftDebuggerEngineProvider(
+            new MonoSoftDebuggerOptions(), factory);
+        await using var inner = await monoProvider.CreateAsync(default);
+        await using var engine = new UnityMonoDebuggerEngine(inner);
+
+        await Assert.ThrowsAsync<NotSupportedException>(() => engine.StartAsync(
+            new DebugAttachRequest(
+                DebugRuntimeKind.UnityMono,
+                Host: "127.0.0.1",
+                Port: 56000,
+                RuntimeVersion: "2022.3.20f1",
+                ScriptingBackend: DebugScriptingBackend.Il2Cpp),
+            default));
+        Assert.Null(factory.Host);
+    }
+
+    [Fact]
+    public async Task Unity_mono_connects_through_explicit_endpoint()
+    {
+        var factory = new FakeSessionFactory(new FakeSession());
+        var monoProvider = new MonoSoftDebuggerEngineProvider(
+            new MonoSoftDebuggerOptions(), factory);
+        await using var inner = await monoProvider.CreateAsync(default);
+        await using var engine = new UnityMonoDebuggerEngine(inner);
+
+        await engine.StartAsync(
+            new DebugAttachRequest(
+                DebugRuntimeKind.UnityMono,
+                Host: "127.0.0.1",
+                Port: 56000,
+                RuntimeVersion: "2022.3.20f1",
+                ScriptingBackend: DebugScriptingBackend.Managed),
+            default);
+
+        Assert.Equal("127.0.0.1", factory.Host);
+        Assert.Equal(56000, factory.Port);
+    }
+
     private static DebugBreakpoint CreateBreakpoint() =>
         new(
             Guid.NewGuid(),

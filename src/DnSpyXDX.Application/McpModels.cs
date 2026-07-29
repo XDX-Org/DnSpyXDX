@@ -15,6 +15,7 @@ public sealed class McpServerSettings
     public int MaximumOpenAssemblies { get; set; } = 32;
     public int MaximumConcurrentRequests { get; set; } = 2;
     public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(30);
+    public TimeSpan DebugSessionLease { get; set; } = TimeSpan.FromMinutes(10);
     public IReadOnlyList<string> AllowedRoots { get { lock (gate) return allowedRoots; } }
 
     public void SetAllowedRoots(IEnumerable<string> roots)

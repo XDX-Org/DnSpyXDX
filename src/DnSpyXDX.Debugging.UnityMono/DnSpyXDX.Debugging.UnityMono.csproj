@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../DnSpyXDX.Application/DnSpyXDX.Application.csproj" />
+    <ProjectReference Include="../DnSpyXDX.Debugging.Mono/DnSpyXDX.Debugging.Mono.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="../DnSpyXDX.Debugging/UnityMonoDebugger.cs" Link="UnityMonoDebugger.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="DnSpyXDX.Tests" />
+  </ItemGroup>
+</Project>

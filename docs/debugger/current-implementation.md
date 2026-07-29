@@ -1,7 +1,7 @@
 # Debugger current implementation
 
-Reviewed on 2026-07-29 from the `debug` branch. This describes the code as it exists, including
-the pinned NetCoreDbg integration and current defects. It is not a proposed architecture.
+Reviewed on 2026-07-29 from the `debug` branch after the detached-worker migration. This describes
+the implemented system, including the pinned NetCoreDbg integration.
 
 ## Runtime identity
 
@@ -25,17 +25,17 @@ The public models and `IDebuggerService` contract are in:
 ```text
 SourceView / DebuggerView
         |
-DebuggerWorkspace                 UI state and decompiler projection
+DebuggerWorkspace                  UI state and decompiler projection
         |
-IDebuggerService / DebuggerService lifecycle, serialization and snapshots
+IDebuggerService / DebuggerService lifecycle and snapshots
         |
-IDebuggerEngineRegistry
-        |---------------------------|
-NetCoreDbgEngine              MonoSoftDebuggerEngine
+WorkerDebuggerEngine               versioned DnSpyXDX protocol
+        |
+DnSpyXDX.Debugger.Worker process
+        |----------------------------|
+NetCoreDbgEngine              Mono / UnityMono engine
         |                           |
-DebuggerWorker + DapConnection     Mono.Debugger.Soft
-        |
-pinned netcoredbg process
+DAP + pinned NetCoreDbg       Mono.Debugger.Soft
 ```
 
 ### Application contract
@@ -64,14 +64,26 @@ becomes `DebugEngineFaulted`, which currently moves the complete service session
 
 ### Engine selection
 
-`DebuggerEngineRegistry` selects one provider by `DebugRuntimeKind`:
+`DebuggerEngineRegistry` selects one worker-backed provider by `DebugRuntimeKind`:
 
-- `CoreClr` uses `NetCoreDbgEngineProvider`.
-- `Mono` uses `MonoSoftDebuggerEngineProvider`.
-- `UnityMono` exists in the model but has no registered provider.
+- `CoreClr` dispatches to `NetCoreDbgEngineProvider` inside the worker.
+- `Mono` dispatches to `MonoSoftDebuggerEngineProvider` inside the worker.
+- `UnityMono` dispatches to a dedicated Unity compatibility wrapper inside the worker.
 
-Both implemented providers and the shared service/workspace are registered as singletons in
-`src/DnSpyXDX.Host/Program.cs`.
+The host registers only `WorkerDebuggerEngineProvider`; backend assemblies and Mono dependencies
+are absent from the host dependency graph.
+
+## Detached worker protocol
+
+`DnSpyXDX.Debugging.Protocol` defines bounded length-prefixed messages. Every message contains the
+protocol version, session UUID, generation, sequence, command/event name, and optional breakpoint
+revision. Replies correlate by sequence. Another session/generation is rejected, cancelled late
+replies are ignored, and protocol failure faults pending operations.
+
+`DnSpyXDX.Debugger.Worker` owns exactly one runtime engine. `eng/DebuggerWorker.targets` publishes
+it under `debuggers/worker/<rid>`; the pinned NetCoreDbg payload remains under
+`debuggers/netcoredbg/<rid>`. Shutdown requests engine termination/detach, requests worker shutdown,
+then kills the process tree after a bounded timeout.
 
 ## CoreCLR and NetCoreDbg
 
@@ -155,33 +167,20 @@ The engine keeps three related collections:
 An `xdx/ilBreakpoint` event is parsed, merged into `breakpointBindings`, reordered using
 `breakpointOrder`, then raised as `DebugEngineBreakpointsChanged`.
 
-### Known event race
+### Stale-event handling
 
-The current event merge is not robust when breakpoint sets change quickly.
+Every complete breakpoint set receives an increasing worker revision. Responses echo the revision;
+events carry the active revision. The host applies only its current revision. NetCoreDbg events
+with a well-formed UUID from a retired set are ignored before strict binding parsing. Malformed
+UUIDs and invalid runtime locations still fault the backend.
 
-`HandleIlBreakpoint` copies the current `requestedBreakpoints` reference and calls
-`ParseIlBreakpointBinding`. That parser rejects an ID unless it occurs in that latest set. A valid
-late event for a breakpoint removed or replaced by a newer `xdx/setIlBreakpoints` request therefore
-throws:
+The former failure was:
 
 ```text
 Invalid NetCoreDbg xdx/ilBreakpoint event: NetCoreDbg IL breakpoint response contains an unknown or invalid id.
 ```
 
-The later `ContainsKey` check was intended to discard stale events, but parsing throws before that
-check is reached. `OnDapEvent` converts the exception to `DebugEngineFaulted`, and
-`DebuggerService` faults the complete session.
-
-This can also represent genuinely malformed adapter data, because the diagnostic does not include
-the received ID or distinguish a missing/invalid UUID from a well-formed stale UUID.
-
-Areas to investigate on this branch:
-
-1. Log the raw event sequence and UUID together with breakpoint-set revisions.
-2. Serialize or revision breakpoint-set requests so responses cannot overwrite newer state.
-3. Ignore well-formed event UUIDs that belong to a retired set.
-4. Continue faulting on malformed UUIDs or invalid location fields.
-5. Add a test where an event from set A arrives after set B becomes current.
+That path now has a regression test where set A is removed before its delayed event arrives.
 
 The wire contract is documented separately in `docs/netcoredbg-il-breakpoint-protocol.md`.
 
@@ -225,10 +224,24 @@ debug output. The literal `stdout` category label is hidden, but its message con
 
 ## Mono
 
-The Mono engine directly uses `Mono.Debugger.Soft` in the host process. It supports TCP attach,
+The Mono engine uses `Mono.Debugger.Soft` only in the detached worker process. It supports TCP attach,
 execution control, threads, frames, scopes, variables, arrays, and MVID/token/IL-offset
 breakpoints. It does not use `DebuggerWorker` or DAP. Expression evaluation, object-field
-expansion, process launch, and Unity-specific discovery remain incomplete.
+expansion and process launch remain incomplete. Unity uses a distinct provider, rejects IL2CPP,
+and selects an explicit compatibility profile when a Unity version is supplied.
+
+## MCP debugger automation
+
+The loopback bearer-authenticated MCP server exposes `debug_launch`, `debug_attach`, breakpoint
+replacement, event-driven stop waiting, status, threads, stack, bounded variable trees, evaluation,
+continue, pause, step, and explicit stop. Launch and assembly-path breakpoints are restricted to
+configured roots with symlink resolution. Mono/Unity MCP attach is loopback-only. Session IDs are
+opaque, frame operations require the current stop generation, only one wait is allowed, and idle
+sessions expire by lease. Variable results use the same decompiler name projection as the UI.
+
+Optional worker tracing writes direction, timestamp, session/generation, sequence, message name,
+breakpoint revision and error code. Message bodies, expressions, arguments, variables, environment,
+and target output are not written.
 
 ## Tests
 

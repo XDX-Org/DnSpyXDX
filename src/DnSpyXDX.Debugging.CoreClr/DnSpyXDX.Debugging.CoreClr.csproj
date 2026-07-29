@@ -2,15 +2,14 @@
   <ItemGroup>
     <ProjectReference Include="../DnSpyXDX.Application/DnSpyXDX.Application.csproj" />
     <ProjectReference Include="../DnSpyXDX.Debugging/DnSpyXDX.Debugging.csproj" />
-    <ProjectReference Include="../../third_party/debugger-libs/Mono.Debugger.Soft/Mono.Debugger.Soft.csproj" />
-    <PackageReference Include="Mono.Cecil" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="../DnSpyXDX.Debugging/CoreClrDebugger.cs" Link="CoreClrDebugger.cs" />
     <Compile Include="../DnSpyXDX.Debugging/DapConnection.cs" Link="DapConnection.cs" />
     <Compile Include="../DnSpyXDX.Debugging/DapMessageFramer.cs" Link="DapMessageFramer.cs" />
     <Compile Include="../DnSpyXDX.Debugging/DebuggerWorker.cs" Link="DebuggerWorker.cs" />
-    <Compile Include="../DnSpyXDX.Debugging/MonoSoftDebugger.cs" Link="MonoSoftDebugger.cs" />
-    <Compile Include="../DnSpyXDX.Debugging/UnityMonoDebugger.cs" Link="UnityMonoDebugger.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="DnSpyXDX.Tests" />
   </ItemGroup>
 </Project>

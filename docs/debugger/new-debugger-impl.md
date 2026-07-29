@@ -1,5 +1,25 @@
 # New debugger implementation plan
 
+## Implementation status
+
+Implemented on the `debug` branch:
+
+- versioned, bounded worker protocol with session generation, sequence correlation, structured
+  errors, and breakpoint revisions;
+- supervised detached workers for CoreCLR, Mono, and Unity Mono;
+- separate CoreCLR, Mono, and Unity Mono backend assemblies loaded only by the worker;
+- pinned XDX-Org NetCoreDbg payload with DAP contained inside the CoreCLR backend;
+- stale breakpoint revision filtering, including the delayed `xdx/ilBreakpoint` regression;
+- local name origin, IL slot and lifetime metadata, plus shared decompiler-name projection;
+- Unity version profiles, explicit endpoints, and IL2CPP rejection;
+- MCP launch, attach, breakpoint, wait, status, thread, stack, scope, variable, evaluation,
+  execution-control, and stop tools with path/endpoint limits and session leases;
+- opt-in metadata-only worker traces that omit message bodies and debugger values.
+
+Automatic Unity player discovery and live Unity assembly-reload verification require real Unity
+Editor/player fixtures. The contract and dedicated discovery service are present; explicit
+loopback attach is the supported deterministic path until those fixtures are available.
+
 ## Goal
 
 Detach all runtime debuggers from the DnSpyXDX host process. The host retains one debugger UI and

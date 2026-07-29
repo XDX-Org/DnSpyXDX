@@ -41,6 +41,10 @@ internal sealed class UnityMonoDebuggerEngine(IDebuggerEngine inner) : IDebugger
             throw new ArgumentException(
                 "Unity Mono debugging requires an explicit discovered host and port.",
                 nameof(request));
+        if (attach.ScriptingBackend == DebugScriptingBackend.Il2Cpp)
+            throw new NotSupportedException(
+                "Unity IL2CPP is native code and cannot use the managed Mono debugger.");
+        _ = UnityMonoCompatibilityProfile.Select(attach.RuntimeVersion);
         var monoRequest = new DebugAttachRequest(
             DebugRuntimeKind.Mono,
             attach.ProcessId,
@@ -88,4 +92,30 @@ internal sealed class UnityMonoDebuggerEngine(IDebuggerEngine inner) : IDebugger
         CancellationToken cancellationToken) =>
         inner.EvaluateAsync(expression, frame, cancellationToken);
     public ValueTask DisposeAsync() => inner.DisposeAsync();
+}
+
+public sealed record UnityMonoCompatibilityProfile(
+    string Name,
+    int MinimumMajor,
+    int MaximumMajor)
+{
+    private static readonly UnityMonoCompatibilityProfile[] Profiles =
+    [
+        new("legacy", 2018, 2020),
+        new("lts", 2021, 2023),
+        new("unity6", 6000, 6999)
+    ];
+
+    public static UnityMonoCompatibilityProfile? Select(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version)) return null;
+        var majorText = version.Split('.', 2)[0];
+        if (!int.TryParse(majorText, out var major))
+            throw new NotSupportedException(
+                $"Unity version '{version}' cannot be negotiated.");
+        return Profiles.FirstOrDefault(value =>
+                value.MinimumMajor <= major && major <= value.MaximumMajor) ??
+            throw new NotSupportedException(
+                $"Unity version '{version}' has no supported Mono compatibility profile.");
+    }
 }

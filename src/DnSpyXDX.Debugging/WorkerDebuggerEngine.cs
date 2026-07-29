@@ -12,7 +12,8 @@ public sealed record WorkerDebuggerOptions(
     TimeSpan? ShutdownTimeout = null,
     string? NetCoreDbgPath = null,
     IReadOnlyList<string>? NetCoreDbgArguments = null,
-    TimeSpan? NetCoreDbgStartupTimeout = null);
+    TimeSpan? NetCoreDbgStartupTimeout = null,
+    string? TracePath = null);
 
 public sealed class WorkerDebuggerEngineProvider : IDebuggerEngineProvider
 {
@@ -79,6 +80,7 @@ internal sealed class WorkerDebuggerEngine(
     private readonly Guid sessionId = Guid.NewGuid();
     private readonly long generation = Interlocked.Increment(ref nextGeneration);
     private DebuggerWorkerProcess? process;
+    private DebuggerSessionTrace? trace;
     private long breakpointRevision;
     private int started;
     private int disposed;
@@ -105,6 +107,12 @@ internal sealed class WorkerDebuggerEngine(
             cancellationToken);
         process.Connection.EventReceived += OnWorkerEvent;
         process.Faulted += OnWorkerFaulted;
+        if (!string.IsNullOrWhiteSpace(options.TracePath))
+        {
+            trace = new(options.TracePath, sessionId, generation);
+            process.Connection.MessageSent += trace.Sent;
+            process.Connection.MessageReceived += trace.Received;
+        }
         var response = await process.Connection.SendRequestAsync(
             DebuggerWorkerCommands.Start,
             Body(DebuggerWorkerStartRequest.From(request) with
@@ -204,9 +212,16 @@ internal sealed class WorkerDebuggerEngine(
         {
             process.Connection.EventReceived -= OnWorkerEvent;
             process.Faulted -= OnWorkerFaulted;
+            if (trace is not null)
+            {
+                process.Connection.MessageSent -= trace.Sent;
+                process.Connection.MessageReceived -= trace.Received;
+            }
             await process.DisposeAsync();
             process = null;
         }
+        trace?.Dispose();
+        trace = null;
     }
 
     private async Task CommandAsync(
@@ -297,6 +312,68 @@ internal sealed class WorkerDebuggerEngine(
     private static int? ToMilliseconds(TimeSpan? value) => value is null
         ? null
         : checked((int)value.Value.TotalMilliseconds);
+}
+
+internal sealed class DebuggerSessionTrace : IDisposable
+{
+    private readonly StreamWriter writer;
+    private readonly object gate = new();
+    private bool disposed;
+
+    public DebuggerSessionTrace(string path, Guid sessionId, long generation)
+    {
+        if (!Path.IsPathFullyQualified(path))
+            throw new ArgumentException("Debugger trace path must be absolute.", nameof(path));
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        writer = new(path, append: false, new UTF8Encoding(false));
+        Write("trace", new
+        {
+            timestamp = DateTimeOffset.UtcNow,
+            sessionId,
+            generation,
+            protocolVersion = DebuggerWorkerProtocol.Version
+        });
+    }
+
+    public void Sent(DebuggerWorkerMessage message) => Write("sent", Safe(message));
+    public void Received(DebuggerWorkerMessage message) => Write("received", Safe(message));
+
+    public void Dispose()
+    {
+        lock (gate)
+        {
+            if (disposed) return;
+            disposed = true;
+            writer.Dispose();
+        }
+    }
+
+    private void Write(string direction, object value)
+    {
+        lock (gate)
+        {
+            if (disposed) return;
+            writer.WriteLine(JsonSerializer.Serialize(
+                new { direction, value },
+                DebuggerWorkerProtocol.SerializerOptions));
+            writer.Flush();
+        }
+    }
+
+    private static object Safe(DebuggerWorkerMessage value) => new
+    {
+        timestamp = DateTimeOffset.UtcNow,
+        value.ProtocolVersion,
+        value.Kind,
+        value.SessionId,
+        value.Generation,
+        value.Sequence,
+        value.Name,
+        value.ReplyTo,
+        value.BreakpointRevision,
+        value.Success,
+        errorCode = value.Error?.Code
+    };
 }
 
 internal sealed class DebuggerWorkerProcess : IAsyncDisposable

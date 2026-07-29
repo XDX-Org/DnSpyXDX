@@ -701,7 +701,52 @@ public sealed class NetCoreDbgEngineTests
         Assert.True(binding.IsVerified);
         Assert.Equal(location, binding.BoundLocation);
         Assert.NotEmpty(await engine.GetThreadsAsync(CancellationToken.None));
+        var frame = Assert.Single(await engine.GetStackTraceAsync(
+            new DebugThreadId(7), CancellationToken.None));
+        var scope = Assert.Single(await engine.GetScopesAsync(
+            frame.Id, CancellationToken.None));
+        var variable = Assert.Single(await engine.GetVariablesAsync(
+            scope.Variables, CancellationToken.None));
+        Assert.Equal("answer", variable.Name);
+        Assert.Equal("42", variable.Value);
         await engine.TerminateAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Detached_worker_trace_redacts_message_bodies()
+    {
+        var tracePath = Path.Combine(
+            Path.GetTempPath(), $"dnspyxdx-debug-{Guid.NewGuid():N}.jsonl");
+        try
+        {
+            var provider = new WorkerDebuggerEngineProvider(
+                DebugRuntimeKind.CoreClr,
+                new WorkerDebuggerOptions(
+                    WorkerPath: DetachedWorkerPath(),
+                    ShutdownTimeout: TimeSpan.FromSeconds(2),
+                    NetCoreDbgPath: DotnetHost(),
+                    NetCoreDbgArguments: [TestWorkerPath(), "netcoredbg-il"],
+                    NetCoreDbgStartupTimeout: TimeSpan.FromSeconds(2),
+                    TracePath: tracePath));
+            await using (var engine = await provider.CreateAsync(CancellationToken.None))
+            {
+                await engine.StartAsync(
+                    new DebugAttachRequest(DebugRuntimeKind.CoreClr, ProcessId: 2468),
+                    CancellationToken.None);
+                _ = await engine.EvaluateAsync(
+                    "sensitive_expression", null, CancellationToken.None);
+                await engine.TerminateAsync(CancellationToken.None);
+            }
+
+            var trace = await File.ReadAllTextAsync(tracePath);
+            Assert.Contains("evaluate", trace);
+            Assert.DoesNotContain("sensitive_expression", trace);
+            Assert.DoesNotContain("\"body\"", trace);
+        }
+        finally
+        {
+            if (File.Exists(tracePath)) File.Delete(tracePath);
+        }
     }
 
     [Fact]

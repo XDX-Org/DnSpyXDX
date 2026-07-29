@@ -48,6 +48,8 @@ public sealed class DebuggerWorkerClientConnection : IAsyncDisposable
         }
     }
     public event Action<DebuggerWorkerMessage>? EventReceived;
+    public event Action<DebuggerWorkerMessage>? MessageSent;
+    public event Action<DebuggerWorkerMessage>? MessageReceived;
     public event Action<Exception>? Faulted;
 
     public async Task<DebuggerWorkerMessage> SendRequestAsync(
@@ -76,6 +78,7 @@ public sealed class DebuggerWorkerClientConnection : IAsyncDisposable
         try
         {
             await framer.WriteAsync(output, request, cancellationToken).ConfigureAwait(false);
+            InvokeSafely(MessageSent, request);
             return await completion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
         catch
@@ -120,6 +123,7 @@ public sealed class DebuggerWorkerClientConnection : IAsyncDisposable
             {
                 var message = await framer.ReadAsync(input, shutdown.Token).ConfigureAwait(false);
                 if (message is null) break;
+                InvokeSafely(MessageReceived, message);
                 if (message.SessionId != SessionId || message.Generation != Generation)
                     throw new InvalidDataException(
                         "Debugger worker message belongs to another session or generation.");

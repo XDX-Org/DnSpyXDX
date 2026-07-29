@@ -5,7 +5,9 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../DnSpyXDX.Debugging/DnSpyXDX.Debugging.csproj" />
-    <ProjectReference Include="../DnSpyXDX.Debugging.Backends/DnSpyXDX.Debugging.Backends.csproj" />
+    <ProjectReference Include="../DnSpyXDX.Debugging.CoreClr/DnSpyXDX.Debugging.CoreClr.csproj" />
+    <ProjectReference Include="../DnSpyXDX.Debugging.Mono/DnSpyXDX.Debugging.Mono.csproj" />
+    <ProjectReference Include="../DnSpyXDX.Debugging.UnityMono/DnSpyXDX.Debugging.UnityMono.csproj" />
     <ProjectReference Include="../DnSpyXDX.Debugging.Protocol/DnSpyXDX.Debugging.Protocol.csproj" />
   </ItemGroup>
 </Project>

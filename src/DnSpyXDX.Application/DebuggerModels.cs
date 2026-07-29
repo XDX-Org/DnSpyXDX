@@ -45,6 +45,12 @@ public enum DebugVariableNameOrigin
     Synthetic
 }
 
+public enum DebugScriptingBackend
+{
+    Managed,
+    Il2Cpp
+}
+
 public readonly record struct DebugThreadId(long Value);
 public readonly record struct DebugFrameId(long Value);
 public readonly record struct DebugVariableReference(long Value);
@@ -128,7 +134,10 @@ public sealed record DebugAttachRequest(
     DebugRuntimeKind Runtime,
     int? ProcessId = null,
     string? Host = null,
-    int? Port = null) : DebugStartRequest(Runtime);
+    int? Port = null,
+    string? RuntimeVersion = null,
+    DebugScriptingBackend ScriptingBackend = DebugScriptingBackend.Managed)
+    : DebugStartRequest(Runtime);
 
 public sealed record DebuggerCapabilities(
     bool SupportsLaunch,
