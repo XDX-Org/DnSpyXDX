@@ -24,6 +24,7 @@ namespace DnSpyXDX.Decompilation;
 public sealed class DecompilerBackend : IDecompilerBackend
 {
     private readonly ConcurrentDictionary<Guid, AssemblySession> sessions = new();
+    private readonly object sessionMutationLock = new();
     private readonly RuntimeDisplaySettings displaySettings;
     private readonly PersistentDecompileCache? documentCache;
     private readonly NeighborLoadingSettings neighborLoading;
@@ -64,23 +65,30 @@ public sealed class DecompilerBackend : IDecompilerBackend
             cancellationToken.ThrowIfCancellationRequested();
             var fullPath = Path.GetFullPath(path);
             if (!File.Exists(fullPath)) throw new FileNotFoundException("Assembly not found.", fullPath);
-            // Mark this file and its directory as workspace-local before the decompiler resolves references,
-            // so siblings it pulls in during construction are recognised as app-local and queued for
-            // promotion — and so the file is never re-queued to promote itself.
-            if (neighborLoading.AutoLoadReferencedAssemblies)
+            lock (sessionMutationLock)
             {
-                workspaceDirectories.TryAdd(Path.GetDirectoryName(fullPath)!, 0);
-                promotionAttempted.TryAdd(fullPath, 0);
+                var existing = sessions.Values.FirstOrDefault(candidate =>
+                    PathComparer.Equals(candidate.Descriptor.Path, fullPath));
+                if (existing is not null) return existing.Descriptor;
+
+                // Mark this file and its directory as workspace-local before the decompiler resolves references,
+                // so siblings it pulls in during construction are recognised as app-local and queued for
+                // promotion — and so the file is never re-queued to promote itself.
+                if (neighborLoading.AutoLoadReferencedAssemblies)
+                {
+                    workspaceDirectories.TryAdd(Path.GetDirectoryName(fullPath)!, 0);
+                    promotionAttempted.TryAdd(fullPath, 0);
+                }
+                var session = AssemblySession.Open(fullPath, displaySettings, documentCache,
+                    neighborLoading.AutoLoadReferencedAssemblies ? OnReferenceResolved : null);
+                if (!sessions.TryAdd(session.Descriptor.SessionId, session)) { session.Dispose(); throw new InvalidOperationException("Could not add assembly session."); }
+                // The reverse-reference index gates cross-assembly matches on the set of open assemblies, so
+                // every index becomes stale when that set changes; drop them all and let them rebuild lazily.
+                foreach (var other in sessions.Values) other.InvalidateAnalyzerIndex();
+                if (Interlocked.Exchange(ref warmUpStarted, 1) == 0) session.BeginWarmUp();
+                AssembliesChanged?.Invoke();
+                return session.Descriptor;
             }
-            var session = AssemblySession.Open(fullPath, displaySettings, documentCache,
-                neighborLoading.AutoLoadReferencedAssemblies ? OnReferenceResolved : null);
-            if (!sessions.TryAdd(session.Descriptor.SessionId, session)) { session.Dispose(); throw new InvalidOperationException("Could not add assembly session."); }
-            // The reverse-reference index gates cross-assembly matches on the set of open assemblies, so
-            // every index becomes stale when that set changes; drop them all and let them rebuild lazily.
-            foreach (var other in sessions.Values) other.InvalidateAnalyzerIndex();
-            if (Interlocked.Exchange(ref warmUpStarted, 1) == 0) session.BeginWarmUp();
-            AssembliesChanged?.Invoke();
-            return session.Descriptor;
         }, cancellationToken);
     }
 

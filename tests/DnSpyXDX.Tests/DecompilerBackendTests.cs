@@ -218,7 +218,7 @@ public sealed class DecompilerBackendTests
         var document = await backend.GetResourceAsync(resource.Id);
 
         Assert.Equal("Text", document.Kind);
-        Assert.Equal("DnSpyXDX embedded resource test\r\n", document.Text);
+        Assert.Equal("DnSpyXDX embedded resource test\n", document.Text?.ReplaceLineEndings("\n"));
         Assert.NotEmpty(document.Data);
         Assert.Contains("obfuscator", suspicious.Tooltip, StringComparison.OrdinalIgnoreCase);
     }
