@@ -817,9 +817,16 @@ internal sealed class NetCoreDbgEngine(
             throw new InvalidDataException(
                 "NetCoreDbg xdx/ilBreakpoint event has no body.");
 
+        var idText = OptionalString(body, "id");
+        if (!Guid.TryParse(idText, out var id))
+            throw new InvalidDataException(
+                "NetCoreDbg IL breakpoint event contains an invalid id.");
         IReadOnlyDictionary<Guid, DebugBreakpoint> requested;
         lock (breakpointsGate)
+        {
+            if (!requestedBreakpoints.ContainsKey(id)) return;
             requested = requestedBreakpoints;
+        }
 
         var binding = ParseIlBreakpointBinding(body, requested);
         IReadOnlyList<DebugBreakpointBinding> allBindings;

@@ -641,6 +641,39 @@ public sealed class NetCoreDbgEngineTests
     }
 
     [Fact]
+    public async Task Stale_il_breakpoint_event_does_not_fault_session()
+    {
+        var provider = new NetCoreDbgEngineProvider(
+            new CoreClrDebuggerOptions(
+                DotnetHost(),
+                [TestWorkerPath(), "netcoredbg-il-stale"],
+                TimeSpan.FromSeconds(2)));
+        await using var engine = await provider.CreateAsync(CancellationToken.None);
+        var events = Channel.CreateUnbounded<DebugEngineEvent>();
+        engine.EventReceived += value => events.Writer.TryWrite(value);
+        var breakpoint = new DebugBreakpoint(
+            Guid.NewGuid(),
+            new DebugCodeLocation(
+                new DebugMethodId(
+                    Guid.Parse("11111111-2222-3333-4444-555555555555"),
+                    0x06000001),
+                4));
+        await engine.StartAsync(
+            new DebugAttachRequest(DebugRuntimeKind.CoreClr, ProcessId: 2468),
+            CancellationToken.None);
+
+        _ = await engine.SetBreakpointsAsync([breakpoint], CancellationToken.None);
+        Assert.Empty(await engine.SetBreakpointsAsync([], CancellationToken.None));
+        await Task.Delay(50);
+
+        var received = new List<DebugEngineEvent>();
+        while (events.Reader.TryRead(out var value)) received.Add(value);
+        Assert.DoesNotContain(received, value => value is DebugEngineFaulted);
+        Assert.NotEmpty(await engine.GetThreadsAsync(CancellationToken.None));
+        await engine.TerminateAsync(CancellationToken.None);
+    }
+
+    [Fact]
     public async Task Live_extended_netcoredbg_binds_and_hits_il_breakpoint()
     {
         var adapter = Environment.GetEnvironmentVariable(

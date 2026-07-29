@@ -4,6 +4,7 @@
     <ProjectReference Include="../../src/DnSpyXDX.Application/DnSpyXDX.Application.csproj" />
     <ProjectReference Include="../../src/DnSpyXDX.Decompilation/DnSpyXDX.Decompilation.csproj" />
     <ProjectReference Include="../../src/DnSpyXDX.Debugging/DnSpyXDX.Debugging.csproj" />
+    <ProjectReference Include="../../src/DnSpyXDX.Debugging.Protocol/DnSpyXDX.Debugging.Protocol.csproj" />
     <ProjectReference Include="../../src/DnSpyXDX.Export/DnSpyXDX.Export.csproj" />
     <ProjectReference Include="../../src/DnSpyXDX.UI/DnSpyXDX.UI.csproj" />
     <ProjectReference Include="../../src/DnSpyXDX.Host/DnSpyXDX.Host.csproj" />

@@ -54,6 +54,7 @@ static async Task<int> RunNetCoreDbgAsync(string mode)
     string? startCommand = null;
     var stopAtEntry = false;
     JsonObject? pendingIlBinding = null;
+    JsonObject? staleIlBinding = null;
     JsonObject? pendingIlStop = null;
 
     async ValueTask SendAsync(JsonObject message)
@@ -164,6 +165,8 @@ static async Task<int> RunNetCoreDbgAsync(string mode)
                         pendingIlBinding["verified"] = true;
                         pendingIlBinding.Remove("message");
                     }
+                    if (enabled && mode == "netcoredbg-il-stale")
+                        staleIlBinding = binding.DeepClone().AsObject();
                     if (enabled && mode == "netcoredbg-il-entry")
                         pendingIlStop = binding.DeepClone().AsObject();
                 }
@@ -171,6 +174,13 @@ static async Task<int> RunNetCoreDbgAsync(string mode)
                     sequence,
                     command,
                     new JsonObject { ["breakpoints"] = breakpointBindings });
+                if (mode == "netcoredbg-il-stale" &&
+                    breakpointBindings.Count == 0 &&
+                    staleIlBinding is not null)
+                {
+                    await EventAsync("xdx/ilBreakpoint", staleIlBinding);
+                    staleIlBinding = null;
+                }
                 break;
             case "launch":
             case "attach":
