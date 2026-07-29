@@ -10,6 +10,7 @@ using Xunit;
 
 namespace DnSpyXDX.Tests;
 
+[Collection(LiveDebuggerTestCollection.Name)]
 public sealed class NetCoreDbgEngineTests
 {
     [Fact]
@@ -98,6 +99,33 @@ public sealed class NetCoreDbgEngineTests
         Assert.False(result.Capabilities.SupportsHitConditions);
         Assert.False(result.Capabilities.SupportsDecompiledCodeBreakpoints);
 
+        await engine.TerminateAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Extended_adapter_stops_at_managed_entry_without_symbols()
+    {
+        var provider = new NetCoreDbgEngineProvider(
+            new CoreClrDebuggerOptions(
+                DotnetHost(),
+                [TestWorkerPath(), "netcoredbg-il-entry"],
+                TimeSpan.FromSeconds(2)));
+        await using var engine = await provider.CreateAsync(
+            CancellationToken.None);
+
+        var result = await engine.StartAsync(
+            new DebugLaunchRequest(
+                DebugRuntimeKind.CoreClr,
+                TestWorkerPath(),
+                StopAtEntry: true),
+            CancellationToken.None);
+
+        var expected = EntryPointLocation(TestWorkerPath());
+        Assert.True(result.IsPaused);
+        Assert.Equal(
+            DebugStopReason.Entry,
+            Assert.IsType<DebugStopInfo>(result.InitialStop).Reason);
+        Assert.Equal(expected, result.InitialStop.Location);
         await engine.TerminateAsync(CancellationToken.None);
     }
 
@@ -351,20 +379,25 @@ public sealed class NetCoreDbgEngineTests
                 ["target"],
                 StopAtEntry: true),
             CancellationToken.None);
-        var initialStop = Assert.IsType<DebugStopInfo>(result.InitialStop);
-        var threads = await engine.GetThreadsAsync(CancellationToken.None);
-        var frames = await engine.GetStackTraceAsync(
-            initialStop.Thread,
-            CancellationToken.None);
+        try
+        {
+            var initialStop = Assert.IsType<DebugStopInfo>(result.InitialStop);
+            var threads = await engine.GetThreadsAsync(CancellationToken.None);
+            var frames = await engine.GetStackTraceAsync(
+                initialStop.Thread,
+                CancellationToken.None);
 
-        Assert.True(result.IsPaused);
-        Assert.Equal(DebugStopReason.Entry, initialStop.Reason);
-        Assert.Contains(
-            threads,
-            thread => thread.Id == initialStop.Thread);
-        Assert.NotEmpty(frames);
-
-        await engine.TerminateAsync(CancellationToken.None);
+            Assert.True(result.IsPaused);
+            Assert.Equal(DebugStopReason.Entry, initialStop.Reason);
+            Assert.Contains(
+                threads,
+                thread => thread.Id == initialStop.Thread);
+            Assert.NotEmpty(frames);
+        }
+        finally
+        {
+            await TerminateLaunchAsync(engine, result.ProcessId);
+        }
     }
 
     [Fact]
@@ -390,13 +423,17 @@ public sealed class NetCoreDbgEngineTests
                 StopAtEntry: true),
             CancellationToken.None);
 
-        Assert.True(result.IsPaused);
-        Assert.Equal(
-            DebugStopReason.Entry,
-            Assert.IsType<DebugStopInfo>(result.InitialStop).Reason);
-        await engine.TerminateAsync(CancellationToken.None);
-        if (result.ProcessId is { } processId)
-            await WaitForProcessExitAsync(processId);
+        try
+        {
+            Assert.True(result.IsPaused);
+            Assert.Equal(
+                DebugStopReason.Entry,
+                Assert.IsType<DebugStopInfo>(result.InitialStop).Reason);
+        }
+        finally
+        {
+            await TerminateLaunchAsync(engine, result.ProcessId);
+        }
     }
 
     [Fact]
@@ -424,16 +461,20 @@ public sealed class NetCoreDbgEngineTests
                 StopAtEntry: true),
             CancellationToken.None);
 
-        Assert.True(result.IsPaused);
-        var stop = Assert.IsType<DebugStopInfo>(result.InitialStop);
-        Assert.Equal(DebugStopReason.Entry, stop.Reason);
-        Assert.NotEmpty(
-            await engine.GetStackTraceAsync(
-                stop.Thread,
-                CancellationToken.None));
-        await engine.TerminateAsync(CancellationToken.None);
-        if (result.ProcessId is { } processId)
-            await WaitForProcessExitAsync(processId);
+        try
+        {
+            Assert.True(result.IsPaused);
+            var stop = Assert.IsType<DebugStopInfo>(result.InitialStop);
+            Assert.Equal(DebugStopReason.Entry, stop.Reason);
+            Assert.NotEmpty(
+                await engine.GetStackTraceAsync(
+                    stop.Thread,
+                    CancellationToken.None));
+        }
+        finally
+        {
+            await TerminateLaunchAsync(engine, result.ProcessId);
+        }
     }
 
     [Fact]
@@ -492,30 +533,33 @@ public sealed class NetCoreDbgEngineTests
                 InitialBreakpoints = [breakpoint]
             },
             CancellationToken.None);
-        var stop = await ReadStopAsync(
-            events.Reader,
-            DebugStopReason.Breakpoint);
-        var frame = Assert.IsType<DebugStackFrame>(
-            (await engine.GetStackTraceAsync(
-                stop.Thread,
-                CancellationToken.None)).FirstOrDefault());
-        var scope = Assert.Single(
-            await engine.GetScopesAsync(
-                frame.Id,
-                CancellationToken.None));
-        Assert.NotEqual(0, scope.Variables.Value);
-        var variables = await engine.GetVariablesAsync(
-            scope.Variables,
-            CancellationToken.None);
-        Assert.NotEmpty(variables);
-        if (!string.IsNullOrWhiteSpace(expectedVariable))
-            Assert.Contains(
-                variables,
-                variable => variable.Name == expectedVariable);
-
-        await engine.TerminateAsync(CancellationToken.None);
-        if (result.ProcessId is { } processId)
-            await WaitForProcessExitAsync(processId);
+        try
+        {
+            var stop = await ReadStopAsync(
+                events.Reader,
+                DebugStopReason.Breakpoint);
+            var frame = Assert.IsType<DebugStackFrame>(
+                (await engine.GetStackTraceAsync(
+                    stop.Thread,
+                    CancellationToken.None)).FirstOrDefault());
+            var scope = Assert.Single(
+                await engine.GetScopesAsync(
+                    frame.Id,
+                    CancellationToken.None));
+            Assert.NotEqual(0, scope.Variables.Value);
+            var variables = await engine.GetVariablesAsync(
+                scope.Variables,
+                CancellationToken.None);
+            Assert.NotEmpty(variables);
+            if (!string.IsNullOrWhiteSpace(expectedVariable))
+                Assert.Contains(
+                    variables,
+                    variable => variable.Name == expectedVariable);
+        }
+        finally
+        {
+            await TerminateLaunchAsync(engine, result.ProcessId);
+        }
     }
 
     [Fact]
@@ -624,30 +668,35 @@ public sealed class NetCoreDbgEngineTests
             },
             CancellationToken.None);
 
-        Assert.True(result.Capabilities.SupportsDecompiledCodeBreakpoints);
-        DebugBreakpointBinding? binding = null;
-        DebugStopInfo? stop = null;
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        while ((binding is null || stop is null) &&
-               await events.Reader.WaitToReadAsync(timeout.Token))
+        try
         {
-            while (events.Reader.TryRead(out var value))
+            Assert.True(result.Capabilities.SupportsDecompiledCodeBreakpoints);
+            DebugBreakpointBinding? binding = null;
+            DebugStopInfo? stop = null;
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            while ((binding is null || stop is null) &&
+                   await events.Reader.WaitToReadAsync(timeout.Token))
             {
-                if (value is DebugEngineBreakpointsChanged changed)
-                    binding = Assert.Single(changed.Breakpoints);
-                else if (value is DebugEngineStopped stopped)
-                    stop = stopped.Stop;
+                while (events.Reader.TryRead(out var value))
+                {
+                    if (value is DebugEngineBreakpointsChanged changed)
+                        binding = Assert.Single(changed.Breakpoints);
+                    else if (value is DebugEngineStopped stopped)
+                        stop = stopped.Stop;
+                }
             }
+
+            Assert.NotNull(binding);
+            Assert.True(binding.IsVerified, binding.Message);
+            Assert.Equal(location, binding.BoundLocation);
+            Assert.NotNull(stop);
+            Assert.Equal(DebugStopReason.Breakpoint, stop.Reason);
+            Assert.Equal(location, stop.Location);
         }
-
-        Assert.NotNull(binding);
-        Assert.True(binding.IsVerified, binding.Message);
-        Assert.Equal(location, binding.BoundLocation);
-        Assert.NotNull(stop);
-        Assert.Equal(DebugStopReason.Breakpoint, stop.Reason);
-        Assert.Equal(location, stop.Location);
-
-        await engine.TerminateAsync(CancellationToken.None);
+        finally
+        {
+            await TerminateLaunchAsync(engine, result.ProcessId);
+        }
     }
 
     [Fact]
@@ -711,31 +760,36 @@ public sealed class NetCoreDbgEngineTests
             },
             CancellationToken.None);
 
-        Assert.True(result.Capabilities.SupportsDecompiledCodeBreakpoints);
-        DebugBreakpointBinding? binding = null;
-        DebugStopInfo? stop = null;
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        while ((binding?.IsVerified != true || stop is null) &&
-               await events.Reader.WaitToReadAsync(timeout.Token))
+        try
         {
-            while (events.Reader.TryRead(out var value))
+            Assert.True(result.Capabilities.SupportsDecompiledCodeBreakpoints);
+            DebugBreakpointBinding? binding = null;
+            DebugStopInfo? stop = null;
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            while ((binding?.IsVerified != true || stop is null) &&
+                   await events.Reader.WaitToReadAsync(timeout.Token))
             {
-                if (value is DebugEngineBreakpointsChanged changed)
-                    binding = Assert.Single(changed.Breakpoints);
-                else if (value is DebugEngineStopped
-                    {
-                        Stop.Reason: DebugStopReason.Breakpoint
-                    } stopped)
-                    stop = stopped.Stop;
+                while (events.Reader.TryRead(out var value))
+                {
+                    if (value is DebugEngineBreakpointsChanged changed)
+                        binding = Assert.Single(changed.Breakpoints);
+                    else if (value is DebugEngineStopped
+                        {
+                            Stop.Reason: DebugStopReason.Breakpoint
+                        } stopped)
+                        stop = stopped.Stop;
+                }
             }
+
+            Assert.NotNull(binding);
+            Assert.True(binding.IsVerified, binding.Message);
+            Assert.NotNull(stop);
+            Assert.Equal(DebugStopReason.Breakpoint, stop.Reason);
         }
-
-        Assert.NotNull(binding);
-        Assert.True(binding.IsVerified, binding.Message);
-        Assert.NotNull(stop);
-        Assert.Equal(DebugStopReason.Breakpoint, stop.Reason);
-
-        await engine.TerminateAsync(CancellationToken.None);
+        finally
+        {
+            await TerminateLaunchAsync(engine, result.ProcessId);
+        }
     }
 
     [Theory]
@@ -794,38 +848,46 @@ public sealed class NetCoreDbgEngineTests
                 InitialBreakpoints = [requested]
             },
             CancellationToken.None);
-        var stopped = await ReadStopAsync(
-            events.Reader,
-            DebugStopReason.Breakpoint);
-        var frame = Assert.IsType<DebugStackFrame>(
-            (await engine.GetStackTraceAsync(
+        try
+        {
+            var stopped = await ReadStopAsync(
+                events.Reader,
+                DebugStopReason.Breakpoint);
+            var frame = Assert.IsType<DebugStackFrame>(
+                (await engine.GetStackTraceAsync(
+                    stopped.Thread,
+                    CancellationToken.None)).FirstOrDefault());
+            var scope = Assert.Single(
+                await engine.GetScopesAsync(
+                    frame.Id,
+                    CancellationToken.None));
+            Assert.NotEqual(0, scope.Variables.Value);
+            var variables = await engine.GetVariablesAsync(
+                scope.Variables,
+                CancellationToken.None);
+            var value = Assert.Single(
+                variables,
+                variable => variable.Name == "value");
+            Assert.Equal("42", value.Value);
+            var original = Assert.Single(
+                variables,
+                variable => variable.Name == "V_0");
+            Assert.Equal("40", original.Value);
+
+            await engine.StepAsync(
                 stopped.Thread,
-                CancellationToken.None)).FirstOrDefault());
-        var scope = Assert.Single(
-            await engine.GetScopesAsync(
-                frame.Id,
-                CancellationToken.None));
-        Assert.NotEqual(0, scope.Variables.Value);
-        var variables = await engine.GetVariablesAsync(
-            scope.Variables,
-            CancellationToken.None);
-        var value = Assert.Single(
-            variables,
-            variable => variable.Name == "value");
-        Assert.Equal("42", value.Value);
+                stepKind,
+                CancellationToken.None);
+            var stepped = await ReadStopAsync(
+                events.Reader,
+                DebugStopReason.Step);
 
-        await engine.StepAsync(
-            stopped.Thread,
-            stepKind,
-            CancellationToken.None);
-        var stepped = await ReadStopAsync(
-            events.Reader,
-            DebugStopReason.Step);
-
-        Assert.Equal(stopped.Thread, stepped.Thread);
-        await engine.TerminateAsync(CancellationToken.None);
-        if (result.ProcessId is { } processId)
-            await WaitForProcessExitAsync(processId);
+            Assert.Equal(stopped.Thread, stepped.Thread);
+        }
+        finally
+        {
+            await TerminateLaunchAsync(engine, result.ProcessId);
+        }
     }
 
     [Fact]
@@ -949,13 +1011,37 @@ public sealed class NetCoreDbgEngineTests
             $"Debugger stop reason {reason} was not received.");
     }
 
+    private static async Task TerminateLaunchAsync(
+        IDebuggerEngine engine,
+        int? processId)
+    {
+        try
+        {
+            await engine.TerminateAsync(CancellationToken.None);
+        }
+        finally
+        {
+            if (processId is { } value)
+                await WaitForProcessExitAsync(value);
+        }
+    }
+
     private static async Task WaitForProcessExitAsync(int processId)
     {
         try
         {
             using var process = Process.GetProcessById(processId);
-            await process.WaitForExitAsync()
-                .WaitAsync(TimeSpan.FromSeconds(5));
+            try
+            {
+                await process.WaitForExitAsync()
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch (TimeoutException)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync()
+                    .WaitAsync(TimeSpan.FromSeconds(5));
+            }
         }
         catch (ArgumentException)
         {
@@ -989,7 +1075,22 @@ public sealed class NetCoreDbgEngineTests
             directory,
             "DnSpyXDX.Debugger.TestWorker.exe");
 
-        public void Dispose() =>
-            Directory.Delete(directory, recursive: true);
+        public void Dispose()
+        {
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    Directory.Delete(directory, recursive: true);
+                    return;
+                }
+                catch (Exception exception)
+                    when (attempt < 4 &&
+                          exception is IOException or UnauthorizedAccessException)
+                {
+                    Thread.Sleep(TimeSpan.FromMilliseconds(50 * (attempt + 1)));
+                }
+            }
+        }
     }
 }

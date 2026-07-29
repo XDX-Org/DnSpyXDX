@@ -1,3 +1,6 @@
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
+using System.Reflection.PortableExecutable;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -150,6 +153,7 @@ internal sealed class NetCoreDbgEngine(
     private int terminationRequested;
     private int exitReported;
     private bool isStopped;
+    private DebugCodeLocation? startupEntryLocation;
 
     public event Action<DebugEngineEvent>? EventReceived;
 
@@ -216,6 +220,21 @@ internal sealed class NetCoreDbgEngine(
                 },
                 startupToken).ConfigureAwait(false);
             capabilities = ParseCapabilities(RequireSuccess(initialize));
+            DebugBreakpoint? startupEntryBreakpoint = null;
+            if (request is DebugLaunchRequest
+                {
+                    StopAtEntry: true
+                } entryLaunch &&
+                capabilities.SupportsDecompiledCodeBreakpoints &&
+                TryGetManagedEntryPointLocation(
+                    entryLaunch.ExecutablePath) is { } entryLocation)
+            {
+                startupEntryLocation = entryLocation;
+                startupEntryBreakpoint = new DebugBreakpoint(
+                    Guid.NewGuid(),
+                    entryLocation);
+                startArguments["stopAtEntry"] = false;
+            }
 
             var startResponse = worker.Connection.SendRequestAsync(
                 startCommand,
@@ -224,7 +243,29 @@ internal sealed class NetCoreDbgEngine(
 
             await WaitForInitializedAsync(startResponse, startupToken)
                 .ConfigureAwait(false);
-            if (request.InitialBreakpoints is { } initialBreakpoints)
+            if (startupEntryBreakpoint is not null)
+            {
+                var visibleBreakpoints = request.InitialBreakpoints ?? [];
+                RememberRequestedBreakpoints(visibleBreakpoints);
+                var startupBreakpoints = visibleBreakpoints
+                    .Append(startupEntryBreakpoint)
+                    .ToArray();
+                var startupBindings = await SendIlBreakpointsAsync(
+                    startupBreakpoints,
+                    startupToken).ConfigureAwait(false);
+                var visibleIds = visibleBreakpoints
+                    .Select(breakpoint => breakpoint.Id)
+                    .ToHashSet();
+                var visibleBindings = startupBindings
+                    .Where(binding =>
+                        visibleIds.Contains(binding.BreakpointId))
+                    .ToArray();
+                RememberBreakpointBindings(visibleBindings);
+                if (visibleBindings.Length > 0)
+                    Emit(new DebugEngineBreakpointsChanged(
+                        visibleBindings));
+            }
+            else if (request.InitialBreakpoints is { } initialBreakpoints)
             {
                 var initialBindings = await SetBreakpointsAsync(
                     initialBreakpoints,
@@ -245,6 +286,13 @@ internal sealed class NetCoreDbgEngine(
                 if (holdAtEntryForInitialBreakpoints &&
                     lastStop.Reason == DebugStopReason.Entry)
                     await ContinueAsync(startupToken).ConfigureAwait(false);
+            }
+            if (startupEntryBreakpoint is not null)
+            {
+                await SetBreakpointsAsync(
+                    request.InitialBreakpoints ?? [],
+                    startupToken).ConfigureAwait(false);
+                startupEntryLocation = null;
             }
 
             return new DebugEngineStartResult(
@@ -324,15 +372,7 @@ internal sealed class NetCoreDbgEngine(
     {
         ArgumentNullException.ThrowIfNull(breakpoints);
         cancellationToken.ThrowIfCancellationRequested();
-        var requestedById = breakpoints.ToDictionary(breakpoint => breakpoint.Id);
-        lock (breakpointsGate)
-        {
-            requestedBreakpoints = requestedById;
-            breakpointOrder = breakpoints.Select(value => value.Id).ToArray();
-            breakpointBindings = breakpointBindings
-                .Where(value => requestedById.ContainsKey(value.Key))
-                .ToDictionary();
-        }
+        RememberRequestedBreakpoints(breakpoints);
         if (!capabilities.SupportsDecompiledCodeBreakpoints)
         {
             var unsupported = breakpoints
@@ -347,6 +387,35 @@ internal sealed class NetCoreDbgEngine(
             return unsupported;
         }
 
+        var bindings = await SendIlBreakpointsAsync(
+            breakpoints,
+            cancellationToken).ConfigureAwait(false);
+        RememberBreakpointBindings(bindings);
+        return bindings;
+    }
+
+    private void RememberRequestedBreakpoints(
+        IReadOnlyList<DebugBreakpoint> breakpoints)
+    {
+        var requestedById = breakpoints.ToDictionary(
+            breakpoint => breakpoint.Id);
+        lock (breakpointsGate)
+        {
+            requestedBreakpoints = requestedById;
+            breakpointOrder = breakpoints.Select(value => value.Id).ToArray();
+            breakpointBindings = breakpointBindings
+                .Where(value => requestedById.ContainsKey(value.Key))
+                .ToDictionary();
+        }
+    }
+
+    private async Task<IReadOnlyList<DebugBreakpointBinding>>
+        SendIlBreakpointsAsync(
+            IReadOnlyList<DebugBreakpoint> breakpoints,
+            CancellationToken cancellationToken)
+    {
+        var requestedById = breakpoints.ToDictionary(
+            breakpoint => breakpoint.Id);
         var request = new JsonObject
         {
             ["breakpoints"] = new JsonArray(
@@ -367,7 +436,6 @@ internal sealed class NetCoreDbgEngine(
             throw new InvalidDataException(
                 "NetCoreDbg xdx/setIlBreakpoints response must contain one unique binding " +
                 "for every requested breakpoint.");
-        RememberBreakpointBindings(bindings);
         return bindings;
     }
 
@@ -564,6 +632,62 @@ internal sealed class NetCoreDbgEngine(
         return new JsonObject { ["processId"] = attach.ProcessId.Value };
     }
 
+    private static DebugCodeLocation? TryGetManagedEntryPointLocation(
+        string launchPath)
+    {
+        string fullPath;
+        try
+        {
+            fullPath = Path.GetFullPath(launchPath);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or NotSupportedException or
+                PathTooLongException)
+        {
+            return null;
+        }
+
+        var candidates = new List<string> { fullPath };
+        var siblingAssembly = Path.ChangeExtension(fullPath, ".dll");
+        if (!PathComparer().Equals(siblingAssembly, fullPath))
+            candidates.Add(siblingAssembly);
+
+        foreach (var candidate in candidates.Distinct(PathComparer()))
+        {
+            if (!File.Exists(candidate)) continue;
+            try
+            {
+                using var stream = File.OpenRead(candidate);
+                using var reader = new PEReader(stream);
+                var header = reader.PEHeaders.CorHeader;
+                if (!reader.HasMetadata || header is null) continue;
+                var token = header.EntryPointTokenOrRelativeVirtualAddress;
+                if (token <= 0 ||
+                    MetadataTokens.EntityHandle(token).Kind !=
+                        HandleKind.MethodDefinition)
+                    continue;
+                var metadata = reader.GetMetadataReader();
+                var mvid = metadata.GetGuid(
+                    metadata.GetModuleDefinition().Mvid);
+                return new DebugCodeLocation(
+                    new DebugMethodId(mvid, token),
+                    ILOffset: 0);
+            }
+            catch (Exception exception) when (
+                exception is BadImageFormatException or IOException or
+                    UnauthorizedAccessException)
+            {
+            }
+        }
+
+        return null;
+    }
+
+    private static StringComparer PathComparer() =>
+        OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+
     private static JsonObject EnvironmentObject(
         IReadOnlyDictionary<string, string>? environment)
     {
@@ -651,10 +775,19 @@ internal sealed class NetCoreDbgEngine(
         if (optionalBody is not { } body)
             throw new InvalidDataException("NetCoreDbg stopped event has no body.");
         var thread = new DebugThreadId(RequiredInt64(body, "threadId"));
+        var location = OptionalDebugLocation(body);
+        var reason = ParseStopReason(OptionalString(body, "reason"));
+        if (startupEntryLocation is { } expectedEntry &&
+            reason == DebugStopReason.Breakpoint &&
+            (location is null || location == expectedEntry))
+        {
+            reason = DebugStopReason.Entry;
+            startupEntryLocation = null;
+        }
         var stop = new DebugStopInfo(
-            ParseStopReason(OptionalString(body, "reason")),
+            reason,
             thread,
-            Location: OptionalDebugLocation(body),
+            Location: location,
             Description: OptionalString(body, "description") ??
                 OptionalString(body, "text"),
             AllThreadsStopped: !body.TryGetProperty(

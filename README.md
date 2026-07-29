@@ -56,8 +56,8 @@ dotnet build DnSpyXDX.slnx
 dotnet test DnSpyXDX.slnx
 ```
 
-Host build downloads XDX NetCoreDbg release `xdx-3.2.0-1092.1`, pinned to backend commit
-`8b8c59e8168f46a6dee486958cafd9bb4cffeeec`, once, verifies its SHA-256 checksum, caches it under
+Host build downloads XDX NetCoreDbg release `xdx-3.2.0-1092.2`, pinned to backend commit
+`7be52ab5cf348c75ad028e3578d2fb0b96df748d`, once, verifies its SHA-256 checksum, caches it under
 `src/DnSpyXDX.Host/obj/netcoredbg`, and copies the current RID payload into
 `debuggers/netcoredbg/<RID>` beside the application. Set `-p:BundleNetCoreDbg=false` only when
 building offline with an externally managed adapter.

@@ -40,6 +40,22 @@ jobs:
       - name: Build
         run: dotnet build DnSpyXDX.slnx -c Release --no-restore
 
+      - name: Configure Windows live debugger tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $adapter = Get-ChildItem `
+            "${{ github.workspace }}\src\DnSpyXDX.Host\bin\Release" `
+            -Recurse `
+            -Filter netcoredbg.exe |
+            Where-Object FullName -Like '*\debuggers\netcoredbg\win-x64\netcoredbg.exe' |
+            Select-Object -First 1
+          if ($null -eq $adapter) {
+            throw "Bundled NetCoreDbg was not found in Release output."
+          }
+          "DNSPYXDX_NETCOREDBG_PATH=$($adapter.FullName)" >> $env:GITHUB_ENV
+          & $adapter.FullName --buildinfo
+
       - name: Test
         run: dotnet test DnSpyXDX.slnx -c Release --no-build --logger "trx;LogFileName=test-results.trx"
 

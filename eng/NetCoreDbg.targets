@@ -2,16 +2,16 @@
   <PropertyGroup>
     <BundleNetCoreDbg Condition="'$(BundleNetCoreDbg)' == ''">true</BundleNetCoreDbg>
     <NetCoreDbgRepository Condition="'$(NetCoreDbgRepository)' == ''">XDX-Org/netcoredbg</NetCoreDbgRepository>
-    <NetCoreDbgVersion Condition="'$(NetCoreDbgVersion)' == ''">xdx-3.2.0-1092.1</NetCoreDbgVersion>
-    <NetCoreDbgCommit Condition="'$(NetCoreDbgCommit)' == ''">8b8c59e8168f46a6dee486958cafd9bb4cffeeec</NetCoreDbgCommit>
+    <NetCoreDbgVersion Condition="'$(NetCoreDbgVersion)' == ''">xdx-3.2.0-1092.2</NetCoreDbgVersion>
+    <NetCoreDbgCommit Condition="'$(NetCoreDbgCommit)' == ''">7be52ab5cf348c75ad028e3578d2fb0b96df748d</NetCoreDbgCommit>
     <_NetCoreDbgRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</_NetCoreDbgRid>
     <_NetCoreDbgRid Condition="'$(_NetCoreDbgRid)' == ''">$(NETCoreSdkRuntimeIdentifier)</_NetCoreDbgRid>
     <_NetCoreDbgPlatform Condition="'$(_NetCoreDbgRid)' == 'win-x64'">win64</_NetCoreDbgPlatform>
     <_NetCoreDbgPlatform Condition="'$(_NetCoreDbgRid)' == 'linux-x64'">linux-amd64</_NetCoreDbgPlatform>
     <_NetCoreDbgArchiveName Condition="'$(_NetCoreDbgRid)' == 'win-x64'">netcoredbg-win64.zip</_NetCoreDbgArchiveName>
     <_NetCoreDbgArchiveName Condition="'$(_NetCoreDbgRid)' == 'linux-x64'">netcoredbg-linux-amd64.tar.gz</_NetCoreDbgArchiveName>
-    <_NetCoreDbgArchiveHash Condition="'$(_NetCoreDbgRid)' == 'win-x64'">0FEF3DA9C736E5252701EBBF90BB2E94849AFB1F7E835C2054CC0BA275CD32AA</_NetCoreDbgArchiveHash>
-    <_NetCoreDbgArchiveHash Condition="'$(_NetCoreDbgRid)' == 'linux-x64'">43E688796AEA2178818DEC7F255525854EF87517728908FA333E4BC3380FC5C0</_NetCoreDbgArchiveHash>
+    <_NetCoreDbgArchiveHash Condition="'$(_NetCoreDbgRid)' == 'win-x64'">5CDE9DE90C9AC6738D358EF437CADB7861AA1CFD530309D30B95756F9F46EBA5</_NetCoreDbgArchiveHash>
+    <_NetCoreDbgArchiveHash Condition="'$(_NetCoreDbgRid)' == 'linux-x64'">37CF88221A3D5FCBBEAABF58E6572B0DC5836731FF669BA4F95F18D564C929A4</_NetCoreDbgArchiveHash>
     <_NetCoreDbgCacheDir>$(BaseIntermediateOutputPath)netcoredbg/$(NetCoreDbgVersion)/$(_NetCoreDbgRid)/</_NetCoreDbgCacheDir>
     <_NetCoreDbgArchive>$(_NetCoreDbgCacheDir)$(_NetCoreDbgArchiveName)</_NetCoreDbgArchive>
     <_NetCoreDbgExtractDir>$(_NetCoreDbgCacheDir)extracted/</_NetCoreDbgExtractDir>

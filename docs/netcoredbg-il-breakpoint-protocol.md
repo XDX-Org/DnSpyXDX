@@ -98,5 +98,5 @@ The repository test adapter implements the contract.
 
 The [XDX NetCoreDbg fork](https://github.com/XDX-Org/netcoredbg) implements the native
 `ICorDebugFunctionBreakpoint` backend. DnSpyXDX pins backend commit
-`8b8c59e8168f46a6dee486958cafd9bb4cffeeec` and verifies the packaged Windows/Linux assets before
+`7be52ab5cf348c75ad028e3578d2fb0b96df748d` and verifies the packaged Windows/Linux assets before
 including them in build and publish output.

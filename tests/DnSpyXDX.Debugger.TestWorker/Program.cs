@@ -54,6 +54,7 @@ static async Task<int> RunNetCoreDbgAsync(string mode)
     string? startCommand = null;
     var stopAtEntry = false;
     JsonObject? pendingIlBinding = null;
+    JsonObject? pendingIlStop = null;
 
     async ValueTask SendAsync(JsonObject message)
     {
@@ -163,6 +164,8 @@ static async Task<int> RunNetCoreDbgAsync(string mode)
                         pendingIlBinding["verified"] = true;
                         pendingIlBinding.Remove("message");
                     }
+                    if (enabled && mode == "netcoredbg-il-entry")
+                        pendingIlStop = binding.DeepClone().AsObject();
                 }
                 await RespondAsync(
                     sequence,
@@ -213,6 +216,27 @@ static async Task<int> RunNetCoreDbgAsync(string mode)
                 {
                     await EventAsync("xdx/ilBreakpoint", pendingIlBinding);
                     pendingIlBinding = null;
+                }
+                if (pendingIlStop is not null)
+                {
+                    await EventAsync(
+                        "stopped",
+                        new JsonObject
+                        {
+                            ["reason"] = "breakpoint",
+                            ["threadId"] = 7,
+                            ["allThreadsStopped"] = true,
+                            ["xdxLocation"] = new JsonObject
+                            {
+                                ["moduleMvid"] =
+                                    pendingIlStop["moduleMvid"]!.DeepClone(),
+                                ["methodToken"] =
+                                    pendingIlStop["methodToken"]!.DeepClone(),
+                                ["ilOffset"] =
+                                    pendingIlStop["ilOffset"]!.DeepClone()
+                            }
+                        });
+                    pendingIlStop = null;
                 }
                 break;
             case "threads":
@@ -383,10 +407,15 @@ internal static class DebuggerBreakpointTarget
     [MethodImpl(MethodImplOptions.NoInlining | MethodImplOptions.NoOptimization)]
     public static int Run(int value)
     {
+        var original = value;
+        var observed = Volatile.Read(ref original);
+        var adjustment = observed == 0
+            ? 2
+            : observed / observed + 1;
         if (value > 0)
-            value += 2;
+            value += adjustment;
         else
-            value -= 2;
+            value -= adjustment;
         return value;
     }
 

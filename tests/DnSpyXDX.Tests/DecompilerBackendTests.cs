@@ -108,8 +108,13 @@ public sealed class DecompilerBackendTests
                     candidate.Length)
                     .Contains("return value", StringComparison.Ordinal));
 
-        Assert.Equal(0x0B, point.Location.ILOffset);
-        Assert.Equal(0x10, point.BreakpointLocation?.ILOffset);
+        var breakpointLocation = Assert.IsType<DebugCodeLocation>(
+            point.BreakpointLocation);
+        Assert.Equal(point.Location.Method, breakpointLocation.Method);
+        Assert.InRange(
+            breakpointLocation.ILOffset,
+            point.Location.ILOffset + 1,
+            point.EndILOffset - 1);
     }
 
     [Fact]

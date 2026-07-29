@@ -134,8 +134,8 @@ The CoreCLR adapter provider supports:
 - capability projection, including negotiated decompiled-code breakpoint support.
 
 The provider is registered in the desktop host even when NetCoreDbg is absent. Host build/publish
-downloads XDX release `xdx-3.2.0-1092.1`, pinned to backend commit
-`8b8c59e8168f46a6dee486958cafd9bb4cffeeec`, for `win-x64` or `linux-x64`, verifies SHA-256,
+downloads XDX release `xdx-3.2.0-1092.2`, pinned to backend commit
+`7be52ab5cf348c75ad028e3578d2fb0b96df748d`, for `win-x64` or `linux-x64`, verifies SHA-256,
 caches it under `obj`, and copies it into the provider's RID-specific discovery path. NetCoreDbg
 binaries are never downloaded at application runtime. Bundling can be disabled for offline or
 externally packaged builds.
