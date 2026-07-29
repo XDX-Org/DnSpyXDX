@@ -26,6 +26,7 @@ internal sealed class DebuggerWorkerServer(
     private long generation;
     private long sequence;
     private long breakpointRevision;
+    private bool initialized;
     private bool shutdown;
 
     public async Task<int> RunAsync()
@@ -71,10 +72,13 @@ internal sealed class DebuggerWorkerServer(
         {
             object? result = request.Name switch
             {
+                DebuggerWorkerCommands.Initialize => Initialize(),
                 DebuggerWorkerCommands.Start => await StartAsync(
                     Body<DebuggerWorkerStartRequest>(request)),
                 DebuggerWorkerCommands.Terminate => await ExecuteAsync(
                     value => value.TerminateAsync(CancellationToken.None)),
+                DebuggerWorkerCommands.Detach => await ExecuteAsync(
+                    value => value.DetachAsync(CancellationToken.None)),
                 DebuggerWorkerCommands.Continue => await ExecuteAsync(
                     value => value.ContinueAsync(CancellationToken.None)),
                 DebuggerWorkerCommands.Pause => await ExecuteAsync(
@@ -109,8 +113,21 @@ internal sealed class DebuggerWorkerServer(
         }
     }
 
+    private DebuggerWorkerInitializeResult Initialize()
+    {
+        if (initialized)
+            throw new InvalidOperationException("Debugger worker is already initialized.");
+        initialized = true;
+        events.Writer.TryWrite((DebuggerWorkerEvents.Initialized, null, null));
+        return new(
+            DebuggerWorkerProtocol.Version,
+            [DebugRuntimeKind.CoreClr, DebugRuntimeKind.Mono, DebugRuntimeKind.UnityMono]);
+    }
+
     private async Task<DebugEngineStartResult> StartAsync(DebuggerWorkerStartRequest command)
     {
+        if (!initialized)
+            throw new InvalidOperationException("Debugger worker must be initialized before start.");
         if (engine is not null)
             throw new InvalidOperationException("Debugger worker engine is already started.");
         IDebuggerEngineProvider provider = command.Runtime switch
@@ -128,7 +145,12 @@ internal sealed class DebuggerWorkerServer(
         };
         engine = await provider.CreateAsync(CancellationToken.None);
         engine.EventReceived += OnEngineEvent;
-        return await engine.StartAsync(command.GetRequest(), CancellationToken.None);
+        var result = await engine.StartAsync(command.GetRequest(), CancellationToken.None);
+        events.Writer.TryWrite((
+            DebuggerWorkerEvents.ProcessStarted,
+            new DebuggerWorkerProcessStartedEvent(result.ProcessId),
+            null));
+        return result;
     }
 
     private async Task<object?> ExecuteAsync(Func<IDebuggerEngine, Task> action)

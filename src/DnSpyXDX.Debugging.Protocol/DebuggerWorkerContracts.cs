@@ -4,8 +4,10 @@ namespace DnSpyXDX.Debugging.Protocol;
 
 public static class DebuggerWorkerCommands
 {
+    public const string Initialize = "initialize";
     public const string Start = "start";
     public const string Terminate = "terminate";
+    public const string Detach = "detach";
     public const string Continue = "continue";
     public const string Pause = "pause";
     public const string Step = "step";
@@ -20,6 +22,8 @@ public static class DebuggerWorkerCommands
 
 public static class DebuggerWorkerEvents
 {
+    public const string Initialized = "initialized";
+    public const string ProcessStarted = "processStarted";
     public const string Stopped = "stopped";
     public const string Continued = "continued";
     public const string Exited = "exited";
@@ -27,6 +31,12 @@ public static class DebuggerWorkerEvents
     public const string Output = "output";
     public const string BreakpointsChanged = "breakpointsChanged";
 }
+
+public sealed record DebuggerWorkerInitializeResult(
+    int ProtocolVersion,
+    IReadOnlyList<DebugRuntimeKind> Runtimes);
+
+public sealed record DebuggerWorkerProcessStartedEvent(int? ProcessId);
 
 public sealed record DebuggerWorkerStartRequest(
     DebugRuntimeKind Runtime,

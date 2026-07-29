@@ -48,9 +48,17 @@ public sealed class DebuggerWorkspace : IDisposable
     public DebugThreadId? SelectedThread => selectedThread;
     public DebugFrameId? SelectedFrame => selectedFrame;
     public bool IsBusy { get; private set; }
+    public bool IsMcpControlled { get; private set; }
     public string? Error { get; private set; }
 
     public event Action? Changed;
+
+    public void SetMcpControl(bool active)
+    {
+        if (IsMcpControlled == active) return;
+        IsMcpControlled = active;
+        NotifyChanged();
+    }
 
     public void RegisterDebugMap(DebugDocumentMap? map)
     {
@@ -66,6 +74,16 @@ public sealed class DebuggerWorkspace : IDisposable
             changed = true;
         }
         if (changed && Snapshot.Status == DebugSessionStatus.Paused)
+            NotifyChanged();
+    }
+
+    public void InvalidateModule(Guid moduleMvid)
+    {
+        var keys = localNames.Keys
+            .Where(key => key.Method.ModuleMvid == moduleMvid)
+            .ToArray();
+        foreach (var key in keys) localNames.Remove(key);
+        if (keys.Length > 0 && Snapshot.Status == DebugSessionStatus.Paused)
             NotifyChanged();
     }
 
@@ -160,14 +178,42 @@ public sealed class DebuggerWorkspace : IDisposable
             await debugger.StartAsync(request, token);
         }, cancellationToken, requireActiveSession: false);
 
+    public Task AttachUnityMonoAsync(
+        UnityMonoEndpoint endpoint,
+        bool confirmRemote,
+        CancellationToken cancellationToken = default) =>
+        RunAsync(async token =>
+        {
+            ArgumentNullException.ThrowIfNull(endpoint);
+            if (!endpoint.IsLoopback && !confirmRemote)
+                throw new InvalidOperationException(
+                    "Attaching to a non-loopback Unity player requires explicit confirmation.");
+            var request = new DebugAttachRequest(
+                    DebugRuntimeKind.UnityMono,
+                    endpoint.ProcessId,
+                    endpoint.Host,
+                    endpoint.Port,
+                    endpoint.UnityVersion,
+                    DebugScriptingBackend.Managed,
+                    endpoint.DebuggerProtocolVersion)
+                {
+                    InitialBreakpoints = breakpoints
+                };
+            StartRequest = request;
+            await debugger.StartAsync(request, token);
+        }, cancellationToken, requireActiveSession: false);
+
     public Task ContinueAsync(CancellationToken cancellationToken = default) =>
-        RunAsync(debugger.ContinueAsync, cancellationToken);
+        RunAsync(debugger.ContinueAsync, cancellationToken, requireUiControl: true);
 
     public Task PauseAsync(CancellationToken cancellationToken = default) =>
-        RunAsync(debugger.PauseAsync, cancellationToken);
+        RunAsync(debugger.PauseAsync, cancellationToken, requireUiControl: true);
 
     public Task TerminateAsync(CancellationToken cancellationToken = default) =>
-        RunAsync(debugger.TerminateAsync, cancellationToken);
+        RunAsync(debugger.TerminateAsync, cancellationToken, requireUiControl: true);
+
+    public Task DetachAsync(CancellationToken cancellationToken = default) =>
+        RunAsync(debugger.DetachAsync, cancellationToken, requireUiControl: true);
 
     public Task StepAsync(
         DebugStepKind kind,
@@ -175,7 +221,10 @@ public sealed class DebuggerWorkspace : IDisposable
     {
         var thread = Snapshot.Stop?.Thread ?? threads.FirstOrDefault()?.Id;
         return thread is { } id
-            ? RunAsync(token => debugger.StepAsync(id, kind, token), cancellationToken)
+            ? RunAsync(
+                token => debugger.StepAsync(id, kind, token),
+                cancellationToken,
+                requireUiControl: true)
             : SetErrorAsync("No stopped thread is available for stepping.");
     }
 
@@ -292,7 +341,8 @@ public sealed class DebuggerWorkspace : IDisposable
     private async Task RunAsync(
         Func<CancellationToken, Task> action,
         CancellationToken cancellationToken,
-        bool requireActiveSession = true)
+        bool requireActiveSession = true,
+        bool requireUiControl = false)
     {
         if (disposed) throw new ObjectDisposedException(nameof(DebuggerWorkspace));
         IsBusy = true;
@@ -300,6 +350,9 @@ public sealed class DebuggerWorkspace : IDisposable
         NotifyChanged();
         try
         {
+            if (requireUiControl && IsMcpControlled)
+                throw new InvalidOperationException(
+                    "This debug session is controlled by an MCP client.");
             if (requireActiveSession &&
                 Snapshot.Status is not (DebugSessionStatus.Running or
                     DebugSessionStatus.Paused))

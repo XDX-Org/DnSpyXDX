@@ -136,7 +136,8 @@ public sealed record DebugAttachRequest(
     string? Host = null,
     int? Port = null,
     string? RuntimeVersion = null,
-    DebugScriptingBackend ScriptingBackend = DebugScriptingBackend.Managed)
+    DebugScriptingBackend ScriptingBackend = DebugScriptingBackend.Managed,
+    int? DebuggerProtocolVersion = null)
     : DebugStartRequest(Runtime);
 
 public sealed record DebuggerCapabilities(

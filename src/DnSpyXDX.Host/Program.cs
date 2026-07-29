@@ -43,7 +43,9 @@ internal static class Program
             services.GetRequiredService<RuntimeDisplaySettings>(),
             services.GetRequiredService<PersistentDecompileCache>(),
             services.GetRequiredService<NeighborLoadingSettings>()));
-        builder.Services.AddSingleton(new WorkerDebuggerOptions());
+        builder.Services.AddSingleton(new WorkerDebuggerOptions(
+            TraceDirectory: Environment.GetEnvironmentVariable(
+                "DNSPYXDX_DEBUG_TRACE_DIRECTORY")));
         builder.Services.AddSingleton<IDebuggerEngineProvider>(services =>
             new WorkerDebuggerEngineProvider(
                 DebugRuntimeKind.CoreClr,

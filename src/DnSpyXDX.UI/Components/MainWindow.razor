@@ -43,8 +43,8 @@
     </button>
     <div class="debug-toolbar" aria-label="Debugger controls">
       <button class="toolbar-icon" title="@(DebuggerActive ? "Stop the active session before starting another" : "Start or attach debugger")" aria-label="Start or attach debugger" disabled="@(Debugger.IsBusy || DebuggerActive)" @onclick="OpenDebugDialog">▶</button>
-      <button class="toolbar-icon" title="Continue" aria-label="Continue" disabled="@(Debugger.IsBusy || Debugger.Snapshot.Status != DebugSessionStatus.Paused)" @onclick="() => Debugger.ContinueAsync()">▷</button>
-      <button class="toolbar-icon" title="Pause" aria-label="Pause" disabled="@(Debugger.IsBusy || Debugger.Snapshot.Status != DebugSessionStatus.Running)" @onclick="() => Debugger.PauseAsync()">Ⅱ</button>
+      <button class="toolbar-icon" title="Continue" aria-label="Continue" disabled="@(Debugger.IsBusy || Debugger.IsMcpControlled || Debugger.Snapshot.Status != DebugSessionStatus.Paused)" @onclick="() => Debugger.ContinueAsync()">▷</button>
+      <button class="toolbar-icon" title="Pause" aria-label="Pause" disabled="@(Debugger.IsBusy || Debugger.IsMcpControlled || Debugger.Snapshot.Status != DebugSessionStatus.Running)" @onclick="() => Debugger.PauseAsync()">Ⅱ</button>
       <button class="toolbar-icon" title="Stop debugging" aria-label="Stop debugging" disabled="@(!DebuggerActive)" @onclick="() => Debugger.TerminateAsync()">■</button>
       <button class="toolbar-icon debug-step" title="Step into" aria-label="Step into" disabled="@(!DebuggerPaused)" @onclick="() => Debugger.StepAsync(DebugStepKind.Into)">↓</button>
       <button class="toolbar-icon debug-step" title="Step over" aria-label="Step over" disabled="@(!DebuggerPaused)" @onclick="() => Debugger.StepAsync(DebugStepKind.Over)">↷</button>
@@ -663,6 +663,7 @@
 
   private void AssemblyClosing(AssemblyDescriptor assembly)
   {
+    Debugger.InvalidateModule(assembly.ModuleMvid);
     foreach (var tab in Workspace.Tabs.Where(tab => tab.Document.Symbol.ModuleMvid == assembly.ModuleMvid).ToArray()) CancelDecompilation(tab.Id);
     results = results.Where(result => result.Symbol.ModuleMvid != assembly.ModuleMvid).ToArray();
     searchMatches = searchMatches.Where(result => result.Symbol.ModuleMvid != assembly.ModuleMvid).ToArray();

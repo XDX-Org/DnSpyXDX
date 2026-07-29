@@ -45,6 +45,9 @@ internal sealed class UnityMonoDebuggerEngine(IDebuggerEngine inner) : IDebugger
             throw new NotSupportedException(
                 "Unity IL2CPP is native code and cannot use the managed Mono debugger.");
         _ = UnityMonoCompatibilityProfile.Select(attach.RuntimeVersion);
+        if (attach.DebuggerProtocolVersion is <= 0)
+            throw new NotSupportedException(
+                "Unity reported an invalid Mono debugger protocol version.");
         var monoRequest = new DebugAttachRequest(
             DebugRuntimeKind.Mono,
             attach.ProcessId,
@@ -58,6 +61,8 @@ internal sealed class UnityMonoDebuggerEngine(IDebuggerEngine inner) : IDebugger
 
     public Task TerminateAsync(CancellationToken cancellationToken) =>
         inner.TerminateAsync(cancellationToken);
+    public Task DetachAsync(CancellationToken cancellationToken) =>
+        inner.DetachAsync(cancellationToken);
     public Task ContinueAsync(CancellationToken cancellationToken) =>
         inner.ContinueAsync(cancellationToken);
     public Task PauseAsync(CancellationToken cancellationToken) =>

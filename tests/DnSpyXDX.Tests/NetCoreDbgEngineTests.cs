@@ -67,6 +67,19 @@ public sealed class NetCoreDbgEngineTests
     }
 
     [Fact]
+    public void Detached_provider_reports_explicit_missing_worker()
+    {
+        var missing = Path.Combine(
+            Path.GetTempPath(), $"missing-debug-worker-{Guid.NewGuid():N}");
+        var provider = new WorkerDebuggerEngineProvider(
+            DebugRuntimeKind.CoreClr,
+            new WorkerDebuggerOptions(WorkerPath: missing));
+
+        Assert.False(provider.IsAvailable);
+        Assert.Contains("worker was not found", provider.UnavailableReason);
+    }
+
+    [Fact]
     public async Task Launch_initializes_configures_and_reports_capabilities()
     {
         var provider = Provider();

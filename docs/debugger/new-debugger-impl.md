@@ -11,14 +11,14 @@ Implemented on the `debug` branch:
 - pinned XDX-Org NetCoreDbg payload with DAP contained inside the CoreCLR backend;
 - stale breakpoint revision filtering, including the delayed `xdx/ilBreakpoint` regression;
 - local name origin, IL slot and lifetime metadata, plus shared decompiler-name projection;
-- Unity version profiles, explicit endpoints, and IL2CPP rejection;
+- Unity multicast endpoint discovery, version profiles, remote confirmation, and IL2CPP rejection;
 - MCP launch, attach, breakpoint, wait, status, thread, stack, scope, variable, evaluation,
   execution-control, and stop tools with path/endpoint limits and session leases;
 - opt-in metadata-only worker traces that omit message bodies and debugger values.
 
-Automatic Unity player discovery and live Unity assembly-reload verification require real Unity
-Editor/player fixtures. The contract and dedicated discovery service are present; explicit
-loopback attach is the supported deterministic path until those fixtures are available.
+Live Unity attachment and assembly-reload verification remain in the opt-in live matrix because
+they require a Unity Editor/development-player fixture. Deterministic tests cover discovery packet
+parsing, compatibility selection, explicit endpoint translation, and IL2CPP rejection.
 
 ## Goal
 

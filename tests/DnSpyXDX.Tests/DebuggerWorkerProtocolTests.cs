@@ -78,6 +78,23 @@ public sealed class DebuggerWorkerProtocolTests
     }
 
     [Fact]
+    public void MessageRejectsOversizedBodyCollection()
+    {
+        var message = new DebuggerWorkerMessage(
+            DebuggerWorkerProtocol.Version,
+            DebuggerWorkerMessageKind.Request,
+            Guid.NewGuid(),
+            1,
+            1,
+            "variables",
+            Body: JsonSerializer.SerializeToElement(
+                Enumerable.Range(0, DebuggerWorkerProtocol.MaximumCollectionItems + 1)));
+
+        Assert.Throws<InvalidDataException>(() =>
+            DebuggerWorkerProtocol.Serialize(message));
+    }
+
+    [Fact]
     public async Task ClientCorrelatesResponse()
     {
         var session = Guid.NewGuid();

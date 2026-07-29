@@ -82,6 +82,24 @@ public sealed class DebuggerWorkspaceTests
     }
 
     [Fact]
+    public async Task Remote_unity_attach_requires_explicit_confirmation()
+    {
+        var debugger = new FakeDebuggerService();
+        using var workspace = new DebuggerWorkspace(debugger);
+        var endpoint = new UnityMonoEndpoint(
+            "10.0.0.2", 55000, "Player", "Project", IsLoopback: false);
+
+        await workspace.AttachUnityMonoAsync(endpoint, confirmRemote: false);
+        Assert.Null(debugger.LastStartRequest);
+        Assert.Contains("explicit confirmation", workspace.Error);
+
+        await workspace.AttachUnityMonoAsync(endpoint, confirmRemote: true);
+        var request = Assert.IsType<DebugAttachRequest>(debugger.LastStartRequest);
+        Assert.Equal(DebugRuntimeKind.UnityMono, request.Runtime);
+        Assert.Equal("10.0.0.2", request.Host);
+    }
+
+    [Fact]
     public async Task Paused_workspace_selects_threads_frames_and_expandable_variables()
     {
         var firstThread = new DebugThread(new DebugThreadId(1), "Worker", true);
@@ -184,6 +202,37 @@ public sealed class DebuggerWorkspaceTests
         Assert.Equal(0, displayed.Slot);
         Assert.Equal("V_0", displayed.EvaluateName);
         Assert.True(displayed.CanSetValue);
+    }
+
+    [Fact]
+    public void Reused_local_slot_uses_active_lifetime_and_invalidates_with_module()
+    {
+        var method = new DebugMethodId(Guid.NewGuid(), 0x06000001);
+        var thread = new DebugThread(new DebugThreadId(1), "Main", true);
+        var debugger = new FakeDebuggerService { ThreadResults = [thread] };
+        using var workspace = new DebuggerWorkspace(debugger);
+        workspace.RegisterDebugMap(new DebugDocumentMap(
+            new SymbolId(method.ModuleMvid, 0x02000001),
+            [],
+            [
+                new(method, 0, "first", 0, 10),
+                new(method, 0, "second", 10, 20)
+            ]));
+        var variable = new DebugVariable(
+            "V_0", "1", "int", default, "V_0", NameOrigin: DebugVariableNameOrigin.Synthetic);
+
+        debugger.FrameResults[thread.Id] =
+            [new(new DebugFrameId(1), thread.Id, "Run", new(method, 4))];
+        debugger.PublishPaused(thread.Id);
+        Assert.Equal("first", workspace.DisplayVariable(variable).Name);
+
+        debugger.FrameResults[thread.Id] =
+            [new(new DebugFrameId(2), thread.Id, "Run", new(method, 14))];
+        debugger.PublishPaused(thread.Id);
+        Assert.Equal("second", workspace.DisplayVariable(variable).Name);
+
+        workspace.InvalidateModule(method.ModuleMvid);
+        Assert.Equal("V_0", workspace.DisplayVariable(variable).Name);
     }
 
     [Fact]

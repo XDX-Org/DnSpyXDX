@@ -13,7 +13,8 @@ public sealed record WorkerDebuggerOptions(
     string? NetCoreDbgPath = null,
     IReadOnlyList<string>? NetCoreDbgArguments = null,
     TimeSpan? NetCoreDbgStartupTimeout = null,
-    string? TracePath = null);
+    string? TracePath = null,
+    string? TraceDirectory = null);
 
 public sealed class WorkerDebuggerEngineProvider : IDebuggerEngineProvider
 {
@@ -54,10 +55,19 @@ public sealed class WorkerDebuggerEngineProvider : IDebuggerEngineProvider
             : "DnSpyXDX.Debugger.Worker";
         var rid = $"{(OperatingSystem.IsWindows() ? "win" : "linux")}-" +
             RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant();
+        if (!string.IsNullOrWhiteSpace(configured))
+        {
+            var explicitPath = Path.GetFullPath(configured);
+            return File.Exists(explicitPath) ? explicitPath : null;
+        }
+        var environmentPath = Environment.GetEnvironmentVariable(PathEnvironmentVariable);
+        if (!string.IsNullOrWhiteSpace(environmentPath))
+        {
+            var explicitPath = Path.GetFullPath(environmentPath);
+            return File.Exists(explicitPath) ? explicitPath : null;
+        }
         foreach (var candidate in new[]
         {
-            configured,
-            Environment.GetEnvironmentVariable(PathEnvironmentVariable),
             Path.Combine(AppContext.BaseDirectory, "debuggers", "worker", rid, name),
             Path.Combine(AppContext.BaseDirectory, name),
             Path.Combine(AppContext.BaseDirectory, "DnSpyXDX.Debugger.Worker.dll")
@@ -107,12 +117,23 @@ internal sealed class WorkerDebuggerEngine(
             cancellationToken);
         process.Connection.EventReceived += OnWorkerEvent;
         process.Faulted += OnWorkerFaulted;
-        if (!string.IsNullOrWhiteSpace(options.TracePath))
+        process.Diagnostic += OnWorkerDiagnostic;
+        var tracePath = TracePath(options, sessionId);
+        if (tracePath is not null)
         {
-            trace = new(options.TracePath, sessionId, generation);
+            trace = new(tracePath, sessionId, generation);
             process.Connection.MessageSent += trace.Sent;
             process.Connection.MessageReceived += trace.Received;
         }
+        var initialize = Result<DebuggerWorkerInitializeResult>(
+            await process.Connection.SendRequestAsync(
+                DebuggerWorkerCommands.Initialize,
+                cancellationToken: cancellationToken));
+        if (initialize.ProtocolVersion != DebuggerWorkerProtocol.Version ||
+            !initialize.Runtimes.Contains(runtime))
+            throw new NotSupportedException(
+                $"Debugger worker does not support {runtime} protocol version " +
+                $"{DebuggerWorkerProtocol.Version}.");
         var response = await process.Connection.SendRequestAsync(
             DebuggerWorkerCommands.Start,
             Body(DebuggerWorkerStartRequest.From(request) with
@@ -132,6 +153,15 @@ internal sealed class WorkerDebuggerEngine(
         if (Interlocked.Exchange(ref terminated, 1) != 0) return;
         _ = Result<object?>(await Connection.SendRequestAsync(
             DebuggerWorkerCommands.Terminate,
+            cancellationToken: cancellationToken));
+        await GetProcess().StopAsync(cancellationToken);
+    }
+
+    public async Task DetachAsync(CancellationToken cancellationToken)
+    {
+        if (Interlocked.Exchange(ref terminated, 1) != 0) return;
+        _ = Result<object?>(await Connection.SendRequestAsync(
+            DebuggerWorkerCommands.Detach,
             cancellationToken: cancellationToken));
         await GetProcess().StopAsync(cancellationToken);
     }
@@ -212,6 +242,7 @@ internal sealed class WorkerDebuggerEngine(
         {
             process.Connection.EventReceived -= OnWorkerEvent;
             process.Faulted -= OnWorkerFaulted;
+            process.Diagnostic -= OnWorkerDiagnostic;
             if (trace is not null)
             {
                 process.Connection.MessageSent -= trace.Sent;
@@ -235,6 +266,9 @@ internal sealed class WorkerDebuggerEngine(
 
     private void OnWorkerEvent(DebuggerWorkerMessage message)
     {
+        if (message.Name is DebuggerWorkerEvents.Initialized or
+            DebuggerWorkerEvents.ProcessStarted)
+            return;
         if (message.Name == DebuggerWorkerEvents.BreakpointsChanged &&
             message.BreakpointRevision != Volatile.Read(ref breakpointRevision))
             return;
@@ -260,6 +294,9 @@ internal sealed class WorkerDebuggerEngine(
 
     private void OnWorkerFaulted(string message) =>
         Emit(new DebugEngineFaulted(message));
+
+    private void OnWorkerDiagnostic(string message) =>
+        Emit(new DebugEngineOutput(new("stderr", message)));
 
     private void Emit(DebugEngineEvent value)
     {
@@ -312,6 +349,17 @@ internal sealed class WorkerDebuggerEngine(
     private static int? ToMilliseconds(TimeSpan? value) => value is null
         ? null
         : checked((int)value.Value.TotalMilliseconds);
+
+    private static string? TracePath(WorkerDebuggerOptions options, Guid sessionId)
+    {
+        if (!string.IsNullOrWhiteSpace(options.TracePath)) return options.TracePath;
+        if (string.IsNullOrWhiteSpace(options.TraceDirectory)) return null;
+        if (!Path.IsPathFullyQualified(options.TraceDirectory))
+            throw new ArgumentException("Debugger trace directory must be absolute.");
+        return Path.Combine(
+            options.TraceDirectory,
+            $"debugger-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}-{sessionId:N}.jsonl");
+    }
 }
 
 internal sealed class DebuggerSessionTrace : IDisposable
@@ -372,8 +420,30 @@ internal sealed class DebuggerSessionTrace : IDisposable
         value.ReplyTo,
         value.BreakpointRevision,
         value.Success,
-        errorCode = value.Error?.Code
+        errorCode = value.Error?.Code,
+        breakpointIds = BreakpointIds(value)
     };
+
+    private static IReadOnlyList<Guid>? BreakpointIds(DebuggerWorkerMessage value)
+    {
+        try
+        {
+            if (value.Body is not { } body) return null;
+            if (value.Name == DebuggerWorkerCommands.ReplaceBreakpoints &&
+                value.Kind == DebuggerWorkerMessageKind.Request)
+                return body.Deserialize<DebuggerWorkerBreakpointRequest>(
+                    DebuggerWorkerProtocol.SerializerOptions)?.Breakpoints
+                    .Select(item => item.Id).ToArray();
+            if (value.Name == DebuggerWorkerEvents.BreakpointsChanged)
+                return body.Deserialize<IReadOnlyList<DebugBreakpointBinding>>(
+                    DebuggerWorkerProtocol.SerializerOptions)?
+                    .Select(item => item.BreakpointId).ToArray();
+        }
+        catch (JsonException)
+        {
+        }
+        return null;
+    }
 }
 
 internal sealed class DebuggerWorkerProcess : IAsyncDisposable
@@ -406,6 +476,7 @@ internal sealed class DebuggerWorkerProcess : IAsyncDisposable
 
     public DebuggerWorkerClientConnection Connection { get; }
     public event Action<string>? Faulted;
+    public event Action<string>? Diagnostic;
 
     public static Task<DebuggerWorkerProcess> StartAsync(
         string workerPath,
@@ -494,7 +565,7 @@ internal sealed class DebuggerWorkerProcess : IAsyncDisposable
     private async Task ReadStandardErrorAsync()
     {
         while (await process.StandardError.ReadLineAsync() is { } line)
-            Faulted?.Invoke($"Debugger worker: {line}");
+            Diagnostic?.Invoke($"Debugger worker: {line}");
     }
 
     private async Task ObserveExitAsync()

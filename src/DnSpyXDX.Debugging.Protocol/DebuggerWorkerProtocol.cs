@@ -29,12 +29,16 @@ public static class DebuggerWorkerProtocol
 {
     public const int Version = 1;
     public const int DefaultMaximumPayloadBytes = 4 * 1024 * 1024;
+    public const int MaximumDepth = 32;
+    public const int MaximumCollectionItems = 10_000;
+    public const int MaximumStringCharacters = 1_048_576;
 
     public static JsonSerializerOptions SerializerOptions { get; } = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         PropertyNameCaseInsensitive = false,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        MaxDepth = MaximumDepth
     };
 
     public static void Validate(DebuggerWorkerMessage message)
@@ -55,6 +59,10 @@ public static class DebuggerWorkerProtocol
             throw new InvalidDataException("Debugger worker message name is too long.");
         if (message.BreakpointRevision is < 0)
             throw new InvalidDataException("Breakpoint revision cannot be negative.");
+        if (message.Error is { } error &&
+            (error.Code.Length > 256 || error.Message.Length > 65_536))
+            throw new InvalidDataException("Debugger worker error text exceeds its limit.");
+        if (message.Body is { } body) ValidateBody(body, 0);
 
         switch (message.Kind)
         {
@@ -98,5 +106,45 @@ public static class DebuggerWorkerProtocol
             throw new InvalidDataException("Debugger worker payload is null.");
         Validate(message);
         return message;
+    }
+
+    private static void ValidateBody(JsonElement value, int depth)
+    {
+        if (depth > MaximumDepth)
+            throw new InvalidDataException("Debugger worker JSON nesting exceeds its limit.");
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.String:
+                if ((value.GetString()?.Length ?? 0) > MaximumStringCharacters)
+                    throw new InvalidDataException("Debugger worker string exceeds its limit.");
+                break;
+            case JsonValueKind.Array:
+            {
+                var count = 0;
+                foreach (var item in value.EnumerateArray())
+                {
+                    if (++count > MaximumCollectionItems)
+                        throw new InvalidDataException(
+                            "Debugger worker collection exceeds its item limit.");
+                    ValidateBody(item, depth + 1);
+                }
+                break;
+            }
+            case JsonValueKind.Object:
+            {
+                var count = 0;
+                foreach (var property in value.EnumerateObject())
+                {
+                    if (++count > MaximumCollectionItems)
+                        throw new InvalidDataException(
+                            "Debugger worker object exceeds its property limit.");
+                    if (property.Name.Length > 256)
+                        throw new InvalidDataException(
+                            "Debugger worker property name exceeds its limit.");
+                    ValidateBody(property.Value, depth + 1);
+                }
+                break;
+            }
+        }
     }
 }

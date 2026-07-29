@@ -80,6 +80,10 @@ protocol version, session UUID, generation, sequence, command/event name, and op
 revision. Replies correlate by sequence. Another session/generation is rejected, cancelled late
 replies are ignored, and protocol failure faults pending operations.
 
+The host first sends `initialize`; the worker returns its protocol version and supported runtimes,
+then emits `initialized`. Starting an engine emits `processStarted`. JSON payloads have explicit
+payload, nesting, string, property, and collection limits.
+
 `DnSpyXDX.Debugger.Worker` owns exactly one runtime engine. `eng/DebuggerWorker.targets` publishes
 it under `debuggers/worker/<rid>`; the pinned NetCoreDbg payload remains under
 `debuggers/netcoredbg/<rid>`. Shutdown requests engine termination/detach, requests worker shutdown,
@@ -202,6 +206,35 @@ reference remain unchanged.
 
 IL and combined IL/C# output also annotate `.locals` and local load/store instructions using these
 decompiler-derived names. These are inferred display names, not names returned by NetCoreDbg.
+Local mappings are removed when their module is unloaded so replacement and Unity-reloaded
+assemblies cannot reuse stale inferred names.
+
+## Unity Mono
+
+`UnityMonoEndpointDiscovery` listens for Unity player announcements on multicast group
+`225.0.0.222:54997`, accepts only debug-enabled packets, and exposes player/project, address,
+debugger protocol version, and loopback status. Remote UI attachment requires explicit
+confirmation; MCP attachment remains loopback-only. The dedicated worker backend selects a Unity
+generation profile and rejects IL2CPP before opening a Mono connection. Mono assembly load/unload
+events rebind the complete stable breakpoint set.
+
+## MCP debugger automation
+
+Debugger tools cover launch/attach, complete breakpoint replacement, event-driven stop waiting,
+status, threads, stack, scopes, bounded variables, evaluation, execution control, and explicit
+stop semantics. Paths are canonicalized under allowed roots; remote Mono/Unity endpoints are
+rejected; debug environment variables default to none and must appear in
+`DebugEnvironmentAllowlist`.
+
+Each debug session is bound to the creating MCP connection as well as its opaque session UUID.
+Paused handles require the current stop generation and become stale on resume. One stop wait is
+allowed per session, abandoned sessions expire by lease, and the UI displays MCP ownership while
+disabling competing execution commands.
+
+Set `DNSPYXDX_DEBUG_TRACE_DIRECTORY` to an absolute directory to write one sanitized JSONL trace
+per session. Traces retain message/session/generation/sequence, lifecycle event, breakpoint
+revision/UUID and structured error code metadata while omitting message bodies, expressions,
+arguments, environment values, variables, and target output.
 
 ## UI projection
 

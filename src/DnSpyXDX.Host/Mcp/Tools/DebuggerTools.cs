@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Net;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
+using System.Runtime.CompilerServices;
 using DnSpyXDX.Application;
 using ModelContextProtocol.Server;
 
@@ -14,11 +15,15 @@ public sealed class DebuggerTools(
     McpServerSettings settings,
     McpActivityLog activity)
 {
+    private static readonly ConditionalWeakTable<McpServer, OwnerIdentity> Owners = new();
+
     [McpServerTool(Name = "debug_launch", Destructive = true, UseStructuredContent = true)]
     [Description("Launches an allowed managed DLL or executable in a detached CoreCLR debugger worker.")]
     public Task<McpDebugStatus> LaunchAsync(
         string path,
+        McpServer server,
         IReadOnlyList<string>? arguments = null,
+        IReadOnlyDictionary<string, string>? environment = null,
         bool stopAtEntry = false,
         IReadOnlyList<McpDebugBreakpoint>? breakpoints = null,
         CancellationToken cancellationToken = default) =>
@@ -31,20 +36,23 @@ public sealed class DebuggerTools(
             return await debugger.LaunchAsync(
                 target,
                 arguments,
+                ValidateEnvironment(environment),
                 stopAtEntry,
                 await ResolveBreakpointsAsync(breakpoints ?? [], token),
                 token);
-        }, cancellationToken);
+        }, server, cancellationToken);
 
     [McpServerTool(Name = "debug_attach", Destructive = true, UseStructuredContent = true)]
     [Description("Attaches a detached debugger worker to a CoreCLR PID or loopback Mono/Unity Mono endpoint.")]
     public Task<McpDebugStatus> AttachAsync(
         DebugRuntimeKind runtime,
+        McpServer server,
         int? processId = null,
         string? host = null,
         int? port = null,
         string? runtimeVersion = null,
         DebugScriptingBackend scriptingBackend = DebugScriptingBackend.Managed,
+        int? debuggerProtocolVersion = null,
         CancellationToken cancellationToken = default) =>
         RunAsync("debug_attach", runtime.ToString(), async token =>
         {
@@ -59,14 +67,16 @@ public sealed class DebuggerTools(
                 port,
                 runtimeVersion,
                 scriptingBackend,
+                debuggerProtocolVersion,
                 token);
-        }, cancellationToken);
+        }, server, cancellationToken);
 
     [McpServerTool(Name = "debug_set_breakpoints", Destructive = true, Idempotent = true, UseStructuredContent = true)]
     [Description("Replaces all breakpoints for the active debugger session using exact MVID, MethodDef token and IL offset identities.")]
     public Task<IReadOnlyList<DebugBreakpointBinding>> SetBreakpointsAsync(
         Guid sessionId,
         IReadOnlyList<McpDebugBreakpoint> breakpoints,
+        McpServer server,
         CancellationToken cancellationToken = default) =>
         RunAsync(
             "debug_set_breakpoints",
@@ -75,61 +85,72 @@ public sealed class DebuggerTools(
                 sessionId,
                 await ResolveBreakpointsAsync(breakpoints, token),
                 token),
+            server,
             cancellationToken);
 
     [McpServerTool(Name = "debug_wait_for_stop", ReadOnly = true, UseStructuredContent = true)]
     [Description("Waits for the target to pause, exit or fault without polling the runtime worker.")]
     public Task<McpDebugStatus> WaitForStopAsync(
         Guid sessionId,
+        McpServer server,
         int timeoutMilliseconds = 30_000,
         CancellationToken cancellationToken = default) =>
         RunAsync(
             "debug_wait_for_stop",
             sessionId.ToString("D"),
             token => debugger.WaitForStopAsync(sessionId, timeoutMilliseconds, token),
+            server,
             cancellationToken);
 
     [McpServerTool(Name = "debug_status", ReadOnly = true, UseStructuredContent = true)]
-    public McpDebugStatus Status(Guid sessionId) => debugger.Status(sessionId);
+    public McpDebugStatus Status(Guid sessionId, McpServer server)
+    {
+        using var owner = debugger.EnterOwner(Owner(server));
+        return debugger.Status(sessionId);
+    }
 
     [McpServerTool(Name = "debug_get_threads", ReadOnly = true, UseStructuredContent = true)]
     public Task<IReadOnlyList<DebugThread>> ThreadsAsync(
         Guid sessionId,
+        McpServer server,
         CancellationToken cancellationToken = default) =>
         RunAsync("debug_get_threads", sessionId.ToString("D"),
-            token => debugger.ThreadsAsync(sessionId, token), cancellationToken);
+            token => debugger.ThreadsAsync(sessionId, token), server, cancellationToken);
 
     [McpServerTool(Name = "debug_get_stack", ReadOnly = true, UseStructuredContent = true)]
     public Task<IReadOnlyList<DebugStackFrame>> StackAsync(
         Guid sessionId,
         long stopGeneration,
         long threadId,
+        McpServer server,
         CancellationToken cancellationToken = default) =>
         RunAsync("debug_get_stack", sessionId.ToString("D"),
             token => debugger.StackAsync(
                 sessionId,
                 stopGeneration,
                 new(threadId),
-                token), cancellationToken);
+                token), server, cancellationToken);
 
     [McpServerTool(Name = "debug_get_scopes", ReadOnly = true, UseStructuredContent = true)]
     public Task<IReadOnlyList<DebugScope>> ScopesAsync(
         Guid sessionId,
         long stopGeneration,
         long frameId,
+        McpServer server,
         CancellationToken cancellationToken = default) =>
         RunAsync("debug_get_scopes", sessionId.ToString("D"),
             token => debugger.ScopesAsync(
                 sessionId,
                 stopGeneration,
                 new(frameId),
-                token), cancellationToken);
+                token), server, cancellationToken);
 
     [McpServerTool(Name = "debug_get_variables", ReadOnly = true, UseStructuredContent = true)]
     public Task<IReadOnlyList<McpDebugScopeVariables>> VariablesAsync(
         Guid sessionId,
         long stopGeneration,
         long frameId,
+        McpServer server,
         int maximumVariables = 200,
         int maximumDepth = 1,
         CancellationToken cancellationToken = default) =>
@@ -141,6 +162,7 @@ public sealed class DebuggerTools(
                 maximumVariables,
                 maximumDepth,
                 token),
+            server,
             cancellationToken);
 
     [McpServerTool(Name = "debug_evaluate", Destructive = true, UseStructuredContent = true)]
@@ -148,6 +170,7 @@ public sealed class DebuggerTools(
         Guid sessionId,
         long stopGeneration,
         string expression,
+        McpServer server,
         long? frameId = null,
         CancellationToken cancellationToken = default) =>
         RunAsync("debug_evaluate", sessionId.ToString("D"),
@@ -157,21 +180,24 @@ public sealed class DebuggerTools(
                 expression,
                 frameId is { } value ? new(value) : null,
                 token),
+            server,
             cancellationToken);
 
     [McpServerTool(Name = "debug_continue", Destructive = true, UseStructuredContent = true)]
     public Task<McpDebugStatus> ContinueAsync(
         Guid sessionId,
+        McpServer server,
         CancellationToken cancellationToken = default) =>
         RunAsync("debug_continue", sessionId.ToString("D"),
-            token => debugger.ContinueAsync(sessionId, token), cancellationToken);
+            token => debugger.ContinueAsync(sessionId, token), server, cancellationToken);
 
     [McpServerTool(Name = "debug_pause", Destructive = true, UseStructuredContent = true)]
     public Task<McpDebugStatus> PauseAsync(
         Guid sessionId,
+        McpServer server,
         CancellationToken cancellationToken = default) =>
         RunAsync("debug_pause", sessionId.ToString("D"),
-            token => debugger.PauseAsync(sessionId, token), cancellationToken);
+            token => debugger.PauseAsync(sessionId, token), server, cancellationToken);
 
     [McpServerTool(Name = "debug_step", Destructive = true, UseStructuredContent = true)]
     public Task<McpDebugStatus> StepAsync(
@@ -179,6 +205,7 @@ public sealed class DebuggerTools(
         long stopGeneration,
         long threadId,
         DebugStepKind kind,
+        McpServer server,
         CancellationToken cancellationToken = default) =>
         RunAsync("debug_step", sessionId.ToString("D"),
             token => debugger.StepAsync(
@@ -186,23 +213,26 @@ public sealed class DebuggerTools(
                 stopGeneration,
                 new(threadId),
                 kind,
-                token), cancellationToken);
+                token), server, cancellationToken);
 
     [McpServerTool(Name = "debug_stop", Destructive = true, Idempotent = true, UseStructuredContent = true)]
-    [Description("Stops a debugger session. CoreCLR requires terminate=true; Mono detach uses terminate=false.")]
+    [Description("Stops a debugger session; terminate=true ends a launched target and terminate=false detaches while preserving it.")]
     public Task<McpDebugStatus> StopAsync(
         Guid sessionId,
         bool terminate,
+        McpServer server,
         CancellationToken cancellationToken = default) =>
         RunAsync("debug_stop", sessionId.ToString("D"),
-            token => debugger.StopAsync(sessionId, terminate, token), cancellationToken);
+            token => debugger.StopAsync(sessionId, terminate, token), server, cancellationToken);
 
     private async Task<T> RunAsync<T>(
         string operation,
         string target,
         Func<CancellationToken, Task<T>> action,
+        McpServer server,
         CancellationToken cancellationToken)
     {
+        using var owner = debugger.EnterOwner(Owner(server));
         var started = DateTimeOffset.UtcNow;
         activity.Begin(operation, target, countRequest: false);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -228,6 +258,11 @@ public sealed class DebuggerTools(
             throw McpErrors.Debugger(exception);
         }
     }
+
+    private static Guid Owner(McpServer server) =>
+        Owners.GetValue(server, _ => new(Guid.NewGuid())).Id;
+
+    private sealed record OwnerIdentity(Guid Id);
 
     private async Task<IReadOnlyList<DebugBreakpoint>> ResolveBreakpointsAsync(
         IReadOnlyList<McpDebugBreakpoint> requested,
@@ -268,6 +303,30 @@ public sealed class DebuggerTools(
                 token = matches[0].Symbol.MetadataToken;
             }
             result.Add(value.ToBreakpoint(mvid, token));
+        }
+        return result;
+    }
+
+    private IReadOnlyDictionary<string, string>? ValidateEnvironment(
+        IReadOnlyDictionary<string, string>? environment)
+    {
+        if (environment is null || environment.Count == 0) return null;
+        var allowed = settings.DebugEnvironmentAllowlist.ToHashSet(
+            OperatingSystem.IsWindows()
+                ? StringComparer.OrdinalIgnoreCase
+                : StringComparer.Ordinal);
+        var result = new Dictionary<string, string>(allowed.Comparer);
+        foreach (var (name, value) in environment)
+        {
+            if (!allowed.Contains(name))
+                throw new UnauthorizedAccessException(
+                    $"Debug environment variable '{name}' is not allowlisted.");
+            if (name.Length is 0 or > 256 || name.Contains('='))
+                throw new ArgumentException("Debug environment variable name is invalid.");
+            if (value.Length > 32_768)
+                throw new ArgumentException(
+                    $"Debug environment variable '{name}' exceeds 32768 characters.");
+            result.Add(name, value);
         }
         return result;
     }

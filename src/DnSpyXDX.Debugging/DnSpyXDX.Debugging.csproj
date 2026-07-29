@@ -6,4 +6,7 @@
   <ItemGroup>
     <Compile Remove="CoreClrDebugger.cs;DapConnection.cs;DapMessageFramer.cs;DebuggerWorker.cs;MonoSoftDebugger.cs;UnityMonoDebugger.cs" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="DnSpyXDX.Tests" />
+  </ItemGroup>
 </Project>

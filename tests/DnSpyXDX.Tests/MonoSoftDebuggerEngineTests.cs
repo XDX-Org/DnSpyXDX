@@ -1,11 +1,39 @@
 using DnSpyXDX.Application;
 using DnSpyXDX.Debugging;
+using System.Net;
 using Xunit;
 
 namespace DnSpyXDX.Tests;
 
 public sealed class MonoSoftDebuggerEngineTests
 {
+    [Fact]
+    public void Unity_discovery_parses_debug_player_multicast()
+    {
+        var endpoint = UnityMonoEndpointDiscovery.ParsePacket(
+            "[IP] 10.0.1.152 [Port] 55000 [Flags] 3 [Guid] 2575380029 " +
+            "[EditorId] 4264788666 [Version] 1048832 " +
+            "[Id] iPhonePlayer(Example-iPhone):56000 [Debug] 1 " +
+            "[PackageName] iPhonePlayer",
+            IPAddress.Loopback);
+
+        Assert.NotNull(endpoint);
+        Assert.Equal("10.0.1.152", endpoint.Host);
+        Assert.Equal(55000, endpoint.Port);
+        Assert.Equal("iPhonePlayer", endpoint.PlayerName);
+        Assert.Equal("Example-iPhone", endpoint.ProjectName);
+        Assert.Equal(1048832, endpoint.DebuggerProtocolVersion);
+        Assert.False(endpoint.IsLoopback);
+    }
+
+    [Fact]
+    public void Unity_discovery_ignores_non_debug_players()
+    {
+        Assert.Null(UnityMonoEndpointDiscovery.ParsePacket(
+            "[IP] 127.0.0.1 [Port] 55000 [Debug] 0",
+            IPAddress.Loopback));
+    }
+
     [Fact]
     public async Task Provider_exposes_direct_attach_capabilities()
     {

@@ -13,6 +13,8 @@ public interface IDebuggerService : IAsyncDisposable
 
     Task StartAsync(DebugStartRequest request, CancellationToken cancellationToken = default);
     Task TerminateAsync(CancellationToken cancellationToken = default);
+    Task DetachAsync(CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This debugger does not support detach.");
     Task ContinueAsync(CancellationToken cancellationToken = default);
     Task PauseAsync(CancellationToken cancellationToken = default);
     Task StepAsync(DebugThreadId thread, DebugStepKind kind, CancellationToken cancellationToken = default);

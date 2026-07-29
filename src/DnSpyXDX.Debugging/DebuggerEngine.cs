@@ -29,6 +29,8 @@ public interface IDebuggerEngine : IAsyncDisposable
         DebugStartRequest request,
         CancellationToken cancellationToken);
     Task TerminateAsync(CancellationToken cancellationToken);
+    Task DetachAsync(CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This debugger engine does not support detach.");
     Task ContinueAsync(CancellationToken cancellationToken);
     Task PauseAsync(CancellationToken cancellationToken);
     Task StepAsync(DebugThreadId thread, DebugStepKind kind, CancellationToken cancellationToken);

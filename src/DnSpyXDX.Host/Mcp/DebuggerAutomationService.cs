@@ -10,10 +10,13 @@ public sealed class DebuggerAutomationService : IDisposable
     private readonly McpServerSettings settings;
     private readonly Timer leaseTimer;
     private readonly object gate = new();
+    private readonly AsyncLocal<Guid> currentOwner = new();
     private Guid sessionId;
+    private Guid sessionOwner;
     private long stopGeneration;
     private TaskCompletionSource changed = NewSignal();
     private DateTimeOffset lastAccess;
+    private DebugSessionStatus lastStatus;
     private int waiting;
     private bool disposed;
 
@@ -26,33 +29,40 @@ public sealed class DebuggerAutomationService : IDisposable
         this.workspace = workspace;
         this.settings = settings;
         debugger.StateChanged += OnStateChanged;
+        lastStatus = debugger.Snapshot.Status;
         leaseTimer = new(_ => _ = ExpireLeaseAsync(), null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
     }
 
     public async Task<McpDebugStatus> LaunchAsync(
         string path,
         IReadOnlyList<string>? arguments,
+        IReadOnlyDictionary<string, string>? environment,
         bool stopAtEntry,
         IReadOnlyList<DebugBreakpoint> breakpoints,
         CancellationToken cancellationToken)
     {
         lock (gate)
         {
+            if (currentOwner.Value == Guid.Empty)
+                throw new InvalidOperationException("Debugger automation requires an MCP owner.");
             if (sessionId != Guid.Empty && debugger.Snapshot.Status is not
                 (DebugSessionStatus.Terminated or DebugSessionStatus.Faulted))
                 throw new InvalidOperationException("A debugger automation session is already active.");
             sessionId = Guid.NewGuid();
+            sessionOwner = currentOwner.Value;
             stopGeneration = 0;
             lastAccess = DateTimeOffset.UtcNow;
         }
         try
         {
+            workspace.SetMcpControl(true);
             await debugger.StartAsync(
                 new DebugLaunchRequest(
                     DebugRuntimeKind.CoreClr,
                     path,
                     arguments,
                     WorkingDirectory: Path.GetDirectoryName(path),
+                    Environment: environment,
                     StopAtEntry: stopAtEntry)
                 {
                     InitialBreakpoints = breakpoints
@@ -63,6 +73,7 @@ public sealed class DebuggerAutomationService : IDisposable
         catch
         {
             lock (gate) sessionId = Guid.Empty;
+            workspace.SetMcpControl(false);
             throw;
         }
     }
@@ -74,19 +85,24 @@ public sealed class DebuggerAutomationService : IDisposable
         int? port,
         string? runtimeVersion,
         DebugScriptingBackend scriptingBackend,
+        int? debuggerProtocolVersion,
         CancellationToken cancellationToken)
     {
         lock (gate)
         {
+            if (currentOwner.Value == Guid.Empty)
+                throw new InvalidOperationException("Debugger automation requires an MCP owner.");
             if (sessionId != Guid.Empty && debugger.Snapshot.Status is not
                 (DebugSessionStatus.Terminated or DebugSessionStatus.Faulted))
                 throw new InvalidOperationException("A debugger automation session is already active.");
             sessionId = Guid.NewGuid();
+            sessionOwner = currentOwner.Value;
             stopGeneration = 0;
             lastAccess = DateTimeOffset.UtcNow;
         }
         try
         {
+            workspace.SetMcpControl(true);
             await debugger.StartAsync(
                 new DebugAttachRequest(
                     runtime,
@@ -94,13 +110,15 @@ public sealed class DebuggerAutomationService : IDisposable
                     host,
                     port,
                     runtimeVersion,
-                    scriptingBackend),
+                    scriptingBackend,
+                    debuggerProtocolVersion),
                 cancellationToken);
             return Status(sessionId);
         }
         catch
         {
             lock (gate) sessionId = Guid.Empty;
+            workspace.SetMcpControl(false);
             throw;
         }
     }
@@ -280,11 +298,13 @@ public sealed class DebuggerAutomationService : IDisposable
         CancellationToken cancellationToken)
     {
         RequireSession(requestedSession);
-        if (!terminate && debugger.Snapshot.Runtime == DebugRuntimeKind.CoreClr)
-            throw new NotSupportedException(
-                "CoreCLR detach is not implemented; pass terminate=true explicitly.");
-        await debugger.TerminateAsync(cancellationToken);
-        return Status(requestedSession);
+        if (terminate)
+            await debugger.TerminateAsync(cancellationToken);
+        else
+            await debugger.DetachAsync(cancellationToken);
+        var result = Status(requestedSession);
+        workspace.SetMcpControl(false);
+        return result;
     }
 
     public void Dispose()
@@ -293,32 +313,47 @@ public sealed class DebuggerAutomationService : IDisposable
         disposed = true;
         debugger.StateChanged -= OnStateChanged;
         leaseTimer.Dispose();
+        workspace.SetMcpControl(false);
+    }
+
+    public IDisposable EnterOwner(Guid owner)
+    {
+        if (owner == Guid.Empty) throw new ArgumentException("MCP owner cannot be empty.", nameof(owner));
+        var previous = currentOwner.Value;
+        currentOwner.Value = owner;
+        return new OwnerScope(() => currentOwner.Value = previous);
     }
 
     private void OnStateChanged(DebugSessionSnapshot snapshot)
     {
         TaskCompletionSource signal;
+        var releaseControl = false;
         lock (gate)
         {
             if (sessionId == Guid.Empty) return;
             if (snapshot.Status is DebugSessionStatus.Paused or
-                DebugSessionStatus.Terminated or DebugSessionStatus.Faulted)
+                DebugSessionStatus.Terminated or DebugSessionStatus.Faulted ||
+                lastStatus == DebugSessionStatus.Paused)
                 stopGeneration++;
+            lastStatus = snapshot.Status;
+            if (snapshot.Status is DebugSessionStatus.Terminated or DebugSessionStatus.Faulted)
+                releaseControl = true;
             signal = changed;
             changed = NewSignal();
         }
+        if (releaseControl) workspace.SetMcpControl(false);
         signal.TrySetResult();
     }
 
     private void RequirePaused(Guid requestedSession, long? requestedStopGeneration = null)
     {
         RequireSession(requestedSession);
-        if (debugger.Snapshot.Status != DebugSessionStatus.Paused)
-            throw new InvalidOperationException("The debug target must be paused.");
         lock (gate)
             if (requestedStopGeneration is { } value && value != stopGeneration)
                 throw new InvalidOperationException(
                     "stale_reference: the target has resumed or stopped again.");
+        if (debugger.Snapshot.Status != DebugSessionStatus.Paused)
+            throw new InvalidOperationException("The debug target must be paused.");
     }
 
     private void RequireSession(Guid requestedSession)
@@ -327,6 +362,9 @@ public sealed class DebuggerAutomationService : IDisposable
         {
             if (requestedSession == Guid.Empty || requestedSession != sessionId)
                 throw new KeyNotFoundException("The debugger automation session is unknown or expired.");
+            if (currentOwner.Value == Guid.Empty || currentOwner.Value != sessionOwner)
+                throw new UnauthorizedAccessException(
+                    "The debugger automation session belongs to another MCP client.");
             lastAccess = DateTimeOffset.UtcNow;
         }
     }
@@ -376,6 +414,7 @@ public sealed class DebuggerAutomationService : IDisposable
         {
             if (debugger.Snapshot.Status is DebugSessionStatus.Running or DebugSessionStatus.Paused)
                 await debugger.TerminateAsync();
+            workspace.SetMcpControl(false);
         }
         catch
         {
@@ -384,6 +423,15 @@ public sealed class DebuggerAutomationService : IDisposable
 
     private static TaskCompletionSource NewSignal() =>
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private sealed class OwnerScope(Action dispose) : IDisposable
+    {
+        private int disposed;
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref disposed, 1) == 0) dispose();
+        }
+    }
 }
 
 public sealed record McpDebugStatus(
