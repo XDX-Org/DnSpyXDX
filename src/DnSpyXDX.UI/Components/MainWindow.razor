@@ -42,13 +42,15 @@
       <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="1.5"></rect><path d="M3 14h18"></path><path d="m9 17 3 3 3-3"></path></svg>
     </button>
     <div class="debug-toolbar" aria-label="Debugger controls">
-      <button class="toolbar-icon" title="@(DebuggerActive ? "Stop the active session before starting another" : "Start or attach debugger")" aria-label="Start or attach debugger" disabled="@(Debugger.IsBusy || DebuggerActive)" @onclick="OpenDebugDialog">▶</button>
-      <button class="toolbar-icon" title="Continue" aria-label="Continue" disabled="@(Debugger.IsBusy || Debugger.Snapshot.Status != DebugSessionStatus.Paused)" @onclick="() => Debugger.ContinueAsync()">▷</button>
-      <button class="toolbar-icon" title="Pause" aria-label="Pause" disabled="@(Debugger.IsBusy || Debugger.Snapshot.Status != DebugSessionStatus.Running)" @onclick="() => Debugger.PauseAsync()">Ⅱ</button>
-      <button class="toolbar-icon" title="Stop debugging" aria-label="Stop debugging" disabled="@(!DebuggerActive)" @onclick="() => Debugger.TerminateAsync()">■</button>
-      <button class="toolbar-icon debug-step" title="Step into" aria-label="Step into" disabled="@(!DebuggerPaused)" @onclick="() => Debugger.StepAsync(DebugStepKind.Into)">↓</button>
-      <button class="toolbar-icon debug-step" title="Step over" aria-label="Step over" disabled="@(!DebuggerPaused)" @onclick="() => Debugger.StepAsync(DebugStepKind.Over)">↷</button>
-      <button class="toolbar-icon debug-step" title="Step out" aria-label="Step out" disabled="@(!DebuggerPaused)" @onclick="() => Debugger.StepAsync(DebugStepKind.Out)">↑</button>
+      <button class="toolbar-icon" title="Start or attach debugger (F5)" aria-label="Start or attach debugger" disabled="@(!DebuggerUi.CanStart)" @onclick="OpenDebugDialog">▶</button>
+      <button class="toolbar-icon" title="Continue (F5)" aria-label="Continue" disabled="@(!DebuggerUi.CanContinue)" @onclick="() => Debugger.ContinueAsync()">▷</button>
+      <button class="toolbar-icon" title="Pause (Ctrl+Alt+Pause)" aria-label="Pause" disabled="@(!DebuggerUi.CanPause)" @onclick="() => Debugger.PauseAsync()">Ⅱ</button>
+      <button class="toolbar-icon" title="Stop debugging (Shift+F5)" aria-label="Stop debugging" disabled="@(!DebuggerUi.CanStop)" @onclick="() => Debugger.TerminateAsync()">■</button>
+      <button class="toolbar-icon" title="Restart debugging (Ctrl+Shift+F5)" aria-label="Restart debugging" disabled="@(!DebuggerUi.CanRestart)" @onclick="RestartDebuggerAsync">↻</button>
+      <span class="debug-toolbar-separator" role="separator"></span>
+      <button class="toolbar-icon debug-step" title="Step over (F10)" aria-label="Step over" disabled="@(!DebuggerUi.CanStep)" @onclick="() => Debugger.StepAsync(DebugStepKind.Over)">↷</button>
+      <button class="toolbar-icon debug-step" title="Step into (F11)" aria-label="Step into" disabled="@(!DebuggerUi.CanStep)" @onclick="() => Debugger.StepAsync(DebugStepKind.Into)">↓</button>
+      <button class="toolbar-icon debug-step" title="Step out (Shift+F11)" aria-label="Step out" disabled="@(!DebuggerUi.CanStep)" @onclick="() => Debugger.StepAsync(DebugStepKind.Out)">↑</button>
     </div>
     <label class="language-selector"><span>Language</span><select value="@language" @onchange="LanguageChangedAsync"><option value="@DecompilerLanguage.CSharp">C#</option><option value="@DecompilerLanguage.IL">IL</option><option value="@DecompilerLanguage.ILWithCSharp">IL with C#</option><option value="@DecompilerLanguage.Hex">Hex</option></select></label>
   </header>
@@ -63,7 +65,7 @@
             </button>
           </div>
         </header>
-        <VirtualizedTree Assemblies="Backend.Assemblies" EmptyMessage="@(restoring ? "Restoring assembly tree…" : "Open a managed .dll or .exe to begin.")" OnOpen="OpenTreeSymbolAsync" OnOpenReference="OpenReferenceAsync" OnOpenResource="OpenResourceAsync" OnContextMenu="OpenTreeContextMenu" ExpandedPath="revealedPath" SelectedSymbol="selectedSymbol" SelectedNode="selectedNode" SelectionVersion="treeSelectionVersion" CollapseVersion="treeCollapseVersion" SelectedAssemblies="selectedAssemblies" OnClearSelection="ClearAssemblySelection" OnToggleAssembly="ToggleAssemblySelection" OnEmptyContextMenu="OpenTreeEmptyContextMenu" />
+        <VirtualizedTree Assemblies="Backend.Assemblies" EmptyMessage="@(restoring ? "Restoring assembly tree…" : "Open a managed .dll or .exe to begin.")" OnOpen="OpenTreeSymbolAsync" OnOpenReference="OpenReferenceAsync" OnOpenResource="OpenResourceAsync" OnContextMenu="OpenTreeContextMenu" ExpandedPath="revealedPath" SelectedSymbol="selectedSymbol" SelectedNode="selectedNode" SelectionVersion="treeSelectionVersion" CollapseVersion="treeCollapseVersion" FilterVersion="treeFilterVersion" SelectedAssemblies="selectedAssemblies" OnClearSelection="ClearAssemblySelection" OnToggleAssembly="ToggleAssemblySelection" OnEmptyContextMenu="OpenTreeEmptyContextMenu" />
       </aside>
       <div class="explorer-resizer" title="Drag to resize assembly tree"></div>
     </div>
@@ -113,7 +115,12 @@
           </div>
           <div class="analyzer-body @(bottomTab == "mcp" ? null : "panel-hidden")"><McpActivityPanel /></div>
           <div class="analyzer-body @(bottomTab == "debugger" ? null : "panel-hidden")">
-            <DebuggerView OnNavigateLocation="NavigateDebuggerLocationAsync" />
+            <DebuggerView OnNavigateLocation="NavigateDebuggerLocationAsync"
+                          OnRetry="RetryDebuggerAsync"
+                          ActivePanel="@debuggerPanel"
+                          ActivePanelChanged="DebuggerPanelChanged"
+                          ActiveInspectPanel="@debuggerInspectPanel"
+                          ActiveInspectPanelChanged="DebuggerInspectPanelChanged" />
           </div>
         </section>
       }
@@ -161,34 +168,60 @@
   @if (settingsOpen)
   {
     <div class="modal-dismiss" @onclick="CloseSettings"></div>
-    <section class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <section class="settings-dialog preferences-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <header><strong id="settings-title">Settings</strong><button title="Close settings" aria-label="Close settings" @onclick="CloseSettings">×</button></header>
-      <div class="settings-row"><span><strong>Theme</strong><small>Application and code colours</small></span><select class="settings-select" value="@themeId" @onchange="ThemeChangedAsync">@foreach (var theme in Themes.All) { <option value="@theme.Id">@theme.Name</option> }</select></div>
-      <label class="settings-row"><span><strong>Font</strong><small>Bundled and installed system fonts</small></span><select class="settings-select settings-font" value="@codeFontFamily" @onchange="CodeFontChangedAsync">@foreach (var font in AvailableCodeFonts) { <option value="@font">@font</option> }</select></label>
-      <div class="settings-row"><span><strong>Application zoom</strong><small>Scale the entire interface</small></span><div class="application-zoom"><button aria-label="Zoom out" disabled="@(zoomPercent <= MinimumZoom)" @onclick="() => ChangeApplicationZoom(-1)">−</button><button class="zoom-percent" aria-label="Reset zoom to 100%" @onclick="ResetApplicationZoom">@zoomPercent%</button><button aria-label="Zoom in" disabled="@(zoomPercent >= MaximumZoom)" @onclick="() => ChangeApplicationZoom(1)">+</button></div></div>
-      <label class="settings-row"><span><strong>Debug logging</strong><small>Write detailed diagnostics to the console</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@debugLogging" @onchange="DebugLoggingChanged" /></label>
-      <label class="settings-row"><span><strong>Metadata tokens</strong><small>Show token and RID comments in the main panel</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@showMetadataTokens" @onchange="MetadataTokensChangedAsync" /></label>
-      <div class="settings-row"><span><strong>Decompiler</strong><small>C# output style. Both use the ILSpy engine.</small></span><select class="settings-select" value="@memberOrder" @onchange="MemberOrderChangedAsync"><option value="@MemberOrder.Ilspy">ILSpy (default)</option><option value="@MemberOrder.DnSpy">dnSpy</option></select></div>
-      @if (memberOrder == MemberOrder.DnSpy)
+      <nav class="settings-tabs" aria-label="Settings categories">
+        <button type="button" class="@(settingsPage == SettingsPage.Appearance ? "active" : null)" aria-pressed="@(settingsPage == SettingsPage.Appearance)" @onclick="() => settingsPage = SettingsPage.Appearance">Appearance</button>
+        <button type="button" class="@(settingsPage == SettingsPage.Browser ? "active" : null)" aria-pressed="@(settingsPage == SettingsPage.Browser)" @onclick="() => settingsPage = SettingsPage.Browser">Browser</button>
+        <button type="button" class="@(settingsPage == SettingsPage.Decompiler ? "active" : null)" aria-pressed="@(settingsPage == SettingsPage.Decompiler)" @onclick="() => settingsPage = SettingsPage.Decompiler">Decompiler</button>
+        <button type="button" class="@(settingsPage == SettingsPage.Advanced ? "active" : null)" aria-pressed="@(settingsPage == SettingsPage.Advanced)" @onclick="() => settingsPage = SettingsPage.Advanced">Advanced</button>
+      </nav>
+      <div class="settings-content">
+      @if (settingsPage == SettingsPage.Appearance)
       {
-        <div class="settings-row member-order-row"><span><strong>Decompilation order</strong><small>Order of member groups in the dnSpy layout</small></span>
-          <ol class="member-order-list">
-            @for (var i = 0; i < memberGroupOrder.Count; i++)
-            {
-              var index = i;
-              <li class="member-order-item">
-                <span>@MemberGroups.Label(memberGroupOrder[index])</span>
-                <span class="member-order-buttons">
-                  <button type="button" title="Move up" aria-label="Move up" disabled="@(index == 0)" @onclick="() => MoveMemberGroupAsync(index, -1)">▲</button>
-                  <button type="button" title="Move down" aria-label="Move down" disabled="@(index == memberGroupOrder.Count - 1)" @onclick="() => MoveMemberGroupAsync(index, 1)">▼</button>
-                </span>
-              </li>
-            }
-          </ol>
-        </div>
+        <div class="settings-section-heading"><strong>Appearance</strong><small>Theme, typeface, and layout</small></div>
+        <div class="settings-row"><span><strong>Theme</strong><small>Application and code colours</small></span><select class="settings-select" value="@themeId" @onchange="ThemeChangedAsync">@foreach (var theme in Themes.All) { <option value="@theme.Id">@theme.Name</option> }</select></div>
+        <label class="settings-row"><span><strong>Code font</strong><small>Bundled and installed system fonts</small></span><select class="settings-select settings-font" value="@codeFontFamily" @onchange="CodeFontChangedAsync">@foreach (var font in AvailableCodeFonts) { <option value="@font">@font</option> }</select></label>
+        <div class="settings-row"><span><strong>Application zoom</strong><small>Scale the entire interface</small></span><div class="application-zoom"><button aria-label="Zoom out" disabled="@(zoomPercent <= MinimumZoom)" @onclick="() => ChangeApplicationZoom(-1)">−</button><button class="zoom-percent" aria-label="Reset zoom to 100%" @onclick="ResetApplicationZoom">@zoomPercent%</button><button aria-label="Zoom in" disabled="@(zoomPercent >= MaximumZoom)" @onclick="() => ChangeApplicationZoom(1)">+</button></div></div>
+        <label class="settings-row"><span><strong>Line wrapping</strong><small>Wrap long source and resource text lines</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@wrapLines" @onchange="LineWrappingChangedAsync" /></label>
       }
-      <label class="settings-row"><span><strong>Line wrapping</strong><small>Wrap long source and resource text lines</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@wrapLines" @onchange="LineWrappingChangedAsync" /></label>
-      <label class="settings-row mcp-roots-setting"><span><strong>MCP allowed roots</strong><small>One absolute directory per line</small></span><textarea value="@mcpAllowedRoots" @onchange="McpRootsChangedAsync" placeholder="/path/to/assemblies"></textarea></label>
+      else if (settingsPage == SettingsPage.Browser)
+      {
+        <div class="settings-section-heading"><strong>Assembly browser</strong><small>Choose how metadata appears in the tree</small></div>
+        <label class="settings-row"><span><strong>Type members</strong><small>Expand classes and other types</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@showTypeMembers" @onchange="TypeMembersChangedAsync" /></label>
+        <label class="settings-row"><span><strong>Compiler-generated code</strong><small>Show generated types and members</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@showCompilerGenerated" @onchange="CompilerGeneratedChangedAsync" /></label>
+      }
+      else if (settingsPage == SettingsPage.Decompiler)
+      {
+        <div class="settings-section-heading"><strong>Decompiler</strong><small>Control generated source output</small></div>
+        <label class="settings-row"><span><strong>Metadata tokens</strong><small>Show token and RID comments</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@showMetadataTokens" @onchange="MetadataTokensChangedAsync" /></label>
+        <div class="settings-row"><span><strong>C# output style</strong><small>Both styles use the ILSpy engine</small></span><select class="settings-select" value="@memberOrder" @onchange="MemberOrderChangedAsync"><option value="@MemberOrder.Ilspy">ILSpy (default)</option><option value="@MemberOrder.DnSpy">dnSpy</option></select></div>
+        @if (memberOrder == MemberOrder.DnSpy)
+        {
+          <div class="settings-row member-order-row"><span><strong>Member group order</strong><small>Order used by the dnSpy layout</small></span>
+            <ol class="member-order-list">
+              @for (var i = 0; i < memberGroupOrder.Count; i++)
+              {
+                var index = i;
+                <li class="member-order-item">
+                  <span>@MemberGroups.Label(memberGroupOrder[index])</span>
+                  <span class="member-order-buttons">
+                    <button type="button" title="Move up" aria-label="Move up" disabled="@(index == 0)" @onclick="() => MoveMemberGroupAsync(index, -1)">▲</button>
+                    <button type="button" title="Move down" aria-label="Move down" disabled="@(index == memberGroupOrder.Count - 1)" @onclick="() => MoveMemberGroupAsync(index, 1)">▼</button>
+                  </span>
+                </li>
+              }
+            </ol>
+          </div>
+        }
+      }
+      else
+      {
+        <div class="settings-section-heading"><strong>Advanced</strong><small>Diagnostics and external access</small></div>
+        <label class="settings-row"><span><strong>Debug logging</strong><small>Write detailed diagnostics to the console</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@debugLogging" @onchange="DebugLoggingChanged" /></label>
+        <label class="settings-row mcp-roots-setting"><span><strong>MCP allowed roots</strong><small>One absolute directory per line</small></span><textarea value="@mcpAllowedRoots" @onchange="McpRootsChangedAsync" placeholder="/path/to/assemblies"></textarea></label>
+      }
+      </div>
     </section>
   }
   @if (debugDialogOpen)
@@ -197,7 +230,29 @@
     <section class="settings-dialog debug-dialog" role="dialog" aria-modal="true" aria-labelledby="debug-dialog-title">
       <header><strong id="debug-dialog-title">Start Debugging</strong><button title="Close debugger dialog" aria-label="Close debugger dialog" @onclick="CloseDebugDialog">×</button></header>
       <div class="debug-dialog-body">
-        <label><span>Mode</span><select @bind="debugStartMode"><option value="launch">Launch CoreCLR</option><option value="attach">Attach CoreCLR</option><option value="mono">Attach Mono</option></select></label>
+        <div class="debug-configuration-picker">
+          <label>
+            <span>Saved configuration</span>
+            <select value="@SelectedDebugConfigurationValue" @onchange="DebugConfigurationChanged">
+              <option value="">New configuration</option>
+              @foreach (var configuration in debugConfigurations)
+              {
+                <option value="@configuration.Id">@configuration.Name</option>
+              }
+            </select>
+          </label>
+          <label><span>Name</span><input @bind="debugConfigurationName" placeholder="Development server" /></label>
+          <button type="button" @onclick="SaveDebugConfiguration">Save</button>
+          <button type="button" disabled="@(selectedDebugConfiguration is null)" @onclick="DeleteDebugConfiguration">Delete</button>
+        </div>
+        <label>
+          <span>Mode</span>
+          <select value="@debugStartMode" @onchange="DebugStartModeChangedAsync">
+            <option value="launch">Launch CoreCLR</option>
+            <option value="attach">Attach CoreCLR</option>
+            <option value="mono">Attach Mono</option>
+          </select>
+        </label>
         @if (debugStartMode == "launch")
         {
           <label>
@@ -208,10 +263,30 @@
             </span>
           </label>
           <label><span>Arguments <small>one per line</small></span><textarea @bind="debugArguments" rows="3"></textarea></label>
+          <label><span>Working directory <small>defaults to target directory</small></span><input @bind="debugWorkingDirectory" placeholder="path/to/working/directory" /></label>
+          <label><span>Environment <small>KEY=VALUE, one per line</small></span><textarea @bind="debugEnvironment" rows="3" placeholder="ASPNETCORE_ENVIRONMENT=Development"></textarea></label>
           <label class="debug-check"><input type="checkbox" @bind="debugStopAtEntry" /><span>Stop at entry</span></label>
         }
         else if (debugStartMode == "attach")
         {
+          <div class="debug-process-picker">
+            <label><span>Find process</span><input @bind="debugProcessFilter" @bind:event="oninput" placeholder="Name or PID" /></label>
+            <button type="button" @onclick="RefreshDebugProcessesAsync">Refresh</button>
+          </div>
+          <select class="debug-process-list"
+                  size="7"
+                  value="@debugProcessId"
+                  aria-label="CoreCLR process"
+                  @onchange="DebugProcessChanged">
+            @foreach (var process in FilteredDebugProcesses)
+            {
+              <option value="@process.Id">@process.Name · PID @process.Id@(string.IsNullOrWhiteSpace(process.WindowTitle) ? "" : $" · {process.WindowTitle}")</option>
+            }
+          </select>
+          @if (debugProcesses.Count == 0)
+          {
+            <small>No attachable processes found. Refresh or enter a PID below.</small>
+          }
           <label><span>Process ID</span><input @bind="debugProcessId" inputmode="numeric" placeholder="1234" /></label>
         }
         else
@@ -219,7 +294,12 @@
           <label><span>Host</span><input @bind="debugMonoHost" placeholder="127.0.0.1" /></label>
           <label><span>Debugger agent port</span><input @bind="debugMonoPort" inputmode="numeric" placeholder="55555" /></label>
           <small>Start Mono with <code>--debug --debugger-agent=transport=dt_socket,server=y,address=127.0.0.1:55555</code></small>
+          @if (IsRemoteMonoTarget)
+          {
+            <div class="debug-remote-warning"><strong>Remote debugger warning</strong><span>Mono debugger transport is not encrypted. Use only a trusted network or secure tunnel.</span></div>
+          }
         }
+        <div class="debug-target-summary"><strong>Target</strong><span>@DebugTargetSummary</span></div>
         @if (!string.IsNullOrWhiteSpace(debugDialogError ?? Debugger.Error)) { <div class="debug-dialog-error">@(debugDialogError ?? Debugger.Error)</div> }
       </div>
       <footer><button @onclick="CloseDebugDialog">Cancel</button><button class="primary" disabled="@Debugger.IsBusy" @onclick="StartDebuggerAsync">Start</button></footer>
@@ -243,17 +323,27 @@
   private IReadOnlyList<SearchResult> searchMatches = [];
   private bool bottomOpen;
   private string bottomTab = "search";
+  private string debuggerPanel = "inspect";
+  private string debuggerInspectPanel = "variables";
   private string searchKind = "All";
   private string searchScope = "All";
   private bool menuOpen;
   private bool settingsOpen;
+  private SettingsPage settingsPage;
   private bool debugDialogOpen;
   private string debugStartMode = "launch";
   private string debugLaunchPath = "";
   private string debugArguments = "";
+  private string debugWorkingDirectory = "";
+  private string debugEnvironment = "";
   private string debugProcessId = "";
+  private string debugProcessFilter = "";
+  private IReadOnlyList<DebugProcessOption> debugProcesses = [];
   private string debugMonoHost = "127.0.0.1";
   private string debugMonoPort = "55555";
+  private string debugConfigurationName = "";
+  private List<DebugStartConfiguration> debugConfigurations = [];
+  private Guid? selectedDebugConfiguration;
   private string? debugDialogError;
   private (Guid SessionId, DebugCodeLocation Location)? revealedDebuggerStop;
   private bool debugStopAtEntry = true;
@@ -264,6 +354,7 @@
   private double searchPanelHeight = 230;
   private int treeCollapseVersion;
   private int treeSelectionVersion;
+  private int treeFilterVersion;
   private const int MinimumZoom = 50;
   private const int MaximumZoom = 200;
   private const int ZoomStep = 10;
@@ -271,6 +362,8 @@
   private string themeId = Themes.DefaultId;
   private bool debugLogging;
   private bool showMetadataTokens;
+  private bool showTypeMembers;
+  private bool showCompilerGenerated;
   private MemberOrder memberOrder;
   private List<MemberGroup> memberGroupOrder = MemberGroups.DefaultOrder.ToList();
   private bool wrapLines;
@@ -290,6 +383,7 @@
   private string contextSymbolName = "";
   private TreeNodeKind contextSymbolKind;
   private AnalyzerView? analyzerView;
+  private enum SettingsPage { Appearance, Browser, Decompiler, Advanced }
   private List<AnalyzerRootState> analyzerRoots = [];
   private int contextMenuX;
   private int contextMenuY;
@@ -297,20 +391,44 @@
   private bool sessionRestoreStarted;
   private string mcpAllowedRoots = "";
   private string lastOpenDirectory = "";
-  private bool DebuggerActive => Debugger.Snapshot.Status is DebugSessionStatus.Running or DebugSessionStatus.Paused or DebugSessionStatus.Starting;
-  private bool DebuggerPaused => !Debugger.IsBusy && Debugger.Snapshot.Status == DebugSessionStatus.Paused;
-  private string DebugStatus
+  private DebuggerUiState DebuggerUi => DebuggerUiState.Create(
+    Debugger.Snapshot,
+    Debugger.IsBusy,
+    Debugger.StartRequest is not null);
+  private string DebugStatus => DebuggerUi.StatusText;
+  private string SelectedDebugConfigurationValue =>
+    selectedDebugConfiguration?.ToString("D") ?? "";
+  private IEnumerable<DebugProcessOption> FilteredDebugProcesses
   {
     get
     {
-      var snapshot = Debugger.Snapshot;
-      if (snapshot.Status == DebugSessionStatus.Created) return "Debugger idle";
-      var runtime = snapshot.Runtime?.ToString() ?? "Debugger";
-      var process = snapshot.ProcessId is { } processId ? $" · PID {processId}" : "";
-      var reason = snapshot.Stop is { } stop ? $" · {stop.Reason}" : "";
-      return $"{runtime}: {snapshot.Status}{reason}{process}";
+      var filter = debugProcessFilter.Trim();
+      return filter.Length == 0
+        ? debugProcesses
+        : debugProcesses.Where(value =>
+          value.Name.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+          value.Id.ToString(
+            System.Globalization.CultureInfo.InvariantCulture)
+            .Contains(filter, StringComparison.OrdinalIgnoreCase) ||
+          value.WindowTitle.Contains(filter, StringComparison.OrdinalIgnoreCase));
     }
   }
+  private bool IsRemoteMonoTarget =>
+    !string.Equals(debugMonoHost.Trim(), "127.0.0.1", StringComparison.OrdinalIgnoreCase) &&
+    !string.Equals(debugMonoHost.Trim(), "localhost", StringComparison.OrdinalIgnoreCase) &&
+    !string.Equals(debugMonoHost.Trim(), "::1", StringComparison.OrdinalIgnoreCase);
+  private string DebugTargetSummary => debugStartMode switch
+  {
+    "attach" => int.TryParse(debugProcessId, out var processId)
+      ? debugProcesses.FirstOrDefault(value => value.Id == processId) is { } process
+        ? $"{process.Name} · PID {process.Id}"
+        : $"CoreCLR process PID {processId}"
+      : "Select a local CoreCLR process.",
+    "mono" => $"{debugMonoHost.Trim()}:{debugMonoPort} · Mono attach",
+    _ => string.IsNullOrWhiteSpace(debugLaunchPath)
+      ? "Choose a managed executable or entry-point DLL."
+      : $"{Path.GetFileName(debugLaunchPath)} · {debugLaunchPath}"
+  };
   protected override async Task OnInitializedAsync()
   {
     Workspace.Changed += Refresh;
@@ -319,6 +437,7 @@
     Assemblies.Closing += AssemblyClosing;
     FileDrops.FilesDropped += FilesDropped;
     Debugger.Changed += DebuggerRefresh;
+    Debugger.PersistentStateChanged += DebuggerPersistentStateChanged;
     restoring = true;
     Workspace.SetBusy(true, "Restoring session…");
     try
@@ -329,6 +448,23 @@
       searchPanelHeight = Math.Clamp(ui.SearchPanelHeight, 120, 900);
       bottomOpen = ui.SearchOpen;
       bottomTab = ui.BottomTab is "search" or "analyzer" or "mcp" or "debugger" ? ui.BottomTab : "search";
+      debuggerPanel = ui.DebuggerPanel is "inspect" or "breakpoints" or "output" ? ui.DebuggerPanel : "inspect";
+      debuggerInspectPanel = ui.DebuggerInspectPanel is "variables" or "watch" ? ui.DebuggerInspectPanel : "variables";
+      Debugger.RestorePersistentState(
+        ui.DebuggerBreakpoints,
+        ui.DebuggerWatches);
+      debugConfigurations = (ui.DebuggerConfigurations ?? [])
+        .Where(value => value.Id != Guid.Empty)
+        .GroupBy(value => value.Id)
+        .Select(value => value.First())
+        .ToList();
+      selectedDebugConfiguration = ui.SelectedDebuggerConfiguration is { } selected &&
+        debugConfigurations.Any(value => value.Id == selected)
+          ? selected
+          : null;
+      if (selectedDebugConfiguration is { } configurationId)
+        ApplyDebugConfiguration(
+          debugConfigurations.First(value => value.Id == configurationId));
       McpSettings.Enabled = ui.McpEnabled;
       McpSettings.SetAllowedRoots(ui.McpAllowedRoots ?? []);
       mcpAllowedRoots = string.Join(Environment.NewLine, McpSettings.AllowedRoots);
@@ -340,6 +476,8 @@
       themeId = Themes.Normalize(ui.ThemeId);
       debugLogging = ui.DebugLogging;
       showMetadataTokens = ui.ShowMetadataTokens;
+      showTypeMembers = ui.ShowTypeMembers;
+      showCompilerGenerated = ui.ShowCompilerGenerated;
       memberOrder = ui.MemberOrder.ValidOrDefault();
       memberGroupOrder = MemberGroups.Normalize(ui.MemberGroupOrder).ToList();
       wrapLines = ui.WrapLines;
@@ -347,6 +485,8 @@
       language = ui.Language.ValidOrDefault();
       LoggingSettings.DebugEnabled = debugLogging;
       DisplaySettings.ShowMetadataTokens = showMetadataTokens;
+      DisplaySettings.ShowTypeMembers = showTypeMembers;
+      DisplaySettings.ShowCompilerGenerated = showCompilerGenerated;
       DisplaySettings.MemberOrder = memberOrder;
       DisplaySettings.MemberGroupOrder = memberGroupOrder.ToArray();
       Zoom.SetZoom(zoomPercent);
@@ -371,6 +511,7 @@
         await JS.InvokeVoidAsync("dnSpyXdx.initHistoryButtons", selfReference);
         await JS.InvokeVoidAsync("dnSpyXdx.initPanelHorizontalWheel");
         await JS.InvokeVoidAsync("dnSpyXdx.initExplorerKeys", selfReference);
+        await JS.InvokeVoidAsync("dnSpyXdx.initDebuggerKeys", selfReference);
         StateHasChanged();
         if (restoredFromStorage) { Session.UiState = CaptureUiState(); ScheduleSave(); StateHasChanged(); }
         if (restoring && !sessionRestoreStarted) { sessionRestoreStarted = true; _ = RestoreWorkspaceAsync(); }
@@ -385,7 +526,7 @@
   private void DebuggerRefresh() => _ = InvokeAsync(async () =>
   {
     var snapshot = Debugger.Snapshot;
-    if (snapshot.Status is DebugSessionStatus.Starting or DebugSessionStatus.Running or DebugSessionStatus.Paused)
+    if (DebuggerUi.ShouldRevealPanel)
     {
       bottomOpen = true;
       bottomTab = "debugger";
@@ -407,6 +548,10 @@
       }
     }
   });
+  private void DebuggerPersistentStateChanged()
+  {
+    if (!restoring) ScheduleSave();
+  }
   // The native drag-drop handler owns the drop surface, so the drag overlay is driven from here rather than
   // from HTML drag events (which WebView2 no longer raises for us).
   private void OnDragActive(bool active) => _ = InvokeAsync(() => JS.InvokeVoidAsync("dnSpyXdx.setDropOverlay", active).AsTask());
@@ -436,7 +581,36 @@
     }
   }
   private void ScheduleSave() { saveDelay?.Cancel(); saveDelay?.Dispose(); saveDelay = new CancellationTokenSource(); var token = saveDelay.Token; _ = SaveAfterDelayAsync(token); }
-  private UiSessionState CaptureUiState() => new(explorerWidth, searchPanelHeight, bottomOpen, searchKind, searchScope, zoomPercent, themeId, debugLogging, language, showMetadataTokens, wrapLines, codeFontFamily, bottomTab, analyzerRoots, McpSettings.Enabled, McpSettings.AllowedRoots.ToArray(), lastOpenDirectory, memberOrder, memberGroupOrder.ToArray());
+  private UiSessionState CaptureUiState() => new(
+    ExplorerWidth: explorerWidth,
+    SearchPanelHeight: searchPanelHeight,
+    SearchOpen: bottomOpen,
+    SearchKind: searchKind,
+    SearchScope: searchScope,
+    ZoomPercent: zoomPercent,
+    ThemeId: themeId,
+    DebugLogging: debugLogging,
+    Language: language,
+    ShowMetadataTokens: showMetadataTokens,
+    WrapLines: wrapLines,
+    CodeFontFamily: codeFontFamily,
+    BottomTab: bottomTab,
+    AnalyzerRoots: analyzerRoots,
+    McpEnabled: McpSettings.Enabled,
+    McpAllowedRoots: McpSettings.AllowedRoots.ToArray(),
+    LastOpenDirectory: lastOpenDirectory,
+    MemberOrder: memberOrder,
+    MemberGroupOrder: memberGroupOrder.ToArray(),
+    ShowTypeMembers: showTypeMembers,
+    ShowCompilerGenerated: showCompilerGenerated,
+    DebuggerPanel: debuggerPanel,
+    DebuggerInspectPanel: debuggerInspectPanel,
+    DebuggerBreakpoints: Debugger.Breakpoints,
+    DebuggerWatches: Debugger.Watches
+      .Select(value => value.Expression)
+      .ToArray(),
+    DebuggerConfigurations: debugConfigurations,
+    SelectedDebuggerConfiguration: selectedDebugConfiguration);
   private void AnalyzerRootsChanged(IReadOnlyList<AnalyzerRootState> updated) { analyzerRoots = updated.ToList(); ScheduleSave(); }
   private async Task SaveAfterDelayAsync(CancellationToken token) { try { await Task.Delay(350, token); Session.UiState = CaptureUiState(); await Session.SaveAsync(token); } catch (OperationCanceledException) { } }
   private async Task OpenAsync() { var path = await Dialogs.OpenAssemblyAsync(lastOpenDirectory); if (path is null) return; lastOpenDirectory = Path.GetDirectoryName(path) ?? ""; ScheduleSave(); Workspace.SetBusy(true, "Opening assembly…"); try { await Assemblies.OpenAsync(path, "desktop"); } catch (Exception ex) { Workspace.SetBusy(false, ex.Message); } }
@@ -484,6 +658,8 @@
       : inspection.SuggestedPath ?? preferred;
     ClearDebugDialogError();
     debugDialogOpen = true;
+    if (debugStartMode == "attach")
+      _ = RefreshDebugProcessesAsync();
   }
   private void CloseDebugDialog() => debugDialogOpen = false;
   private void ClearDebugDialogError()
@@ -499,6 +675,208 @@
     if (await Dialogs.OpenAssemblyAsync(directory) is not { } selected) return;
     debugLaunchPath = selected;
     ClearDebugDialogError();
+  }
+  private async Task DebugStartModeChangedAsync(ChangeEventArgs value)
+  {
+    debugStartMode = value.Value?.ToString() switch
+    {
+      "attach" => "attach",
+      "mono" => "mono",
+      _ => "launch"
+    };
+    ClearDebugDialogError();
+    if (debugStartMode == "attach")
+      await RefreshDebugProcessesAsync();
+  }
+  private async Task RefreshDebugProcessesAsync()
+  {
+    debugDialogError = null;
+    try
+    {
+      debugProcesses = await Task.Run(() =>
+      {
+        var current = Environment.ProcessId;
+        var processes = new List<DebugProcessOption>();
+        foreach (var process in System.Diagnostics.Process.GetProcesses())
+        {
+          using (process)
+          {
+            try
+            {
+              if (process.Id == current || process.HasExited) continue;
+              if (!IsCoreClrProcess(process)) continue;
+              processes.Add(new DebugProcessOption(
+                process.Id,
+                process.ProcessName,
+                process.MainWindowTitle ?? ""));
+            }
+            catch (Exception exception) when (
+              exception is InvalidOperationException or
+                System.ComponentModel.Win32Exception or
+                NotSupportedException)
+            {
+            }
+          }
+        }
+        return (IReadOnlyList<DebugProcessOption>)processes
+          .OrderBy(value => value.Name, StringComparer.OrdinalIgnoreCase)
+          .ThenBy(value => value.Id)
+          .ToArray();
+      });
+    }
+    catch (Exception exception)
+    {
+      debugDialogError = $"Could not enumerate processes: {exception.Message}";
+      debugProcesses = [];
+    }
+  }
+  private static bool IsCoreClrProcess(
+    System.Diagnostics.Process process)
+  {
+    try
+    {
+      if (OperatingSystem.IsWindows())
+        return process.Modules
+          .Cast<System.Diagnostics.ProcessModule>()
+          .Any(module => string.Equals(
+            module.ModuleName,
+            "coreclr.dll",
+            StringComparison.OrdinalIgnoreCase));
+      if (OperatingSystem.IsLinux())
+        return File.ReadLines($"/proc/{process.Id}/maps")
+          .Any(line => line.Contains(
+            "libcoreclr.so",
+            StringComparison.Ordinal));
+      return true;
+    }
+    catch (Exception exception) when (
+      exception is InvalidOperationException or
+        System.ComponentModel.Win32Exception or
+        IOException or
+        UnauthorizedAccessException or
+        NotSupportedException)
+    {
+      return false;
+    }
+  }
+  private void DebugProcessChanged(ChangeEventArgs value)
+  {
+    debugProcessId = value.Value?.ToString() ?? "";
+    ClearDebugDialogError();
+  }
+  private void DebugConfigurationChanged(ChangeEventArgs value)
+  {
+    if (!Guid.TryParse(value.Value?.ToString(), out var configurationId))
+    {
+      selectedDebugConfiguration = null;
+      debugConfigurationName = "";
+      return;
+    }
+    var configuration = debugConfigurations.FirstOrDefault(candidate =>
+      candidate.Id == configurationId);
+    if (configuration is null) return;
+    selectedDebugConfiguration = configuration.Id;
+    ApplyDebugConfiguration(configuration);
+    ScheduleSave();
+    if (debugStartMode == "attach")
+      _ = RefreshDebugProcessesAsync();
+  }
+  private void SaveDebugConfiguration()
+  {
+    var configuration = CaptureDebugConfiguration();
+    var index = debugConfigurations.FindIndex(value =>
+      value.Id == configuration.Id);
+    if (index < 0)
+      debugConfigurations.Add(configuration);
+    else
+      debugConfigurations[index] = configuration;
+    selectedDebugConfiguration = configuration.Id;
+    debugConfigurationName = configuration.Name;
+    ScheduleSave();
+  }
+  private void DeleteDebugConfiguration()
+  {
+    if (selectedDebugConfiguration is not { } configurationId) return;
+    debugConfigurations.RemoveAll(value => value.Id == configurationId);
+    selectedDebugConfiguration = null;
+    debugConfigurationName = "";
+    ScheduleSave();
+  }
+  private DebugStartConfiguration CaptureDebugConfiguration()
+  {
+    var name = debugConfigurationName.Trim();
+    if (name.Length == 0)
+      name = debugStartMode switch
+      {
+        "attach" => "CoreCLR attach",
+        "mono" => $"Mono {debugMonoHost.Trim()}:{debugMonoPort}",
+        _ => string.IsNullOrWhiteSpace(debugLaunchPath)
+          ? "CoreCLR launch"
+          : Path.GetFileNameWithoutExtension(debugLaunchPath)
+      };
+    int.TryParse(debugProcessId, out var processId);
+    int.TryParse(debugMonoPort, out var monoPort);
+    return new DebugStartConfiguration(
+      selectedDebugConfiguration ?? Guid.NewGuid(),
+      name,
+      debugStartMode,
+      debugLaunchPath,
+      debugArguments,
+      debugWorkingDirectory,
+      debugEnvironment,
+      debugStopAtEntry,
+      processId > 0 ? processId : null,
+      debugMonoHost,
+      monoPort is > 0 and <= 65535 ? monoPort : 55555);
+  }
+  private void ApplyDebugConfiguration(DebugStartConfiguration configuration)
+  {
+    debugConfigurationName = configuration.Name;
+    debugStartMode = configuration.Mode is "attach" or "mono"
+      ? configuration.Mode
+      : "launch";
+    debugLaunchPath = configuration.LaunchPath;
+    debugArguments = configuration.Arguments;
+    debugWorkingDirectory = configuration.WorkingDirectory;
+    debugEnvironment = configuration.Environment;
+    debugStopAtEntry = configuration.StopAtEntry;
+    debugProcessId = configuration.ProcessId?.ToString(
+      System.Globalization.CultureInfo.InvariantCulture) ?? "";
+    debugMonoHost = configuration.MonoHost;
+    debugMonoPort = configuration.MonoPort.ToString(
+      System.Globalization.CultureInfo.InvariantCulture);
+  }
+  private bool TryParseDebugEnvironment(
+    out IReadOnlyDictionary<string, string>? environment,
+    out string? error)
+  {
+    var values = new Dictionary<string, string>(
+      OperatingSystem.IsWindows()
+        ? StringComparer.OrdinalIgnoreCase
+        : StringComparer.Ordinal);
+    foreach (var raw in debugEnvironment.Split(
+      ['\r', '\n'],
+      StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+    {
+      var separator = raw.IndexOf('=');
+      if (separator <= 0)
+      {
+        environment = null;
+        error = $"Invalid environment entry '{raw}'. Use KEY=VALUE.";
+        return false;
+      }
+      var key = raw[..separator].Trim();
+      if (key.Length == 0 || key.Contains('\0') || key.Contains('='))
+      {
+        environment = null;
+        error = $"Invalid environment variable name in '{raw}'.";
+        return false;
+      }
+      values[key] = raw[(separator + 1)..];
+    }
+    environment = values.Count == 0 ? null : values;
+    error = null;
+    return true;
   }
   private async Task StartDebuggerAsync()
   {
@@ -533,12 +911,72 @@
       debugDialogError = null;
       var arguments = debugArguments
         .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+      var workingDirectory = string.IsNullOrWhiteSpace(debugWorkingDirectory)
+        ? null
+        : Path.GetFullPath(debugWorkingDirectory.Trim());
+      if (workingDirectory is not null && !Directory.Exists(workingDirectory))
+      {
+        debugDialogError = $"Working directory does not exist: {workingDirectory}";
+        return;
+      }
+      if (!TryParseDebugEnvironment(out var environment, out var environmentError))
+      {
+        debugDialogError = environmentError;
+        return;
+      }
       await Assemblies.TryOpenDebuggerModuleAsync(debugLaunchPath);
-      await Debugger.LaunchAsync(debugLaunchPath, arguments, debugStopAtEntry);
+      await Debugger.LaunchAsync(
+        debugLaunchPath,
+        arguments,
+        debugStopAtEntry,
+        workingDirectory,
+        environment);
     }
     if (Debugger.Snapshot.Status is DebugSessionStatus.Running or
         DebugSessionStatus.Paused)
       debugDialogOpen = false;
+  }
+  private async Task RestartDebuggerAsync()
+  {
+    if (!DebuggerUi.CanRestart) return;
+    await Debugger.RestartAsync();
+  }
+  private async Task RetryDebuggerAsync()
+  {
+    if (Debugger.StartRequest is not null)
+      await Debugger.RestartAsync();
+    else
+      OpenDebugDialog();
+  }
+  [JSInvokable]
+  public async Task DebuggerKeyCommand(string command)
+  {
+    var state = DebuggerUi;
+    switch (command)
+    {
+      case "startContinue":
+        if (state.CanStart) OpenDebugDialog();
+        else if (state.CanContinue) await Debugger.ContinueAsync();
+        break;
+      case "stop" when state.CanStop:
+        await Debugger.TerminateAsync();
+        break;
+      case "restart" when state.CanRestart:
+        await Debugger.RestartAsync();
+        break;
+      case "pause" when state.CanPause:
+        await Debugger.PauseAsync();
+        break;
+      case "stepOver" when state.CanStep:
+        await Debugger.StepAsync(DebugStepKind.Over);
+        break;
+      case "stepInto" when state.CanStep:
+        await Debugger.StepAsync(DebugStepKind.Into);
+        break;
+      case "stepOut" when state.CanStep:
+        await Debugger.StepAsync(DebugStepKind.Out);
+        break;
+    }
   }
   private async Task Exit()
   {
@@ -559,6 +997,22 @@
   }
   private void SwitchBottomTab(string tab) { if (tab == "search") { OpenSearchPanel(); return; } bottomTab = tab; bottomOpen = true; ScheduleSave(); StateHasChanged(); }
   private void CloseBottom() { bottomOpen = false; ScheduleSave(); StateHasChanged(); }
+  private void DebuggerPanelChanged(string panel)
+  {
+    debuggerPanel = panel is "inspect" or "breakpoints" or "output"
+      ? panel
+      : "inspect";
+    ScheduleSave();
+    StateHasChanged();
+  }
+  private void DebuggerInspectPanelChanged(string panel)
+  {
+    debuggerInspectPanel = panel is "variables" or "watch"
+      ? panel
+      : "variables";
+    ScheduleSave();
+    StateHasChanged();
+  }
   private async Task UnloadAllAsync() { menuOpen = false; selectedAssemblies = []; Workspace.SetBusy(true, "Unloading assemblies…"); await Assemblies.CloseAllAsync("desktop"); searchMatches = []; results = []; query = ""; bottomOpen = false; selectedSymbol = null; selectedNode = null; revealedPath = new HashSet<NodeId>(); }
   private void OpenAssemblyContextMenu(MouseEventArgs e, AssemblyDescriptor assembly)
   {
@@ -942,6 +1396,26 @@
     await Session.SaveAsync();
     foreach (var tab in Workspace.Tabs.Where(tab => tab.Document.Resource is null).ToArray()) await RefreshTabLanguageAsync(tab);
   }
+  private async Task TypeMembersChangedAsync(ChangeEventArgs e)
+  {
+    showTypeMembers = e.Value is true;
+    DisplaySettings.ShowTypeMembers = showTypeMembers;
+    await SaveTreeDisplaySettingsAsync();
+  }
+  private async Task CompilerGeneratedChangedAsync(ChangeEventArgs e)
+  {
+    showCompilerGenerated = e.Value is true;
+    DisplaySettings.ShowCompilerGenerated = showCompilerGenerated;
+    await SaveTreeDisplaySettingsAsync();
+  }
+  private async Task SaveTreeDisplaySettingsAsync()
+  {
+    Session.UiState = CaptureUiState();
+    await Session.SaveAsync();
+    treeFilterVersion++;
+    treeSelectionVersion++;
+    StateHasChanged();
+  }
   private async Task MemberOrderChangedAsync(ChangeEventArgs e)
   {
     memberOrder = Enum.TryParse<MemberOrder>(e.Value?.ToString(), out var parsed) ? parsed.ValidOrDefault() : MemberOrder.Ilspy;
@@ -1042,5 +1516,10 @@
     }
     catch (Exception ex) { Workspace.SetBusy(false, $"Solution extraction failed: {ex.Message}"); }
   }
-  public void Dispose() { Workspace.Changed -= Refresh; Backend.AssembliesChanged -= Refresh; Workspace.DragActiveChanged -= OnDragActive; Assemblies.Closing -= AssemblyClosing; FileDrops.FilesDropped -= FilesDropped; Debugger.Changed -= DebuggerRefresh; saveDelay?.Cancel(); saveDelay?.Dispose(); searchDelay?.Cancel(); searchDelay?.Dispose(); CancelAllDecompilations(); selfReference?.Dispose(); }
+  public void Dispose() { Workspace.Changed -= Refresh; Backend.AssembliesChanged -= Refresh; Workspace.DragActiveChanged -= OnDragActive; Assemblies.Closing -= AssemblyClosing; FileDrops.FilesDropped -= FilesDropped; Debugger.Changed -= DebuggerRefresh; Debugger.PersistentStateChanged -= DebuggerPersistentStateChanged; saveDelay?.Cancel(); saveDelay?.Dispose(); searchDelay?.Cancel(); searchDelay?.Dispose(); CancelAllDecompilations(); _ = JS.InvokeVoidAsync("dnSpyXdx.disposeDebuggerKeys"); selfReference?.Dispose(); }
+
+  private sealed record DebugProcessOption(
+    int Id,
+    string Name,
+    string WindowTitle);
 }

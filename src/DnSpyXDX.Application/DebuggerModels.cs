@@ -193,6 +193,19 @@ public sealed record DebugEvaluationResult(
 
 public sealed record DebugOutputMessage(string Category, string Message);
 
+public sealed record DebugStartConfiguration(
+    Guid Id,
+    string Name,
+    string Mode = "launch",
+    string LaunchPath = "",
+    string Arguments = "",
+    string WorkingDirectory = "",
+    string Environment = "",
+    bool StopAtEntry = true,
+    int? ProcessId = null,
+    string MonoHost = "127.0.0.1",
+    int MonoPort = 55555);
+
 public sealed record DebugSessionSnapshot(
     Guid SessionId,
     DebugRuntimeKind? Runtime,

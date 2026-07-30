@@ -408,14 +408,20 @@ internal sealed class AssemblySession : IDisposable
                 : null;
             return new TreeNodeDescriptor(new NodeId(Descriptor.SessionId, $"res:{MetadataTokens.GetToken(h)}"), name, TreeNodeKind.Resource, false, Tooltip: tooltip);
         }).OrderBy(x => x.Name).ToArray();
-        if (parent.Value == "namespaces") return metadata.TypeDefinitions.Select(h => metadata.GetString(metadata.GetTypeDefinition(h).Namespace)).Distinct().OrderBy(x => x).Select(ns => new TreeNodeDescriptor(new NodeId(Descriptor.SessionId, $"ns:{Uri.EscapeDataString(ns)}"), string.IsNullOrEmpty(ns) ? "-" : ns, TreeNodeKind.Namespace, true)).ToArray();
+        if (parent.Value == "namespaces") return metadata.TypeDefinitions
+            .Where(IsVisibleType)
+            .Select(h => metadata.GetString(metadata.GetTypeDefinition(h).Namespace))
+            .Distinct()
+            .OrderBy(x => x)
+            .Select(ns => new TreeNodeDescriptor(new NodeId(Descriptor.SessionId, $"ns:{Uri.EscapeDataString(ns)}"), string.IsNullOrEmpty(ns) ? "-" : ns, TreeNodeKind.Namespace, true))
+            .ToArray();
         if (parent.Value.StartsWith("ns:", StringComparison.Ordinal))
         {
             var ns = Uri.UnescapeDataString(parent.Value[3..]);
             return metadata.TypeDefinitions.Where(h =>
             {
                 var t = metadata.GetTypeDefinition(h);
-                return t.GetDeclaringType().IsNil && metadata.GetString(t.Namespace) == ns && metadata.GetString(t.Name) != "<Module>";
+                return t.GetDeclaringType().IsNil && metadata.GetString(t.Namespace) == ns && IsVisibleType(h);
             }).Select(TypeNode).OrderBy(x => x.Name).ToArray();
         }
         if (parent.Value.StartsWith("type:", StringComparison.Ordinal)) return TypeChildren(MetadataTokens.TypeDefinitionHandle(ParseToken(parent)), ct);
@@ -568,7 +574,8 @@ internal sealed class AssemblySession : IDisposable
         var t = metadata.GetTypeDefinition(h);
         var kind = Classify(t);
         var keyword = kind == "staticclass" ? "class" : kind;
-        return new(new NodeId(Descriptor.SessionId, $"type:{MetadataTokens.GetToken(h):X8}"), TypeDisplayName(t), TreeNodeKind.Type, false, new SymbolId(Descriptor.ModuleMvid, MetadataTokens.GetToken(h)), Visibility: TypeVisibility(t.Attributes), TypeDisplay: keyword, NameClassification: kind, TypeClassification: "keyword");
+        var hasChildren = displaySettings.ShowTypeMembers && HasVisibleTypeChildren(t);
+        return new(new NodeId(Descriptor.SessionId, $"type:{MetadataTokens.GetToken(h):X8}"), TypeDisplayName(t), TreeNodeKind.Type, hasChildren, new SymbolId(Descriptor.ModuleMvid, MetadataTokens.GetToken(h)), Visibility: TypeVisibility(t.Attributes), TypeDisplay: keyword, NameClassification: kind, TypeClassification: "keyword");
     }
 
     private IReadOnlyList<TreeNodeDescriptor> TypeChildren(TypeDefinitionHandle handle, CancellationToken ct)
@@ -579,11 +586,11 @@ internal sealed class AssemblySession : IDisposable
         // dnSpy hangs property and event accessors off their owning node rather than listing them
         // beside real methods; without this the method list is mostly get_/set_/add_/remove_ noise.
         var accessors = PropertyAndEventMethods(t);
-        foreach (var h in t.GetFields()) { ct.ThrowIfCancellationRequested(); var x = metadata.GetFieldDefinition(h); nodes.Add(MemberNode(h, metadata.GetString(x.Name), TreeNodeKind.Field, MemberVisibility(x.Attributes), x.DecodeSignature(typeNames, genericContext))); }
-        foreach (var h in t.GetProperties()) { var x = metadata.GetPropertyDefinition(h); var access = x.GetAccessors(); nodes.Add(MemberNode(h, metadata.GetString(x.Name), TreeNodeKind.Property, AccessorVisibility(access.Getter, access.Setter), x.DecodeSignature(typeNames, genericContext).ReturnType, HasAny(access.Getter, access.Setter))); }
-        foreach (var h in t.GetEvents()) { var x = metadata.GetEventDefinition(h); var access = x.GetAccessors(); nodes.Add(MemberNode(h, metadata.GetString(x.Name), TreeNodeKind.Event, AccessorVisibility(access.Adder, access.Remover), typeNames.GetTypeName(x.Type, genericContext), HasAny(access.Adder, access.Remover, access.Raiser))); }
-        foreach (var h in t.GetMethods()) { ct.ThrowIfCancellationRequested(); if (!accessors.Contains(h)) nodes.Add(MethodNode(h, t)); }
-        nodes.AddRange(t.GetNestedTypes().Select(TypeNode));
+        foreach (var h in t.GetFields()) { ct.ThrowIfCancellationRequested(); if (!ShouldShow(h)) continue; var x = metadata.GetFieldDefinition(h); nodes.Add(MemberNode(h, metadata.GetString(x.Name), TreeNodeKind.Field, MemberVisibility(x.Attributes), x.DecodeSignature(typeNames, genericContext))); }
+        foreach (var h in t.GetProperties()) { if (!ShouldShow(h)) continue; var x = metadata.GetPropertyDefinition(h); var access = x.GetAccessors(); nodes.Add(MemberNode(h, metadata.GetString(x.Name), TreeNodeKind.Property, AccessorVisibility(access.Getter, access.Setter), x.DecodeSignature(typeNames, genericContext).ReturnType, HasVisible(access.Getter, access.Setter))); }
+        foreach (var h in t.GetEvents()) { if (!ShouldShow(h)) continue; var x = metadata.GetEventDefinition(h); var access = x.GetAccessors(); nodes.Add(MemberNode(h, metadata.GetString(x.Name), TreeNodeKind.Event, AccessorVisibility(access.Adder, access.Remover), typeNames.GetTypeName(x.Type, genericContext), HasVisible(access.Adder, access.Remover, access.Raiser))); }
+        foreach (var h in t.GetMethods()) { ct.ThrowIfCancellationRequested(); if (!accessors.Contains(h) && ShouldShow(h)) nodes.Add(MethodNode(h, t)); }
+        nodes.AddRange(t.GetNestedTypes().Where(IsVisibleType).Select(TypeNode));
         return nodes.OrderBy(n => MemberRank(n.Kind)).ThenBy(n => n.Name).ToArray();
     }
 
@@ -636,7 +643,7 @@ internal sealed class AssemblySession : IDisposable
         else return [];
         if (declaring.IsNil) return [];
         var type = metadata.GetTypeDefinition(declaring);
-        return handles.Where(h => !h.IsNil).Select(h => MethodNode(h, type)).OrderBy(n => n.Name).ToArray();
+        return handles.Where(h => !h.IsNil && ShouldShow(h)).Select(h => MethodNode(h, type)).OrderBy(n => n.Name).ToArray();
     }
 
     private static void AddAccessor(HashSet<MethodDefinitionHandle> accessors, params MethodDefinitionHandle[] handles)
@@ -644,7 +651,63 @@ internal sealed class AssemblySession : IDisposable
         foreach (var handle in handles) if (!handle.IsNil) accessors.Add(handle);
     }
 
-    private static bool HasAny(params MethodDefinitionHandle[] handles) => handles.Any(h => !h.IsNil);
+    private bool HasVisible(params MethodDefinitionHandle[] handles) =>
+        handles.Any(h => !h.IsNil && ShouldShow(h));
+
+    private bool HasVisibleTypeChildren(TypeDefinition type)
+    {
+        if (type.GetFields().Any(handle => ShouldShow(handle)) ||
+            type.GetProperties().Any(handle => ShouldShow(handle)) ||
+            type.GetEvents().Any(handle => ShouldShow(handle)) ||
+            type.GetNestedTypes().Any(IsVisibleType))
+            return true;
+
+        var accessors = PropertyAndEventMethods(type);
+        return type.GetMethods().Any(handle => !accessors.Contains(handle) && ShouldShow(handle));
+    }
+
+    private bool IsVisibleType(TypeDefinitionHandle handle)
+    {
+        var definition = metadata.GetTypeDefinition(handle);
+        return metadata.GetString(definition.Name) != "<Module>" && ShouldShow(handle);
+    }
+
+    private bool ShouldShow(EntityHandle handle) =>
+        displaySettings.ShowCompilerGenerated || !IsCompilerGenerated(handle);
+
+    private bool IsCompilerGenerated(EntityHandle handle)
+    {
+        foreach (var attributeHandle in metadata.GetCustomAttributes(handle))
+        {
+            var attribute = metadata.GetCustomAttribute(attributeHandle);
+            if (IsCompilerGeneratedAttribute(attribute.Constructor)) return true;
+        }
+        return false;
+    }
+
+    private bool IsCompilerGeneratedAttribute(EntityHandle constructor)
+    {
+        EntityHandle attributeType = constructor.Kind switch
+        {
+            HandleKind.MemberReference => metadata.GetMemberReference((MemberReferenceHandle)constructor).Parent,
+            HandleKind.MethodDefinition => metadata.GetMethodDefinition((MethodDefinitionHandle)constructor).GetDeclaringType(),
+            _ => default
+        };
+        return attributeType.Kind switch
+        {
+            HandleKind.TypeReference => IsCompilerGeneratedAttribute(metadata.GetTypeReference((TypeReferenceHandle)attributeType)),
+            HandleKind.TypeDefinition => IsCompilerGeneratedAttribute(metadata.GetTypeDefinition((TypeDefinitionHandle)attributeType)),
+            _ => false
+        };
+    }
+
+    private bool IsCompilerGeneratedAttribute(TypeReference type) =>
+        metadata.GetString(type.Namespace) == "System.Runtime.CompilerServices" &&
+        metadata.GetString(type.Name) == "CompilerGeneratedAttribute";
+
+    private bool IsCompilerGeneratedAttribute(TypeDefinition type) =>
+        metadata.GetString(type.Namespace) == "System.Runtime.CompilerServices" &&
+        metadata.GetString(type.Name) == "CompilerGeneratedAttribute";
 
     // dnSpy's assembly explorer order, from DocumentTreeViewConstants: methods (200), properties
     // (300), events (400), fields (500), nested types (600). Constructors have no group of their

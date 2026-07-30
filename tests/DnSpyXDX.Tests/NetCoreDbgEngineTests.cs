@@ -112,6 +112,8 @@ public sealed class NetCoreDbgEngineTests
                 TimeSpan.FromSeconds(2)));
         await using var engine = await provider.CreateAsync(
             CancellationToken.None);
+        var events = Channel.CreateUnbounded<DebugEngineEvent>();
+        engine.EventReceived += value => events.Writer.TryWrite(value);
 
         var result = await engine.StartAsync(
             new DebugLaunchRequest(
@@ -126,6 +128,12 @@ public sealed class NetCoreDbgEngineTests
             DebugStopReason.Entry,
             Assert.IsType<DebugStopInfo>(result.InitialStop).Reason);
         Assert.Equal(expected, result.InitialStop.Location);
+        var received = new List<DebugEngineEvent>();
+        while (events.Reader.TryRead(out var value))
+            received.Add(value);
+        Assert.DoesNotContain(
+            received,
+            value => value is DebugEngineFaulted);
         await engine.TerminateAsync(CancellationToken.None);
     }
 

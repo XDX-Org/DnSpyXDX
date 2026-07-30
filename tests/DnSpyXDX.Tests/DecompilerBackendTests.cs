@@ -96,6 +96,10 @@ public sealed class DecompilerBackendTests
         Assert.Contains("namespace DnSpyXDX.Tests;", document.Text, StringComparison.Ordinal);
         Assert.False(new RuntimeDisplaySettings().ShowMetadataTokens);
         Assert.False(new UiSessionState().ShowMetadataTokens);
+        Assert.False(new RuntimeDisplaySettings().ShowTypeMembers);
+        Assert.False(new UiSessionState().ShowTypeMembers);
+        Assert.False(new RuntimeDisplaySettings().ShowCompilerGenerated);
+        Assert.False(new UiSessionState().ShowCompilerGenerated);
         Assert.NotNull(document.DebugMap);
         Assert.Equal(document.Symbol, document.DebugMap.Document);
         Assert.NotEmpty(document.DebugMap.SequencePoints);
@@ -488,9 +492,42 @@ public sealed class DecompilerBackendTests
     }
 
     [Fact]
+    public async Task Assembly_browser_settings_control_type_expansion_and_compiler_generated_nodes()
+    {
+        var displaySettings = new RuntimeDisplaySettings { ShowTypeMembers = true };
+        await using var backend = new DecompilerBackend(displaySettings);
+        var assembly = await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
+        var namespaces = (await backend.GetChildrenAsync(assembly.RootNode)).Single(n => n.Name == "Namespaces");
+        var ownNamespace = (await backend.GetChildrenAsync(namespaces.Id)).Single(n => n.Name == "DnSpyXDX.Tests");
+
+        var types = await backend.GetChildrenAsync(ownNamespace.Id);
+        var host = types.Single(n => n.Name == nameof(CompilerGeneratedHost));
+        Assert.True(host.HasChildren);
+        Assert.DoesNotContain(types, n => n.Name == nameof(GeneratedTopLevel));
+
+        var members = await backend.GetChildrenAsync(host.Id);
+        Assert.Contains(members, n => n.Name == nameof(CompilerGeneratedHost.VisibleField));
+        Assert.Contains(members, n => n.Name == nameof(CompilerGeneratedHost.VisibleNested));
+        Assert.DoesNotContain(members, n => n.Name == nameof(CompilerGeneratedHost.GeneratedField));
+        Assert.DoesNotContain(members, n => n.Name == nameof(CompilerGeneratedHost.GeneratedNested));
+
+        displaySettings.ShowCompilerGenerated = true;
+        types = await backend.GetChildrenAsync(ownNamespace.Id);
+        Assert.Contains(types, n => n.Name == nameof(GeneratedTopLevel));
+        host = types.Single(n => n.Name == nameof(CompilerGeneratedHost));
+        members = await backend.GetChildrenAsync(host.Id);
+        Assert.Contains(members, n => n.Name == nameof(CompilerGeneratedHost.GeneratedField));
+        Assert.Contains(members, n => n.Name == nameof(CompilerGeneratedHost.GeneratedNested));
+
+        displaySettings.ShowTypeMembers = false;
+        types = await backend.GetChildrenAsync(ownNamespace.Id);
+        Assert.False(types.Single(n => n.Name == nameof(CompilerGeneratedHost)).HasChildren);
+    }
+
+    [Fact]
     public async Task Hides_property_and_event_accessors_from_the_method_list()
     {
-        await using var backend = new DecompilerBackend();
+        await using var backend = new DecompilerBackend(new RuntimeDisplaySettings { ShowCompilerGenerated = true });
         var assembly = await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
         var namespaces = await backend.GetChildrenAsync((await backend.GetChildrenAsync(assembly.RootNode)).Single(n => n.Name == "Namespaces").Id);
         var types = await backend.GetChildrenAsync(namespaces.Single(n => n.Name == "DnSpyXDX.Tests").Id);
@@ -763,6 +800,19 @@ public sealed class SampleMembers
         return SampleField;
     }
     public sealed class SampleNested { }
+}
+
+[System.Runtime.CompilerServices.CompilerGenerated]
+public sealed class GeneratedTopLevel { }
+
+public sealed class CompilerGeneratedHost
+{
+    public int VisibleField;
+    [System.Runtime.CompilerServices.CompilerGenerated]
+    public int GeneratedField;
+    public sealed class VisibleNested { }
+    [System.Runtime.CompilerServices.CompilerGenerated]
+    public sealed class GeneratedNested { }
 }
 
 public struct Marker { }

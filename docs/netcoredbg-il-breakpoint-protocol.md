@@ -71,7 +71,9 @@ location.
 
 When a pending breakpoint binds, becomes pending again after module unload, or moves after a
 hot-reload rebind, the adapter emits `xdx/ilBreakpoint`. Its body is one breakpoint binding in
-the same shape used by the response above. The client merges the update by UUID.
+the same shape used by the response above. The client merges the update by UUID. Events for
+well-formed IDs removed by a newer replacement request, including the client's temporary
+stop-at-entry breakpoint, are ignored as stale.
 
 ## Runtime locations
 

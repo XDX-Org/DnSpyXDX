@@ -817,9 +817,26 @@ internal sealed class NetCoreDbgEngine(
             throw new InvalidDataException(
                 "NetCoreDbg xdx/ilBreakpoint event has no body.");
 
+        var idText = OptionalString(body, "id");
+        if (!Guid.TryParse(idText, out var id))
+            throw new InvalidDataException(
+                "NetCoreDbg xdx/ilBreakpoint event has an invalid id.");
+
         IReadOnlyDictionary<Guid, DebugBreakpoint> requested;
         lock (breakpointsGate)
-            requested = requestedBreakpoints;
+        {
+            if (!requestedBreakpoints.TryGetValue(id, out var breakpoint))
+            {
+                // Replacement requests and the temporary stop-at-entry breakpoint can race
+                // binding events already queued by the adapter. They are valid adapter events,
+                // but no longer represent a user-visible breakpoint.
+                return;
+            }
+            requested = new Dictionary<Guid, DebugBreakpoint>
+            {
+                [id] = breakpoint
+            };
+        }
 
         var binding = ParseIlBreakpointBinding(body, requested);
         IReadOnlyList<DebugBreakpointBinding> allBindings;

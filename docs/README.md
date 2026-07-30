@@ -7,6 +7,7 @@ This documentation describes the planned cross-platform dnSpy-style decompiler b
 - [Product direction](product-direction.md) — recommendation, MVP scope, completed follow-on capabilities, deferred work, and future roadmap.
 - [Application architecture](application-architecture.md) — solution structure, boundaries, and core contracts.
 - [Debugger architecture](debugger-architecture.md) — cross-platform CoreCLR, Mono, and Unity debugger design, runtime code identity, workers, lifecycle, testing, and delivery order.
+- [Debugger UI experience](debugger-ui-experience.md) — lifecycle-driven command states, inspect layout, keyboard contract, and acceptance criteria.
 - [NetCoreDbg IL-breakpoint protocol](netcoredbg-il-breakpoint-protocol.md) — capability negotiation, wire schema, runtime locations, and native-backend status.
 - [Assembly workspace and navigation](assembly-workspace-and-navigation.md) — opening assemblies, indexing, decompilation, source links, tree state, tabs, and history.
 - [Project export](project-export.md) — SDK-style project generation, multi-project `.slnx` output, validation, and reports.

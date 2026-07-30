@@ -2,6 +2,16 @@ using DnSpyXDX.Application;
 
 namespace DnSpyXDX.UI;
 
+public sealed record DebugScopeGroup(
+    string Name,
+    IReadOnlyList<DebugVariable> Variables);
+
+public sealed record DebugWatch(
+    Guid Id,
+    string Expression,
+    DebugEvaluationResult? Result = null,
+    string? Error = null);
+
 /// <summary>
 /// UI projection of one debugger session. Runtime handles are discarded whenever execution
 /// resumes; IL-native breakpoint identities remain stable across session restarts.
@@ -15,7 +25,9 @@ public sealed class DebuggerWorkspace : IDisposable
     private IReadOnlyList<DebugBreakpointBinding> bindings = [];
     private IReadOnlyList<DebugThread> threads = [];
     private IReadOnlyList<DebugStackFrame> frames = [];
+    private IReadOnlyList<DebugScopeGroup> scopeGroups = [];
     private IReadOnlyList<DebugVariable> variables = [];
+    private IReadOnlyList<DebugWatch> watches = [];
     private readonly Dictionary<DebugVariableReference, IReadOnlyList<DebugVariable>>
         variableChildren = [];
     private IReadOnlyList<DebugOutputMessage> output = [];
@@ -36,7 +48,9 @@ public sealed class DebuggerWorkspace : IDisposable
     public IReadOnlyList<DebugBreakpointBinding> Bindings => bindings;
     public IReadOnlyList<DebugThread> Threads => threads;
     public IReadOnlyList<DebugStackFrame> Frames => frames;
+    public IReadOnlyList<DebugScopeGroup> ScopeGroups => scopeGroups;
     public IReadOnlyList<DebugVariable> Variables => variables;
+    public IReadOnlyList<DebugWatch> Watches => watches;
     public IReadOnlyList<DebugOutputMessage> Output => output;
     public DebugStartRequest? StartRequest { get; private set; }
     public DebugCodeLocation? CurrentLocation =>
@@ -49,6 +63,7 @@ public sealed class DebuggerWorkspace : IDisposable
     public string? Error { get; private set; }
 
     public event Action? Changed;
+    public event Action? PersistentStateChanged;
 
     public DebugBreakpointBinding? BindingFor(Guid breakpointId) =>
         bindings.FirstOrDefault(value => value.BreakpointId == breakpointId);
@@ -60,6 +75,8 @@ public sealed class DebuggerWorkspace : IDisposable
         string executablePath,
         IReadOnlyList<string>? arguments,
         bool stopAtEntry,
+        string? workingDirectory = null,
+        IReadOnlyDictionary<string, string>? environment = null,
         CancellationToken cancellationToken = default) =>
         RunAsync(async token =>
         {
@@ -67,6 +84,8 @@ public sealed class DebuggerWorkspace : IDisposable
                     DebugRuntimeKind.CoreClr,
                     executablePath,
                     arguments,
+                    workingDirectory,
+                    environment,
                     StopAtEntry: stopAtEntry)
                 {
                     InitialBreakpoints = breakpoints
@@ -116,6 +135,36 @@ public sealed class DebuggerWorkspace : IDisposable
     public Task TerminateAsync(CancellationToken cancellationToken = default) =>
         RunAsync(debugger.TerminateAsync, cancellationToken);
 
+    public Task RestartAsync(CancellationToken cancellationToken = default)
+    {
+        if (StartRequest is not { } previous)
+            return SetErrorAsync("No previous debug launch or attach is available.");
+
+        return RunAsync(async token =>
+        {
+            if (Snapshot.Status is DebugSessionStatus.Starting or
+                DebugSessionStatus.Running or
+                DebugSessionStatus.Paused)
+                await debugger.TerminateAsync(token);
+
+            DebugStartRequest request = previous switch
+            {
+                DebugLaunchRequest launch => launch with
+                {
+                    InitialBreakpoints = breakpoints
+                },
+                DebugAttachRequest attach => attach with
+                {
+                    InitialBreakpoints = breakpoints
+                },
+                _ => throw new InvalidOperationException(
+                    $"Unsupported debug start request {previous.GetType().Name}.")
+            };
+            StartRequest = request;
+            await debugger.StartAsync(request, token);
+        }, cancellationToken, requireActiveSession: false);
+    }
+
     public Task StepAsync(
         DebugStepKind kind,
         CancellationToken cancellationToken = default)
@@ -143,6 +192,7 @@ public sealed class DebuggerWorkspace : IDisposable
                     .Where(value => value.Id != existing.Id)
                     .ToArray();
             await SynchronizeBreakpointsAsync(token);
+            NotifyPersistentStateChanged();
         }, cancellationToken, requireActiveSession: false);
 
     public Task SelectFrameAsync(
@@ -196,6 +246,7 @@ public sealed class DebuggerWorkspace : IDisposable
                 .Where(value => value.Id != breakpointId)
                 .ToArray();
             await SynchronizeBreakpointsAsync(token);
+            NotifyPersistentStateChanged();
         }, cancellationToken, requireActiveSession: false);
 
     public Task SetBreakpointEnabledAsync(
@@ -210,7 +261,158 @@ public sealed class DebuggerWorkspace : IDisposable
                     : value)
                 .ToArray();
             await SynchronizeBreakpointsAsync(token);
+            NotifyPersistentStateChanged();
         }, cancellationToken, requireActiveSession: false);
+
+    public Task UpdateBreakpointAsync(
+        Guid breakpointId,
+        string? condition,
+        string? hitCondition,
+        string? logMessage,
+        CancellationToken cancellationToken = default) =>
+        RunAsync(async token =>
+        {
+            breakpoints = breakpoints
+                .Select(value => value.Id == breakpointId
+                    ? value with
+                    {
+                        Condition = NullIfWhiteSpace(condition),
+                        HitCondition = NullIfWhiteSpace(hitCondition),
+                        LogMessage = NullIfWhiteSpace(logMessage)
+                    }
+                    : value)
+                .ToArray();
+            await SynchronizeBreakpointsAsync(token);
+            NotifyPersistentStateChanged();
+        }, cancellationToken, requireActiveSession: false);
+
+    public Task SetAllBreakpointsEnabledAsync(
+        bool enabled,
+        CancellationToken cancellationToken = default) =>
+        RunAsync(async token =>
+        {
+            breakpoints = breakpoints
+                .Select(value => value with { Enabled = enabled })
+                .ToArray();
+            await SynchronizeBreakpointsAsync(token);
+            NotifyPersistentStateChanged();
+        }, cancellationToken, requireActiveSession: false);
+
+    public Task RemoveAllBreakpointsAsync(
+        CancellationToken cancellationToken = default) =>
+        RunAsync(async token =>
+        {
+            breakpoints = [];
+            await SynchronizeBreakpointsAsync(token);
+            NotifyPersistentStateChanged();
+        }, cancellationToken, requireActiveSession: false);
+
+    public Task AddWatchAsync(
+        string expression,
+        CancellationToken cancellationToken = default)
+    {
+        expression = expression.Trim();
+        if (expression.Length == 0)
+            return SetErrorAsync("Watch expression cannot be empty.");
+        if (watches.Any(value =>
+            string.Equals(value.Expression, expression, StringComparison.Ordinal)))
+            return Task.CompletedTask;
+
+        return RunAsync(async token =>
+        {
+            var watch = new DebugWatch(Guid.NewGuid(), expression);
+            watches = [.. watches, watch];
+            if (Snapshot.Status == DebugSessionStatus.Paused &&
+                selectedFrame is { } frame)
+                await EvaluateWatchAsync(watch.Id, frame, token);
+            NotifyPersistentStateChanged();
+        }, cancellationToken, requireActiveSession: false);
+    }
+
+    public Task UpdateWatchAsync(
+        Guid watchId,
+        string expression,
+        CancellationToken cancellationToken = default)
+    {
+        expression = expression.Trim();
+        if (expression.Length == 0)
+            return RemoveWatchAsync(watchId, cancellationToken);
+
+        return RunAsync(async token =>
+        {
+            watches = watches.Select(value => value.Id == watchId
+                ? value with
+                {
+                    Expression = expression,
+                    Result = null,
+                    Error = null
+                }
+                : value).ToArray();
+            if (Snapshot.Status == DebugSessionStatus.Paused &&
+                selectedFrame is { } frame)
+                await EvaluateWatchAsync(watchId, frame, token);
+            NotifyPersistentStateChanged();
+        }, cancellationToken, requireActiveSession: false);
+    }
+
+    public Task RemoveWatchAsync(
+        Guid watchId,
+        CancellationToken cancellationToken = default) =>
+        RunAsync(token =>
+        {
+            watches = watches.Where(value => value.Id != watchId).ToArray();
+            NotifyPersistentStateChanged();
+            return Task.CompletedTask;
+        }, cancellationToken, requireActiveSession: false);
+
+    public Task RefreshWatchesAsync(
+        CancellationToken cancellationToken = default) =>
+        selectedFrame is { } frame
+            ? RunAsync(
+                token => EvaluateWatchesAsync(frame, token),
+                cancellationToken,
+                requireActiveSession: false)
+            : SetErrorAsync("Select a paused stack frame to evaluate watches.");
+
+    public Task ToggleWatchAsync(
+        DebugWatch watch,
+        CancellationToken cancellationToken = default) =>
+        watch.Result is { Variables.Value: not 0 } result
+            ? ToggleVariableAsync(
+                new DebugVariable(
+                    watch.Expression,
+                    result.Value,
+                    result.Type,
+                    result.Variables,
+                    watch.Expression),
+                cancellationToken)
+            : Task.CompletedTask;
+
+    public void RestorePersistentState(
+        IReadOnlyList<DebugBreakpoint>? restoredBreakpoints,
+        IReadOnlyList<string>? restoredWatches)
+    {
+        breakpoints = (restoredBreakpoints ?? [])
+            .Where(value =>
+                value.Id != Guid.Empty &&
+                value.Location.Method.ModuleMvid != Guid.Empty &&
+                value.Location.Method.MetadataToken > 0 &&
+                value.Location.ILOffset >= 0)
+            .GroupBy(value => value.Id)
+            .Select(value => value.First())
+            .ToArray();
+        bindings = breakpoints.Select(value => new DebugBreakpointBinding(
+            value.Id,
+            false,
+            Message: "Pending until a debug session starts.")).ToArray();
+        watches = (restoredWatches ?? [])
+            .Select(value => value.Trim())
+            .Where(value => value.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .Select(value => new DebugWatch(Guid.NewGuid(), value))
+            .ToArray();
+        NotifyChanged();
+    }
 
     public void ClearOutput()
     {
@@ -300,7 +502,11 @@ public sealed class DebuggerWorkspace : IDisposable
             refresh?.Cancel();
             threads = [];
             frames = [];
+            scopeGroups = [];
             variables = [];
+            watches = watches
+                .Select(value => value with { Result = null, Error = null })
+                .ToArray();
             variableChildren.Clear();
             selectedThread = null;
             selectedFrame = null;
@@ -370,6 +576,7 @@ public sealed class DebuggerWorkspace : IDisposable
             return;
         selectedThread = thread;
         frames = loadedFrames;
+        scopeGroups = [];
         variables = [];
         variableChildren.Clear();
         selectedFrame = null;
@@ -385,20 +592,73 @@ public sealed class DebuggerWorkspace : IDisposable
         CancellationToken cancellationToken)
     {
         var scopes = await debugger.GetScopesAsync(frame.Id, cancellationToken);
-        var loaded = new List<DebugVariable>();
+        var loadedGroups = new List<DebugScopeGroup>();
         foreach (var scope in scopes.Where(value =>
             !value.IsExpensive &&
             value.Variables.Value != 0))
         {
-            loaded.AddRange(
-                await debugger.GetVariablesAsync(
-                    scope.Variables,
-                    cancellationToken));
+            var loaded = await debugger.GetVariablesAsync(
+                scope.Variables,
+                cancellationToken);
+            loadedGroups.Add(new DebugScopeGroup(scope.Name, loaded));
         }
         selectedFrame = frame.Id;
-        variables = loaded;
+        scopeGroups = loadedGroups;
+        variables = loadedGroups.SelectMany(value => value.Variables).ToArray();
         variableChildren.Clear();
+        await EvaluateWatchesAsync(frame.Id, cancellationToken);
         NotifyChanged();
+    }
+
+    private async Task EvaluateWatchesAsync(
+        DebugFrameId frame,
+        CancellationToken cancellationToken)
+    {
+        foreach (var watch in watches)
+            await EvaluateWatchAsync(watch.Id, frame, cancellationToken);
+    }
+
+    private async Task EvaluateWatchAsync(
+        Guid watchId,
+        DebugFrameId frame,
+        CancellationToken cancellationToken)
+    {
+        var watch = watches.FirstOrDefault(value => value.Id == watchId);
+        if (watch is null) return;
+        if (!Snapshot.Capabilities.SupportsEvaluate)
+        {
+            ReplaceWatch(watch with
+            {
+                Result = null,
+                Error = "Expression evaluation is unavailable for this debugger."
+            });
+            return;
+        }
+
+        try
+        {
+            var result = await debugger.EvaluateAsync(
+                watch.Expression,
+                frame,
+                cancellationToken);
+            ReplaceWatch(watch with { Result = result, Error = null });
+        }
+        catch (Exception exception) when (
+            exception is not OperationCanceledException)
+        {
+            ReplaceWatch(watch with
+            {
+                Result = null,
+                Error = exception.Message
+            });
+        }
+    }
+
+    private void ReplaceWatch(DebugWatch replacement)
+    {
+        watches = watches.Select(value => value.Id == replacement.Id
+            ? replacement
+            : value).ToArray();
     }
 
     private void CollapseVariable(
@@ -432,4 +692,10 @@ public sealed class DebuggerWorkspace : IDisposable
     }
 
     private void NotifyChanged() => Changed?.Invoke();
+
+    private void NotifyPersistentStateChanged() =>
+        PersistentStateChanged?.Invoke();
+
+    private static string? NullIfWhiteSpace(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

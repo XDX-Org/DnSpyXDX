@@ -200,6 +200,178 @@ public sealed class DebuggerWorkspaceTests
         Assert.Empty(debugger.LastBreakpoints);
     }
 
+    [Fact]
+    public async Task Restart_reuses_request_and_current_breakpoints()
+    {
+        var debugger = new FakeDebuggerService();
+        using var workspace = new DebuggerWorkspace(debugger);
+        var first = new DebugCodeLocation(
+            new DebugMethodId(Guid.NewGuid(), 0x06000001),
+            4);
+        var second = new DebugCodeLocation(
+            new DebugMethodId(Guid.NewGuid(), 0x06000002),
+            8);
+        await workspace.ToggleBreakpointAsync(first);
+        await workspace.LaunchAsync(
+            "sample.dll",
+            ["--mode", "debug"],
+            stopAtEntry: true);
+        await workspace.ToggleBreakpointAsync(second);
+
+        await workspace.RestartAsync();
+
+        Assert.Equal(2, debugger.StartCount);
+        Assert.Equal(1, debugger.TerminateCount);
+        var request = Assert.IsType<DebugLaunchRequest>(
+            debugger.LastStartRequest);
+        Assert.Equal("sample.dll", request.ExecutablePath);
+        Assert.Equal(["--mode", "debug"], request.Arguments);
+        Assert.True(request.StopAtEntry);
+        Assert.Equal(
+            [first, second],
+            request.InitialBreakpoints!
+                .Select(value => value.Location)
+                .ToArray());
+    }
+
+    [Fact]
+    public async Task Restart_without_previous_request_reports_error()
+    {
+        using var workspace = new DebuggerWorkspace(
+            new FakeDebuggerService());
+
+        await workspace.RestartAsync();
+
+        Assert.Equal(
+            "No previous debug launch or attach is available.",
+            workspace.Error);
+    }
+
+    [Fact]
+    public async Task Launch_forwards_working_directory_and_environment()
+    {
+        var debugger = new FakeDebuggerService();
+        using var workspace = new DebuggerWorkspace(debugger);
+        var environment = new Dictionary<string, string>
+        {
+            ["ASPNETCORE_ENVIRONMENT"] = "Development"
+        };
+
+        await workspace.LaunchAsync(
+            "sample.dll",
+            ["--verbose"],
+            stopAtEntry: false,
+            "work",
+            environment);
+
+        var request = Assert.IsType<DebugLaunchRequest>(
+            debugger.LastStartRequest);
+        Assert.Equal("work", request.WorkingDirectory);
+        Assert.Equal(
+            "Development",
+            request.Environment!["ASPNETCORE_ENVIRONMENT"]);
+    }
+
+    [Fact]
+    public async Task Scope_groups_and_watches_refresh_for_selected_frame()
+    {
+        var thread = new DebugThread(new DebugThreadId(2), "Main", true);
+        var frame = new DebugStackFrame(
+            new DebugFrameId(20),
+            thread.Id,
+            "Program.Main",
+            null);
+        var argumentsReference = new DebugVariableReference(100);
+        var localsReference = new DebugVariableReference(101);
+        var debugger = new FakeDebuggerService
+        {
+            ThreadResults = [thread]
+        };
+        debugger.FrameResults[thread.Id] = [frame];
+        debugger.ScopeResults[frame.Id] =
+        [
+            new DebugScope("Arguments", argumentsReference),
+            new DebugScope("Locals", localsReference)
+        ];
+        debugger.VariableResults[argumentsReference] =
+            [new DebugVariable("args", "string[0]", "string[]", default)];
+        debugger.VariableResults[localsReference] =
+            [new DebugVariable("count", "41", "int", default, "count")];
+        debugger.EvaluationResults["count"] =
+            new DebugEvaluationResult("41", "int", default);
+        using var workspace = new DebuggerWorkspace(debugger);
+        workspace.RestorePersistentState([], ["count"]);
+
+        debugger.PublishPaused(thread.Id);
+
+        Assert.Equal(
+            ["Arguments", "Locals"],
+            workspace.ScopeGroups.Select(value => value.Name));
+        Assert.Equal(
+            ["args", "count"],
+            workspace.Variables.Select(value => value.Name));
+        Assert.Equal("41", Assert.Single(workspace.Watches).Result?.Value);
+        Assert.Equal(
+            [(Expression: "count", Frame: (DebugFrameId?)frame.Id)],
+            debugger.Evaluations);
+
+        debugger.EvaluationResults["count"] =
+            new DebugEvaluationResult("42", "int", default);
+        await workspace.SelectFrameAsync(frame);
+
+        Assert.Equal("42", Assert.Single(workspace.Watches).Result?.Value);
+
+        debugger.PublishRunning();
+
+        var persisted = Assert.Single(workspace.Watches);
+        Assert.Equal("count", persisted.Expression);
+        Assert.Null(persisted.Result);
+        Assert.Empty(workspace.ScopeGroups);
+    }
+
+    [Fact]
+    public async Task Breakpoint_editor_bulk_actions_and_restore_preserve_state()
+    {
+        var debugger = new FakeDebuggerService();
+        using var workspace = new DebuggerWorkspace(debugger);
+        var first = new DebugBreakpoint(
+            Guid.NewGuid(),
+            new DebugCodeLocation(
+                new DebugMethodId(Guid.NewGuid(), 0x06000001),
+                4));
+        var second = new DebugBreakpoint(
+            Guid.NewGuid(),
+            new DebugCodeLocation(
+                new DebugMethodId(Guid.NewGuid(), 0x06000002),
+                8));
+        var persistentChanges = 0;
+        workspace.PersistentStateChanged += () => persistentChanges++;
+        workspace.RestorePersistentState(
+            [first, second],
+            ["count", "name", "count"]);
+
+        await workspace.UpdateBreakpointAsync(
+            first.Id,
+            "count > 0",
+            "5",
+            "count={count}");
+        await workspace.SetAllBreakpointsEnabledAsync(false);
+
+        var updated = workspace.Breakpoints.Single(value =>
+            value.Id == first.Id);
+        Assert.Equal("count > 0", updated.Condition);
+        Assert.Equal("5", updated.HitCondition);
+        Assert.Equal("count={count}", updated.LogMessage);
+        Assert.All(workspace.Breakpoints, value => Assert.False(value.Enabled));
+        Assert.Equal(["count", "name"], workspace.Watches.Select(value =>
+            value.Expression));
+
+        await workspace.RemoveAllBreakpointsAsync();
+
+        Assert.Empty(workspace.Breakpoints);
+        Assert.Equal(3, persistentChanges);
+    }
+
     private sealed class FakeDebuggerService : IDebuggerService
     {
         public DebugSessionSnapshot Snapshot { get; private set; } =
@@ -207,6 +379,8 @@ public sealed class DebuggerWorkspaceTests
         public IReadOnlyList<DebugBreakpointBinding> Breakpoints { get; private set; } = [];
         public IReadOnlyList<DebugBreakpoint> LastBreakpoints { get; private set; } = [];
         public DebugStartRequest? LastStartRequest { get; private set; }
+        public int StartCount { get; private set; }
+        public int TerminateCount { get; private set; }
         public IReadOnlyList<DebugThread> ThreadResults { get; init; } = [];
         public Dictionary<DebugThreadId, IReadOnlyList<DebugStackFrame>>
             FrameResults { get; } = [];
@@ -214,6 +388,10 @@ public sealed class DebuggerWorkspaceTests
             ScopeResults { get; } = [];
         public Dictionary<DebugVariableReference, IReadOnlyList<DebugVariable>>
             VariableResults { get; } = [];
+        public Dictionary<string, DebugEvaluationResult>
+            EvaluationResults { get; } = [];
+        public List<(string Expression, DebugFrameId? Frame)>
+            Evaluations { get; } = [];
         public List<DebugVariableReference> RequestedVariableReferences { get; } = [];
 
         public event Action<DebugSessionSnapshot>? StateChanged;
@@ -228,6 +406,7 @@ public sealed class DebuggerWorkspaceTests
             DebugStartRequest request,
             CancellationToken cancellationToken = default)
         {
+            StartCount++;
             LastStartRequest = request;
             Snapshot = new DebugSessionSnapshot(
                 Guid.NewGuid(),
@@ -252,8 +431,17 @@ public sealed class DebuggerWorkspaceTests
                 : Task.CompletedTask;
         }
 
-        public Task TerminateAsync(CancellationToken cancellationToken = default) =>
-            Task.CompletedTask;
+        public Task TerminateAsync(CancellationToken cancellationToken = default)
+        {
+            TerminateCount++;
+            Snapshot = Snapshot with
+            {
+                Status = DebugSessionStatus.Terminated,
+                Stop = null
+            };
+            StateChanged?.Invoke(Snapshot);
+            return Task.CompletedTask;
+        }
 
         public Task ContinueAsync(CancellationToken cancellationToken = default) =>
             Task.CompletedTask;
@@ -311,8 +499,13 @@ public sealed class DebuggerWorkspaceTests
         public Task<DebugEvaluationResult> EvaluateAsync(
             string expression,
             DebugFrameId? frame = null,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(new DebugEvaluationResult("", null, default));
+            CancellationToken cancellationToken = default)
+        {
+            Evaluations.Add((expression, frame));
+            return Task.FromResult(
+                EvaluationResults.GetValueOrDefault(expression) ??
+                new DebugEvaluationResult("", null, default));
+        }
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
@@ -323,11 +516,30 @@ public sealed class DebuggerWorkspaceTests
                 DebugRuntimeKind.Mono,
                 DebugSessionStatus.Paused,
                 1234,
-                DebuggerCapabilitySets.None,
+                new DebuggerCapabilities(
+                    true,
+                    true,
+                    true,
+                    true,
+                    true,
+                    true,
+                    true,
+                    true,
+                    true),
                 new DebugStopInfo(
                     DebugStopReason.Breakpoint,
                     thread),
                 null);
+            StateChanged?.Invoke(Snapshot);
+        }
+
+        public void PublishRunning()
+        {
+            Snapshot = Snapshot with
+            {
+                Status = DebugSessionStatus.Running,
+                Stop = null
+            };
             StateChanged?.Invoke(Snapshot);
         }
     }
