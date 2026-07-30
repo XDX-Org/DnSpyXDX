@@ -19,6 +19,7 @@ public sealed record DebugWatch(
 public sealed class DebuggerWorkspace : IDisposable
 {
     private const int MaximumOutputMessages = 1_000;
+    private const int MaximumPresentedCollectionItems = 200;
     private readonly IDebuggerService debugger;
     private CancellationTokenSource? refresh;
     private IReadOnlyList<DebugBreakpoint> breakpoints = [];
@@ -31,6 +32,10 @@ public sealed class DebuggerWorkspace : IDisposable
     private IReadOnlyList<DebugWatch> watches = [];
     private readonly Dictionary<DebugVariableReference, IReadOnlyList<DebugVariable>>
         variableChildren = [];
+    private readonly Dictionary<DebugVariableReference, IReadOnlyList<DebugVariable>>
+        syntheticVariableChildren = [];
+    private readonly Dictionary<DebugVariableReference, int> collectionCounts = [];
+    private long nextSyntheticVariableReference;
     private IReadOnlyList<DebugOutputMessage> output = [];
     private DebugThreadId? selectedThread;
     private DebugFrameId? selectedFrame;
@@ -282,10 +287,16 @@ public sealed class DebuggerWorkspace : IDisposable
                 return;
             }
 
-            var children = await debugger.GetVariablesAsync(variable.Variables, token);
-            variableChildren[variable.Variables] = selectedFrame is { } frame
+            var children = syntheticVariableChildren.TryGetValue(
+                variable.Variables,
+                out var synthetic)
+                ? synthetic
+                : await debugger.GetVariablesAsync(variable.Variables, token);
+            children = selectedFrame is { } frame
                 ? await RecoverVariableReferencesAsync(children, frame, token)
                 : children;
+            children = await PresentCollectionAsync(variable, children, token);
+            variableChildren[variable.Variables] = children;
             NotifyChanged();
         }, cancellationToken, requireActiveSession: false);
 
@@ -293,6 +304,19 @@ public sealed class DebuggerWorkspace : IDisposable
         DebugVariableReference reference,
         out IReadOnlyList<DebugVariable> children) =>
         variableChildren.TryGetValue(reference, out children!);
+
+    public string DisplayValue(DebugVariable variable) =>
+        collectionCounts.TryGetValue(variable.Variables, out var count)
+            ? $"{ShortTypeName(variable.Type)} Count = {count}"
+            : variable.Value;
+
+    public static string? ShortTypeName(string? type) => type?
+        .Replace("System.Collections.Generic.", "", StringComparison.Ordinal)
+        .Replace("System.", "", StringComparison.Ordinal)
+        .Replace("String", "string", StringComparison.Ordinal)
+        .Replace("Boolean", "bool", StringComparison.Ordinal)
+        .Replace("Int32", "int", StringComparison.Ordinal)
+        .Replace("Int64", "long", StringComparison.Ordinal);
 
     public Task RemoveBreakpointAsync(
         Guid breakpointId,
@@ -569,6 +593,8 @@ public sealed class DebuggerWorkspace : IDisposable
                 .Select(value => value with { Result = null, Error = null })
                 .ToArray();
             variableChildren.Clear();
+            syntheticVariableChildren.Clear();
+            collectionCounts.Clear();
             selectedThread = null;
             selectedFrame = null;
         }
@@ -640,6 +666,8 @@ public sealed class DebuggerWorkspace : IDisposable
         scopeGroups = [];
         variables = [];
         variableChildren.Clear();
+        syntheticVariableChildren.Clear();
+        collectionCounts.Clear();
         selectedFrame = null;
         var firstFrame = loadedFrames.FirstOrDefault();
         if (firstFrame is not null)
@@ -671,6 +699,8 @@ public sealed class DebuggerWorkspace : IDisposable
         scopeGroups = loadedGroups;
         variables = loadedGroups.SelectMany(value => value.Variables).ToArray();
         variableChildren.Clear();
+        syntheticVariableChildren.Clear();
+        collectionCounts.Clear();
         await EvaluateWatchesAsync(frame.Id, cancellationToken);
         NotifyChanged();
     }
@@ -707,6 +737,117 @@ public sealed class DebuggerWorkspace : IDisposable
         }
         return result;
     }
+
+    private async Task<IReadOnlyList<DebugVariable>> PresentCollectionAsync(
+        DebugVariable parent,
+        IReadOnlyList<DebugVariable> raw,
+        CancellationToken cancellationToken)
+    {
+        if (parent.Type?.StartsWith(
+                "System.Collections.Generic.Dictionary<",
+                StringComparison.Ordinal) == true)
+            return await PresentDictionaryAsync(parent, raw, cancellationToken);
+        if (parent.Type?.StartsWith(
+                "System.Collections.Generic.List<",
+                StringComparison.Ordinal) == true)
+            return await PresentListAsync(parent, raw, cancellationToken);
+        return raw;
+    }
+
+    private async Task<IReadOnlyList<DebugVariable>> PresentDictionaryAsync(
+        DebugVariable parent,
+        IReadOnlyList<DebugVariable> raw,
+        CancellationToken cancellationToken)
+    {
+        if (!TryReadCount(raw, "_count", out var allocatedCount) ||
+            raw.FirstOrDefault(value => value.Name == "_entries") is not { } entries ||
+            entries.Variables.Value == 0)
+            return raw;
+
+        var count = TryReadCount(raw, "Count", out var publicCount)
+            ? publicCount
+            : allocatedCount - (TryReadCount(raw, "_freeCount", out var freeCount)
+                ? freeCount
+                : 0);
+        var items = await debugger.GetVariablesAsync(entries.Variables, cancellationToken);
+        var presented = new List<DebugVariable>(Math.Min(count, MaximumPresentedCollectionItems) + 2);
+        foreach (var item in items.Take(allocatedCount))
+        {
+            if (item.Variables.Value == 0) continue;
+            var fields = await debugger.GetVariablesAsync(item.Variables, cancellationToken);
+            if (int.TryParse(fields.FirstOrDefault(value =>
+                    value.Name.Equals("next", StringComparison.OrdinalIgnoreCase))?.Value,
+                    out var next) && next < -1)
+                continue;
+            var key = fields.FirstOrDefault(value =>
+                value.Name.Equals("key", StringComparison.OrdinalIgnoreCase));
+            var value = fields.FirstOrDefault(value =>
+                value.Name.Equals("value", StringComparison.OrdinalIgnoreCase));
+            if (key is null || value is null) continue;
+            presented.Add(value with
+            {
+                Name = $"[{key.Value.Trim('\"')}]",
+                EvaluateName = value.EvaluateName ?? item.EvaluateName
+            });
+            if (presented.Count == Math.Min(count, MaximumPresentedCollectionItems))
+                break;
+        }
+        if (presented.Count != Math.Min(count, MaximumPresentedCollectionItems))
+            return raw;
+        collectionCounts[parent.Variables] = count;
+        if (count > MaximumPresentedCollectionItems)
+            presented.Add(new DebugVariable(
+                $"… {count - MaximumPresentedCollectionItems} more",
+                "",
+                null,
+                default));
+        presented.Add(CreateRawView(raw));
+        return presented;
+    }
+
+    private async Task<IReadOnlyList<DebugVariable>> PresentListAsync(
+        DebugVariable parent,
+        IReadOnlyList<DebugVariable> raw,
+        CancellationToken cancellationToken)
+    {
+        if (!TryReadCount(raw, "_size", out var count) ||
+            raw.FirstOrDefault(value => value.Name == "_items") is not { } items ||
+            items.Variables.Value == 0)
+            return raw;
+        var presented = (await debugger.GetVariablesAsync(
+                items.Variables,
+                cancellationToken))
+            .Take(Math.Min(count, MaximumPresentedCollectionItems))
+            .ToList();
+        if (presented.Count != Math.Min(count, MaximumPresentedCollectionItems))
+            return raw;
+        collectionCounts[parent.Variables] = count;
+        if (count > MaximumPresentedCollectionItems)
+            presented.Add(new DebugVariable(
+                $"… {count - MaximumPresentedCollectionItems} more",
+                "",
+                null,
+                default));
+        presented.Add(CreateRawView(raw));
+        return presented;
+    }
+
+    private DebugVariable CreateRawView(IReadOnlyList<DebugVariable> raw)
+    {
+        var reference = new DebugVariableReference(--nextSyntheticVariableReference);
+        syntheticVariableChildren[reference] = raw
+            .OrderBy(value => value.Name.StartsWith('_'))
+            .ToArray();
+        return new DebugVariable("Raw View", "", null, reference);
+    }
+
+    private static bool TryReadCount(
+        IReadOnlyList<DebugVariable> variables,
+        string name,
+        out int count) =>
+        int.TryParse(
+            variables.FirstOrDefault(value => value.Name == name)?.Value,
+            out count) && count >= 0;
 
     private async Task EvaluateWatchesAsync(
         DebugFrameId frame,
@@ -766,10 +907,14 @@ public sealed class DebuggerWorkspace : IDisposable
         if (!visited.Add(reference) ||
             !variableChildren.Remove(reference, out var children))
             return;
+        collectionCounts.Remove(reference);
         foreach (var child in children)
         {
             if (child.Variables.Value != 0)
+            {
                 CollapseVariable(child.Variables, visited);
+                syntheticVariableChildren.Remove(child.Variables);
+            }
         }
     }
 

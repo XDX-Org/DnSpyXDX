@@ -389,6 +389,52 @@ public sealed class DebuggerWorkspaceTests
         Assert.Equal(3, persistentChanges);
     }
 
+    [Fact]
+    public async Task Dictionary_variables_are_presented_as_key_value_entries()
+    {
+        var dictionaryReference = new DebugVariableReference(10);
+        var entriesReference = new DebugVariableReference(11);
+        var entryReference = new DebugVariableReference(12);
+        var valueReference = new DebugVariableReference(13);
+        var dictionary = new DebugVariable(
+            "profiles",
+            "{System.Collections.Generic.Dictionary<string, Profile>}",
+            "System.Collections.Generic.Dictionary<string, Profile>",
+            dictionaryReference);
+        var debugger = new FakeDebuggerService();
+        debugger.VariableResults[dictionaryReference] =
+        [
+            new("_count", "1", "int", default),
+            new("_entries", "{Entry[3]}", "Entry[]", entriesReference),
+            new("Count", "1", "int", default)
+        ];
+        debugger.VariableResults[entriesReference] =
+            [new("[0]", "{Entry}", "Entry", entryReference)];
+        debugger.VariableResults[entryReference] =
+        [
+            new("key", "\"Standard\"", "string", default),
+            new("value", "{Profile}", "Profile", valueReference)
+        ];
+        using var workspace = new DebuggerWorkspace(debugger);
+
+        await workspace.ToggleVariableAsync(dictionary);
+
+        Assert.True(workspace.TryGetVariableChildren(
+            dictionaryReference,
+            out var children));
+        Assert.Equal("[Standard]", children[0].Name);
+        Assert.Equal(valueReference, children[0].Variables);
+        Assert.Equal("Raw View", children[1].Name);
+        Assert.False(workspace.TryGetVariableChildren(children[1].Variables, out _));
+        Assert.Equal("Dictionary<string, Profile> Count = 1",
+            workspace.DisplayValue(dictionary));
+
+        await workspace.ToggleVariableAsync(children[1]);
+
+        Assert.True(workspace.TryGetVariableChildren(children[1].Variables, out var raw));
+        Assert.Equal(["Count", "_count", "_entries"], raw.Select(value => value.Name));
+    }
+
     private sealed class FakeDebuggerService : IDebuggerService
     {
         public DebugSessionSnapshot Snapshot { get; private set; } =

@@ -265,7 +265,10 @@
             var status = BreakpointStatus(breakpoint, binding);
             var presentation = BreakpointPresentationFor(breakpoint);
             <section class="debugger-breakpoint-entry state-@status.Css" @key="breakpoint.Id">
-              <div class="debugger-breakpoint-row" title="@status.Title">
+              <div class="debugger-breakpoint-row"
+                   title="@status.Title"
+                   @oncontextmenu="e => OpenBreakpointMenu(breakpoint, e)"
+                   @oncontextmenu:preventDefault>
                 <input type="checkbox"
                        checked="@breakpoint.Enabled"
                        aria-label="Enable breakpoint"
@@ -340,6 +343,24 @@
       </div>
     </section>
   }
+
+  @if (contextBreakpoint is { } selectedBreakpoint)
+  {
+    var presentation = BreakpointPresentationFor(selectedBreakpoint);
+    <div class="context-menu-dismiss"
+         @onclick="CloseBreakpointMenu"
+         @oncontextmenu:preventDefault></div>
+    <div class="assembly-context-menu"
+         style="--context-x:@(contextMenuX)px;--context-y:@(contextMenuY)px"
+         @onclick:stopPropagation
+         @oncontextmenu:preventDefault>
+      <div class="context-menu-identity">
+        <strong>@presentation.Label</strong>
+        <small>@presentation.Detail</small>
+      </div>
+      <button @onclick="() => RemoveContextBreakpointAsync(selectedBreakpoint.Id)">Remove breakpoint</button>
+    </div>
+  }
 </div>
 
 @code {
@@ -357,6 +378,9 @@
   private readonly Dictionary<Guid, BreakpointDraft> breakpointDrafts = [];
   private readonly Dictionary<DebugCodeLocation, BreakpointPresentation> breakpointPresentations = [];
   private readonly HashSet<DebugCodeLocation> loadingBreakpointPresentations = [];
+  private DebugBreakpoint? contextBreakpoint;
+  private double contextMenuX;
+  private double contextMenuY;
 
   private string Panel =>
     ActivePanel is "inspect" or "breakpoints" or "output"
@@ -469,6 +493,21 @@
 
   private void CancelBreakpointEditor(Guid breakpointId) =>
     breakpointDrafts.Remove(breakpointId);
+
+  private void OpenBreakpointMenu(DebugBreakpoint breakpoint, MouseEventArgs value)
+  {
+    contextBreakpoint = breakpoint;
+    contextMenuX = value.ClientX;
+    contextMenuY = value.ClientY;
+  }
+
+  private void CloseBreakpointMenu() => contextBreakpoint = null;
+
+  private async Task RemoveContextBreakpointAsync(Guid breakpointId)
+  {
+    CloseBreakpointMenu();
+    await Debugger.RemoveBreakpointAsync(breakpointId);
+  }
 
   private async Task SaveBreakpointAsync(
     Guid breakpointId,

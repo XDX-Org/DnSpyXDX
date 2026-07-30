@@ -11,8 +11,8 @@
       <i class="@(Expandable ? Expanded ? "expanded" : "expandable" : null)"></i>
       @Variable.Name
     </span>
-    <code>@Variable.Value</code>
-    <small>@Variable.Type</small>
+    <code>@Debugger.DisplayValue(Variable)</code>
+    <small>@DebuggerWorkspace.ShortTypeName(Variable.Type)</small>
   </button>
   <span class="debugger-variable-actions">
     <button title="Copy expression or name" @onclick="() => CopyAsync(Variable.EvaluateName ?? Variable.Name)">E</button>
