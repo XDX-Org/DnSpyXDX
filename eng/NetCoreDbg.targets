@@ -4,7 +4,6 @@
     <NetCoreDbgRepository Condition="'$(NetCoreDbgRepository)' == ''">XDX-Org/netcoredbg</NetCoreDbgRepository>
     <NetCoreDbgVersion Condition="'$(NetCoreDbgVersion)' == ''">xdx-3.2.0-1092.3</NetCoreDbgVersion>
     <NetCoreDbgCommit Condition="'$(NetCoreDbgCommit)' == ''">deed5a07aec8bd10c62d4caf1349952762892e4e</NetCoreDbgCommit>
-    <NetCoreDbgAssetCommit Condition="'$(NetCoreDbgAssetCommit)' == ''">db2dedb1a06a53365ce995b39f2c41ec8f36c302</NetCoreDbgAssetCommit>
     <_NetCoreDbgRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</_NetCoreDbgRid>
     <_NetCoreDbgRid Condition="'$(_NetCoreDbgRid)' == ''">$(NETCoreSdkRuntimeIdentifier)</_NetCoreDbgRid>
     <_NetCoreDbgPlatform Condition="'$(_NetCoreDbgRid)' == 'win-x64'">win64</_NetCoreDbgPlatform>
@@ -18,7 +17,7 @@
     <_NetCoreDbgExtractDir>$(_NetCoreDbgCacheDir)extracted/</_NetCoreDbgExtractDir>
     <_NetCoreDbgExecutable Condition="'$(_NetCoreDbgRid)' == 'win-x64'">$(_NetCoreDbgExtractDir)netcoredbg/netcoredbg.exe</_NetCoreDbgExecutable>
     <_NetCoreDbgExecutable Condition="'$(_NetCoreDbgRid)' == 'linux-x64'">$(_NetCoreDbgExtractDir)netcoredbg/netcoredbg</_NetCoreDbgExecutable>
-    <_NetCoreDbgDownloadUrl>https://raw.githubusercontent.com/$(NetCoreDbgRepository)/$(NetCoreDbgAssetCommit)/$(NetCoreDbgVersion)/$(_NetCoreDbgArchiveName)</_NetCoreDbgDownloadUrl>
+    <_NetCoreDbgDownloadUrl>https://github.com/$(NetCoreDbgRepository)/releases/download/$(NetCoreDbgVersion)/$(_NetCoreDbgArchiveName)</_NetCoreDbgDownloadUrl>
     <_NetCoreDbgLicense>$(MSBuildThisFileDirectory)../licenses/NetCoreDbg-LICENSE.txt</_NetCoreDbgLicense>
   </PropertyGroup>
 
