@@ -123,9 +123,12 @@ window.dnSpyXdx.initDebuggerResize = function (sections) {
 
   const panes = Array.from(sections.querySelectorAll(":scope > .debugger-section"));
   const handles = Array.from(sections.querySelectorAll(":scope > .debugger-section-resizer"));
-  const storageKey = "dnspyxdx.debugger-pane-weights";
+  const storageKey = "dnspyxdx.debugger-inspect-pane-weights";
   const property = index => `--debugger-pane-${index}-weight`;
-  const minimumWidths = [110, 150, 190, 170, 180];
+  const minimumWidths = panes.map(pane => {
+    const value = Number.parseFloat(pane.dataset.minWidth);
+    return Number.isFinite(value) && value > 0 ? value : 180;
+  });
 
   const setWeights = weights => {
     if (!Array.isArray(weights) || weights.length !== panes.length ||
@@ -241,6 +244,50 @@ window.dnSpyXdx.disposeDebuggerResize = function (sections) {
   }
   document.body.classList.remove("resizing-debugger");
   delete sections._dnSpyXdxDebuggerResize;
+};
+window.dnSpyXdx.initDebuggerKeys = function (dotNet) {
+  if (window.dnSpyXdx.debuggerKeys) {
+    window.dnSpyXdx.debuggerKeys.dotNet = dotNet;
+    return;
+  }
+
+  const state = { dotNet, keydown: null };
+  state.keydown = event => {
+    if (event.repeat) return;
+    const active = document.activeElement;
+    if (active && (
+      active.tagName === "INPUT" ||
+      active.tagName === "TEXTAREA" ||
+      active.tagName === "SELECT" ||
+      active.isContentEditable)) return;
+
+    let command = null;
+    if (event.key === "F5") {
+      if (event.ctrlKey && event.shiftKey && !event.altKey) command = "restart";
+      else if (event.shiftKey && !event.ctrlKey && !event.altKey) command = "stop";
+      else if (!event.ctrlKey && !event.shiftKey && !event.altKey) command = "startContinue";
+    } else if (event.key === "F10" &&
+               !event.ctrlKey && !event.shiftKey && !event.altKey) {
+      command = "stepOver";
+    } else if (event.key === "F11" && !event.ctrlKey && !event.altKey) {
+      command = event.shiftKey ? "stepOut" : "stepInto";
+    } else if ((event.key === "Pause" || event.key === "Cancel") &&
+               event.ctrlKey && event.altKey && !event.shiftKey) {
+      command = "pause";
+    }
+
+    if (!command) return;
+    event.preventDefault();
+    state.dotNet?.invokeMethodAsync("DebuggerKeyCommand", command);
+  };
+  window.addEventListener("keydown", state.keydown);
+  window.dnSpyXdx.debuggerKeys = state;
+};
+window.dnSpyXdx.disposeDebuggerKeys = function () {
+  const state = window.dnSpyXdx.debuggerKeys;
+  if (!state) return;
+  window.removeEventListener("keydown", state.keydown);
+  delete window.dnSpyXdx.debuggerKeys;
 };
 window.dnSpyXdx.initHistoryButtons = function (dotNet) {
   if (window.dnSpyXdx.historyReady) return;

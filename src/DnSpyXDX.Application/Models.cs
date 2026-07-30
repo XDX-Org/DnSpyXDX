@@ -219,4 +219,10 @@ public sealed record UiSessionState(
     IReadOnlyList<string>? McpAllowedRoots = null,
     string LastOpenDirectory = "",
     MemberOrder MemberOrder = MemberOrder.Ilspy,
-    IReadOnlyList<MemberGroup>? MemberGroupOrder = null);
+    IReadOnlyList<MemberGroup>? MemberGroupOrder = null,
+    string DebuggerPanel = "inspect",
+    string DebuggerInspectPanel = "variables",
+    IReadOnlyList<DebugBreakpoint>? DebuggerBreakpoints = null,
+    IReadOnlyList<string>? DebuggerWatches = null,
+    IReadOnlyList<DebugStartConfiguration>? DebuggerConfigurations = null,
+    Guid? SelectedDebuggerConfiguration = null);

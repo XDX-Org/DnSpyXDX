@@ -1,0 +1,44 @@
+@inject DebuggerWorkspace Debugger
+@inject IJSRuntime JS
+
+<div class="debugger-variable"
+     style="@($"--debug-depth:{Depth}")">
+  <button class="debugger-variable-main"
+          disabled="@(!Expandable)"
+          title="@(Expandable ? Expanded ? "Collapse value" : "Expand value" : Variable.Value)"
+          @onclick="() => Debugger.ToggleVariableAsync(Variable)">
+    <span class="debugger-variable-name">
+      <i class="@(Expandable ? Expanded ? "expanded" : "expandable" : null)"></i>
+      @Variable.Name
+    </span>
+    <code>@Variable.Value</code>
+    <small>@Variable.Type</small>
+  </button>
+  <span class="debugger-variable-actions">
+    <button title="Copy expression or name" @onclick="() => CopyAsync(Variable.EvaluateName ?? Variable.Name)">E</button>
+    <button title="Copy value" @onclick="() => CopyAsync(Variable.Value)">V</button>
+    <button title="Copy type" disabled="@string.IsNullOrWhiteSpace(Variable.Type)" @onclick="() => CopyAsync(Variable.Type)">T</button>
+  </span>
+</div>
+@if (Expanded && Debugger.TryGetVariableChildren(Variable.Variables, out var children))
+{
+  @foreach (var child in children)
+  {
+    <DebuggerVariableRow Variable="child" Depth="@(Depth + 1)" />
+  }
+}
+
+@code {
+  [Parameter, EditorRequired] public DebugVariable Variable { get; set; } = null!;
+  [Parameter] public int Depth { get; set; }
+
+  private bool Expandable => Variable.Variables.Value != 0;
+  private bool Expanded =>
+    Expandable &&
+    Debugger.TryGetVariableChildren(Variable.Variables, out _);
+
+  private Task CopyAsync(string? value) =>
+    string.IsNullOrEmpty(value)
+      ? Task.CompletedTask
+      : JS.InvokeVoidAsync("dnSpyXdx.copyText", value).AsTask();
+}

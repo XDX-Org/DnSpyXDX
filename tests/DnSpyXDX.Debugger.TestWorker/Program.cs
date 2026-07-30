@@ -165,7 +165,10 @@ static async Task<int> RunNetCoreDbgAsync(string mode)
                         pendingIlBinding.Remove("message");
                     }
                     if (enabled && mode == "netcoredbg-il-entry")
+                    {
                         pendingIlStop = binding.DeepClone().AsObject();
+                        pendingIlBinding = binding.DeepClone().AsObject();
+                    }
                 }
                 await RespondAsync(
                     sequence,

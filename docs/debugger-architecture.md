@@ -292,12 +292,15 @@ The first UI slice now includes:
 - automatic stopped-method navigation from stopped events or top-frame fallback,
   current-statement reveal, and gutter marker;
 - selectable threads and navigable call-stack frames;
-- expandable locals/arguments, breakpoint enable/remove/navigation controls, and bounded
-  debugger-output panels;
-- automatic frame/variable refresh on pause and handle invalidation on resume.
+- grouped, expandable scopes; persistent watches; evaluation refresh; and variable copy actions;
+- readable, persistent breakpoints with option editing, filtering, bulk actions, and binding
+  diagnostics;
+- saved launch/attach configurations, CoreCLR process picker, working directory/environment
+  input, remote Mono warning, and retry/restart recovery;
+- bounded debugger output plus automatic frame/value refresh on pause and handle invalidation on
+  resume.
 
-Watches, exception settings, modules, restart, breakpoint persistence, object-field expansion, and
-editable values remain.
+Exception settings, modules, editable values, and Unity discovery remain.
 
 ## Reliability and test matrix
 
@@ -343,8 +346,9 @@ Release matrix:
 6. **Complete:** add Mono soft-debugger direct attach, IL breakpoints, execution control, and first
    stack/variable projection.
 7. Add Unity discovery, capability negotiation, and supported-version fixtures.
-8. **Partial:** first debugger panels and XDX-adapter packaging exist; add watches, exceptions,
-   modules, persistence, and dual-platform runtime integration CI.
+8. **Partial:** debugger inspection, watches, breakpoint workflow, persistence, saved start
+   configurations, and XDX-adapter packaging exist; add exceptions, modules, editable values,
+   and dual-platform runtime integration CI.
 
 ## Primary references
 
