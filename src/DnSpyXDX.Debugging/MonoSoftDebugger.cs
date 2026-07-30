@@ -175,6 +175,9 @@ internal sealed class MonoSoftDebuggerEngine(
     public Task TerminateAsync(CancellationToken cancellationToken) =>
         GetSession().DetachAsync(cancellationToken);
 
+    public Task DetachAsync(CancellationToken cancellationToken) =>
+        GetSession().DetachAsync(cancellationToken);
+
     public Task ContinueAsync(CancellationToken cancellationToken) =>
         GetSession().ContinueAsync(cancellationToken);
 

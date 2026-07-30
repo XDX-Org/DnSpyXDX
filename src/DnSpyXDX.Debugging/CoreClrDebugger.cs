@@ -328,6 +328,15 @@ internal sealed class NetCoreDbgEngine(
             cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task DetachAsync(CancellationToken cancellationToken)
+    {
+        Interlocked.Exchange(ref terminationRequested, 1);
+        var current = GetWorker();
+        await current.StopAsync(
+            terminateDebuggee: false,
+            cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task ContinueAsync(CancellationToken cancellationToken)
     {
         var thread = await GetControlThreadAsync(cancellationToken).ConfigureAwait(false);

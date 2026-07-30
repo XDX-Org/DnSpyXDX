@@ -60,10 +60,18 @@ public sealed class DebuggerWorkspace : IDisposable
     public DebugThreadId? SelectedThread => selectedThread;
     public DebugFrameId? SelectedFrame => selectedFrame;
     public bool IsBusy { get; private set; }
+    public bool IsMcpControlled { get; private set; }
     public string? Error { get; private set; }
 
     public event Action? Changed;
     public event Action? PersistentStateChanged;
+
+    public void SetMcpControl(bool active)
+    {
+        if (IsMcpControlled == active) return;
+        IsMcpControlled = active;
+        NotifyChanged();
+    }
 
     public DebugBreakpointBinding? BindingFor(Guid breakpointId) =>
         bindings.FirstOrDefault(value => value.BreakpointId == breakpointId);
@@ -92,7 +100,7 @@ public sealed class DebuggerWorkspace : IDisposable
                 };
             StartRequest = request;
             await debugger.StartAsync(request, token);
-        }, cancellationToken, requireActiveSession: false);
+        }, cancellationToken, requireActiveSession: false, requireUiControl: true);
 
     public Task AttachAsync(
         int processId,
@@ -107,7 +115,7 @@ public sealed class DebuggerWorkspace : IDisposable
                 };
             StartRequest = request;
             await debugger.StartAsync(request, token);
-        }, cancellationToken, requireActiveSession: false);
+        }, cancellationToken, requireActiveSession: false, requireUiControl: true);
 
     public Task AttachMonoAsync(
         string host,
@@ -124,16 +132,19 @@ public sealed class DebuggerWorkspace : IDisposable
                 };
             StartRequest = request;
             await debugger.StartAsync(request, token);
-        }, cancellationToken, requireActiveSession: false);
+        }, cancellationToken, requireActiveSession: false, requireUiControl: true);
 
     public Task ContinueAsync(CancellationToken cancellationToken = default) =>
-        RunAsync(debugger.ContinueAsync, cancellationToken);
+        RunUiCommandAsync(debugger.ContinueAsync, cancellationToken);
 
     public Task PauseAsync(CancellationToken cancellationToken = default) =>
-        RunAsync(debugger.PauseAsync, cancellationToken);
+        RunUiCommandAsync(debugger.PauseAsync, cancellationToken);
 
     public Task TerminateAsync(CancellationToken cancellationToken = default) =>
-        RunAsync(debugger.TerminateAsync, cancellationToken);
+        RunUiCommandAsync(debugger.TerminateAsync, cancellationToken);
+
+    public Task DetachAsync(CancellationToken cancellationToken = default) =>
+        RunUiCommandAsync(debugger.DetachAsync, cancellationToken);
 
     public Task RestartAsync(CancellationToken cancellationToken = default)
     {
@@ -162,18 +173,27 @@ public sealed class DebuggerWorkspace : IDisposable
             };
             StartRequest = request;
             await debugger.StartAsync(request, token);
-        }, cancellationToken, requireActiveSession: false);
+        }, cancellationToken, requireActiveSession: false, requireUiControl: true);
     }
 
     public Task StepAsync(
         DebugStepKind kind,
         CancellationToken cancellationToken = default)
     {
+        if (IsMcpControlled)
+            return SetErrorAsync("This debug session is controlled by an MCP client.");
         var thread = Snapshot.Stop?.Thread ?? threads.FirstOrDefault()?.Id;
         return thread is { } id
             ? RunAsync(token => debugger.StepAsync(id, kind, token), cancellationToken)
             : SetErrorAsync("No stopped thread is available for stepping.");
     }
+
+    private Task RunUiCommandAsync(
+        Func<CancellationToken, Task> action,
+        CancellationToken cancellationToken) =>
+        IsMcpControlled
+            ? SetErrorAsync("This debug session is controlled by an MCP client.")
+            : RunAsync(action, cancellationToken);
 
     public Task ToggleBreakpointAsync(
         DebugCodeLocation location,
@@ -441,7 +461,8 @@ public sealed class DebuggerWorkspace : IDisposable
     private async Task RunAsync(
         Func<CancellationToken, Task> action,
         CancellationToken cancellationToken,
-        bool requireActiveSession = true)
+        bool requireActiveSession = true,
+        bool requireUiControl = false)
     {
         if (disposed) throw new ObjectDisposedException(nameof(DebuggerWorkspace));
         IsBusy = true;
@@ -449,6 +470,9 @@ public sealed class DebuggerWorkspace : IDisposable
         NotifyChanged();
         try
         {
+            if (requireUiControl && IsMcpControlled)
+                throw new InvalidOperationException(
+                    "This debug session is controlled by an MCP client.");
             if (requireActiveSession &&
                 Snapshot.Status is not (DebugSessionStatus.Running or
                     DebugSessionStatus.Paused))

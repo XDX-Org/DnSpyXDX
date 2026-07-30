@@ -143,6 +143,21 @@ public sealed class DebuggerServiceTests
     }
 
     [Fact]
+    public async Task Detach_ends_the_session_without_terminating_the_target()
+    {
+        var engine = new FakeEngine();
+        await using var debugger = CreateDebugger(DebugRuntimeKind.CoreClr, engine);
+        await debugger.StartAsync(new DebugLaunchRequest(DebugRuntimeKind.CoreClr, "sample.dll"));
+
+        await debugger.DetachAsync();
+
+        Assert.Equal(1, engine.DetachCount);
+        Assert.Equal(0, engine.TerminateCount);
+        Assert.Equal(DebugSessionStatus.Terminated, debugger.Snapshot.Status);
+        Assert.True(engine.IsDisposed);
+    }
+
+    [Fact]
     public void Debug_document_map_resolves_both_directions()
     {
         var method = new DebugMethodId(Guid.NewGuid(), 0x06000001);
@@ -194,6 +209,8 @@ public sealed class DebuggerServiceTests
         public event Action<DebugEngineEvent>? EventReceived;
         public DebugStartRequest? StartRequest { get; private set; }
         public int ContinueCount { get; private set; }
+        public int DetachCount { get; private set; }
+        public int TerminateCount { get; private set; }
         public bool IsDisposed { get; private set; }
         public DebugEngineEvent? EventDuringStart { get; init; }
 
@@ -207,7 +224,17 @@ public sealed class DebuggerServiceTests
             return Task.FromResult(new DebugEngineStartResult(1234, Capabilities));
         }
 
-        public Task TerminateAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task TerminateAsync(CancellationToken cancellationToken)
+        {
+            TerminateCount++;
+            return Task.CompletedTask;
+        }
+
+        public Task DetachAsync(CancellationToken cancellationToken)
+        {
+            DetachCount++;
+            return Task.CompletedTask;
+        }
 
         public Task ContinueAsync(CancellationToken cancellationToken)
         {

@@ -34,6 +34,29 @@ internal static class McpErrors
     public static McpException InvalidNode() => Create("invalid_node", "The node ID is invalid.");
     public static McpException StaleCursor() => Create("stale_cursor", "The cursor is invalid or no longer applies to this node.");
 
+    public static McpException Debugger(Exception exception) => exception switch
+    {
+        UnauthorizedAccessException when exception.Message.StartsWith("debug_session_owned:", StringComparison.Ordinal) =>
+            Create("debug_session_owned", "The debugger session belongs to another MCP connection.", exception),
+        UnauthorizedAccessException => Create("debug_target_not_allowed", "The debug target or session is not authorized.", exception),
+        FileNotFoundException => Create("debug_target_not_found", "The debug target was not found.", exception),
+        ArgumentException => Create("invalid_debug_request", exception.Message, exception),
+        KeyNotFoundException => Create("debug_session_not_found", exception.Message, exception),
+        TimeoutException => Create("debug_timeout", exception.Message, exception),
+        InvalidOperationException when exception.Message.StartsWith("stale_reference:", StringComparison.Ordinal) =>
+            Create("stale_reference", "The paused-state reference is stale.", exception),
+        InvalidOperationException when exception.Message.StartsWith("debug_capability_unsupported:", StringComparison.Ordinal) =>
+            Create("debug_capability_unsupported", exception.Message["debug_capability_unsupported:".Length..].Trim(), exception),
+        InvalidOperationException when exception.Message.StartsWith("debug_session_active:", StringComparison.Ordinal) =>
+            Create("debug_session_active", "A debugger automation session is already active.", exception),
+        InvalidOperationException when exception.Message.StartsWith("debug_target_not_paused:", StringComparison.Ordinal) =>
+            Create("debug_target_not_paused", "The debug target must be paused.", exception),
+        InvalidOperationException when exception.Message.StartsWith("debug_wait_active:", StringComparison.Ordinal) =>
+            Create("debug_wait_active", "A stop wait is already active.", exception),
+        InvalidOperationException => Create("invalid_debug_state", exception.Message, exception),
+        _ => Create("debugger_failed", "Debugger operation failed.", exception)
+    };
+
     private static McpException Create(string code, string message, Exception? inner = null) =>
         inner is null ? new($"{code}: {message}") : new($"{code}: {message}", inner);
 }

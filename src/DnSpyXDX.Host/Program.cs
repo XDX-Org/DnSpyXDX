@@ -52,6 +52,7 @@ internal static class Program
                 services.GetServices<IDebuggerEngineProvider>()));
         builder.Services.AddSingleton<IDebuggerService, DebuggerService>();
         builder.Services.AddSingleton<DebuggerWorkspace>();
+        builder.Services.AddSingleton<DebuggerAutomationService>();
         builder.Services.AddSingleton<IProjectExportService, ProjectExportService>();
         builder.Services.AddSingleton<WorkspaceState>();
         builder.Services.AddSingleton<SourceViewStateStore>();

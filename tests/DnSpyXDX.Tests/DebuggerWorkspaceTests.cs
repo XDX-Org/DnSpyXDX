@@ -7,6 +7,19 @@ namespace DnSpyXDX.Tests;
 public sealed class DebuggerWorkspaceTests
 {
     [Fact]
+    public async Task Mcp_control_blocks_ui_session_commands()
+    {
+        var debugger = new FakeDebuggerService();
+        using var workspace = new DebuggerWorkspace(debugger);
+        workspace.SetMcpControl(true);
+
+        await workspace.LaunchAsync("sample.dll", [], stopAtEntry: false);
+
+        Assert.Equal(0, debugger.StartCount);
+        Assert.Equal("This debug session is controlled by an MCP client.", workspace.Error);
+    }
+
+    [Fact]
     public async Task Breakpoint_added_before_launch_is_pending_then_synchronized()
     {
         var debugger = new FakeDebuggerService();
@@ -442,6 +455,9 @@ public sealed class DebuggerWorkspaceTests
             StateChanged?.Invoke(Snapshot);
             return Task.CompletedTask;
         }
+
+        public Task DetachAsync(CancellationToken cancellationToken = default) =>
+            TerminateAsync(cancellationToken);
 
         public Task ContinueAsync(CancellationToken cancellationToken = default) =>
             Task.CompletedTask;

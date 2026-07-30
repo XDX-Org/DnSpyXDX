@@ -7,6 +7,10 @@
   <header class="debugger-session">
     <span class="debugger-session-state status-@Debugger.Snapshot.Status.ToString().ToLowerInvariant()"></span>
     <strong>@SessionTitle</strong>
+    @if (Debugger.IsMcpControlled)
+    {
+      <span class="debugger-stop-reason">MCP controlled</span>
+    }
     @if (Debugger.Snapshot.Stop is { } stop)
     {
       <span class="debugger-stop-reason">@StopReason(stop)</span>

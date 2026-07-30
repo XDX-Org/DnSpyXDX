@@ -123,7 +123,7 @@ public sealed class AssemblyTools
         _ => "Assembly inspection failed."
     };
 
-    private static string ValidatePath(string path, IReadOnlyList<string> roots)
+    internal static string ValidatePath(string path, IReadOnlyList<string> roots)
     {
         if (!Path.IsPathFullyQualified(path)) throw new ArgumentException("An absolute path is required.", nameof(path));
         var canonicalPath = ResolveExistingPath(path, file: true);

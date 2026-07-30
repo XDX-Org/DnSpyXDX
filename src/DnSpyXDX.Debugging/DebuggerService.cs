@@ -109,6 +109,14 @@ public sealed class DebuggerService(IDebuggerEngineRegistry engines) : IDebugger
     }
 
     public async Task TerminateAsync(CancellationToken cancellationToken = default)
+        => await EndSessionAsync(terminate: true, cancellationToken).ConfigureAwait(false);
+
+    public async Task DetachAsync(CancellationToken cancellationToken = default)
+        => await EndSessionAsync(terminate: false, cancellationToken).ConfigureAwait(false);
+
+    private async Task EndSessionAsync(
+        bool terminate,
+        CancellationToken cancellationToken)
     {
         await commandGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -126,7 +134,10 @@ public sealed class DebuggerService(IDebuggerEngineRegistry engines) : IDebugger
             SetSnapshot(Snapshot with { Status = DebugSessionStatus.Stopping, Stop = null });
             try
             {
-                await current.TerminateAsync(cancellationToken).ConfigureAwait(false);
+                if (terminate)
+                    await current.TerminateAsync(cancellationToken).ConfigureAwait(false);
+                else
+                    await current.DetachAsync(cancellationToken).ConfigureAwait(false);
             }
             finally
             {
