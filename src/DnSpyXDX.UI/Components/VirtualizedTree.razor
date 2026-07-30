@@ -36,6 +36,7 @@
   [Parameter] public EventCallback<Guid> OnToggleAssembly { get; set; }
   [Parameter] public int SelectionVersion { get; set; }
   [Parameter] public int CollapseVersion { get; set; }
+  [Parameter] public int FilterVersion { get; set; }
 
   private ElementReference viewport;
   private readonly Dictionary<NodeId, IReadOnlyList<TreeNodeDescriptor>> children = [];
@@ -43,6 +44,7 @@
   private IReadOnlyList<FlatNode> roots = [];
   private ICollection<FlatNode> visible = Array.Empty<FlatNode>();
   private int handledCollapseVersion;
+  private int handledFilterVersion;
   private int handledSelectionVersion = -1;
   private HashSet<NodeId> appliedPath = [];
   private bool scrollToSelection;
@@ -53,6 +55,13 @@
     var validSessions = Assemblies.Select(assembly => assembly.SessionId).ToHashSet();
     foreach (var key in children.Keys.Where(key => !validSessions.Contains(key.SessionId)).ToArray()) children.Remove(key);
     expanded.RemoveWhere(key => !validSessions.Contains(key.SessionId));
+    if (FilterVersion != handledFilterVersion)
+    {
+      handledFilterVersion = FilterVersion;
+      children.Clear();
+      expanded.Clear();
+      appliedPath.Clear();
+    }
     if (CollapseVersion > 0 && CollapseVersion != handledCollapseVersion)
     {
       handledCollapseVersion = CollapseVersion;

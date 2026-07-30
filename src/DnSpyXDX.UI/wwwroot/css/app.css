@@ -334,3 +334,28 @@ button.source-token.code-link{text-decoration:none}
 .debugger-empty{padding:12px;color:var(--theme-color-718097);font-size:11px}
 .debugger-guidance{max-width:430px;line-height:17px}
 @media (max-width:760px){.debug-configuration-picker{grid-template-columns:1fr 1fr}.debugger-breakpoint-editor{grid-template-columns:1fr}.debugger-inspect{grid-template-columns:minmax(200px,.8fr) 7px minmax(260px,1.2fr)}}
+
+/* Settings use categories so unrelated controls never compete in one long list. */
+.preferences-dialog{width:min(560px,calc(100vw - 32px));max-height:min(560px,calc(100vh - 32px));overflow:hidden}
+.settings-tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:3px;padding:7px;border-bottom:1px solid var(--theme-color-30394a);background:var(--theme-color-121821)}
+.settings-tabs button{height:31px;border:1px solid transparent;border-radius:4px;background:transparent;color:var(--theme-color-8795a9);font-size:11px}
+.settings-tabs button:hover{background:var(--theme-color-222b3a);color:var(--theme-color-dce5f5)}
+.settings-tabs button.active{border-color:var(--theme-color-46526a);background:var(--theme-color-293348);color:var(--theme-color-f0f4fa);box-shadow:inset 0 -2px var(--theme-color-7968ff)}
+.settings-content{min-height:292px;max-height:calc(100vh - 139px);overflow-y:auto}
+.settings-section-heading{display:flex;flex-direction:column;gap:3px;padding:15px 16px 10px;border-bottom:1px solid var(--theme-color-252e3d);background:var(--theme-color-151c27)}
+.settings-section-heading strong{font-size:12px;color:var(--theme-color-e2e8f2)}
+.settings-section-heading small{color:var(--theme-color-718097)}
+.preferences-dialog .settings-row{min-height:58px;padding:11px 16px}
+.preferences-dialog .settings-row>span{min-width:0;padding-right:16px}
+.preferences-dialog .settings-row>span strong{font-size:12px;font-weight:600}
+.preferences-dialog .settings-row>span small{line-height:16px}
+.preferences-dialog .member-order-row{gap:10px}
+.preferences-dialog .mcp-roots-setting{align-items:flex-start}
+.preferences-dialog .mcp-roots-setting textarea{width:min(270px,55%);min-height:72px}
+@media (max-width:520px){.settings-tabs{grid-template-columns:repeat(2,1fr)}.settings-content{max-height:calc(100vh - 174px)}.preferences-dialog .settings-row{align-items:flex-start;gap:10px;flex-direction:column}.preferences-dialog .settings-row>span{padding-right:0}.preferences-dialog .mcp-roots-setting textarea{width:100%}}
+
+/* Member names carry their semantic kind instead of falling back to the generic identifier colour. */
+.tree-row>.meta-name.meta-method,.tree-row>.meta-name.meta-constructor{color:var(--theme-syntax-method)}
+.tree-row>.meta-name.meta-field{color:var(--theme-syntax-field)}
+.tree-row>.meta-name.meta-property{color:var(--theme-syntax-property)}
+.tree-row>.meta-name.meta-event{color:var(--theme-syntax-event)}

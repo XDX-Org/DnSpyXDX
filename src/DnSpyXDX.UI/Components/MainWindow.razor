@@ -65,7 +65,7 @@
             </button>
           </div>
         </header>
-        <VirtualizedTree Assemblies="Backend.Assemblies" EmptyMessage="@(restoring ? "Restoring assembly tree…" : "Open a managed .dll or .exe to begin.")" OnOpen="OpenTreeSymbolAsync" OnOpenReference="OpenReferenceAsync" OnOpenResource="OpenResourceAsync" OnContextMenu="OpenTreeContextMenu" ExpandedPath="revealedPath" SelectedSymbol="selectedSymbol" SelectedNode="selectedNode" SelectionVersion="treeSelectionVersion" CollapseVersion="treeCollapseVersion" SelectedAssemblies="selectedAssemblies" OnClearSelection="ClearAssemblySelection" OnToggleAssembly="ToggleAssemblySelection" OnEmptyContextMenu="OpenTreeEmptyContextMenu" />
+        <VirtualizedTree Assemblies="Backend.Assemblies" EmptyMessage="@(restoring ? "Restoring assembly tree…" : "Open a managed .dll or .exe to begin.")" OnOpen="OpenTreeSymbolAsync" OnOpenReference="OpenReferenceAsync" OnOpenResource="OpenResourceAsync" OnContextMenu="OpenTreeContextMenu" ExpandedPath="revealedPath" SelectedSymbol="selectedSymbol" SelectedNode="selectedNode" SelectionVersion="treeSelectionVersion" CollapseVersion="treeCollapseVersion" FilterVersion="treeFilterVersion" SelectedAssemblies="selectedAssemblies" OnClearSelection="ClearAssemblySelection" OnToggleAssembly="ToggleAssemblySelection" OnEmptyContextMenu="OpenTreeEmptyContextMenu" />
       </aside>
       <div class="explorer-resizer" title="Drag to resize assembly tree"></div>
     </div>
@@ -168,34 +168,60 @@
   @if (settingsOpen)
   {
     <div class="modal-dismiss" @onclick="CloseSettings"></div>
-    <section class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <section class="settings-dialog preferences-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <header><strong id="settings-title">Settings</strong><button title="Close settings" aria-label="Close settings" @onclick="CloseSettings">×</button></header>
-      <div class="settings-row"><span><strong>Theme</strong><small>Application and code colours</small></span><select class="settings-select" value="@themeId" @onchange="ThemeChangedAsync">@foreach (var theme in Themes.All) { <option value="@theme.Id">@theme.Name</option> }</select></div>
-      <label class="settings-row"><span><strong>Font</strong><small>Bundled and installed system fonts</small></span><select class="settings-select settings-font" value="@codeFontFamily" @onchange="CodeFontChangedAsync">@foreach (var font in AvailableCodeFonts) { <option value="@font">@font</option> }</select></label>
-      <div class="settings-row"><span><strong>Application zoom</strong><small>Scale the entire interface</small></span><div class="application-zoom"><button aria-label="Zoom out" disabled="@(zoomPercent <= MinimumZoom)" @onclick="() => ChangeApplicationZoom(-1)">−</button><button class="zoom-percent" aria-label="Reset zoom to 100%" @onclick="ResetApplicationZoom">@zoomPercent%</button><button aria-label="Zoom in" disabled="@(zoomPercent >= MaximumZoom)" @onclick="() => ChangeApplicationZoom(1)">+</button></div></div>
-      <label class="settings-row"><span><strong>Debug logging</strong><small>Write detailed diagnostics to the console</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@debugLogging" @onchange="DebugLoggingChanged" /></label>
-      <label class="settings-row"><span><strong>Metadata tokens</strong><small>Show token and RID comments in the main panel</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@showMetadataTokens" @onchange="MetadataTokensChangedAsync" /></label>
-      <div class="settings-row"><span><strong>Decompiler</strong><small>C# output style. Both use the ILSpy engine.</small></span><select class="settings-select" value="@memberOrder" @onchange="MemberOrderChangedAsync"><option value="@MemberOrder.Ilspy">ILSpy (default)</option><option value="@MemberOrder.DnSpy">dnSpy</option></select></div>
-      @if (memberOrder == MemberOrder.DnSpy)
+      <nav class="settings-tabs" aria-label="Settings categories">
+        <button type="button" class="@(settingsPage == SettingsPage.Appearance ? "active" : null)" aria-pressed="@(settingsPage == SettingsPage.Appearance)" @onclick="() => settingsPage = SettingsPage.Appearance">Appearance</button>
+        <button type="button" class="@(settingsPage == SettingsPage.Browser ? "active" : null)" aria-pressed="@(settingsPage == SettingsPage.Browser)" @onclick="() => settingsPage = SettingsPage.Browser">Browser</button>
+        <button type="button" class="@(settingsPage == SettingsPage.Decompiler ? "active" : null)" aria-pressed="@(settingsPage == SettingsPage.Decompiler)" @onclick="() => settingsPage = SettingsPage.Decompiler">Decompiler</button>
+        <button type="button" class="@(settingsPage == SettingsPage.Advanced ? "active" : null)" aria-pressed="@(settingsPage == SettingsPage.Advanced)" @onclick="() => settingsPage = SettingsPage.Advanced">Advanced</button>
+      </nav>
+      <div class="settings-content">
+      @if (settingsPage == SettingsPage.Appearance)
       {
-        <div class="settings-row member-order-row"><span><strong>Decompilation order</strong><small>Order of member groups in the dnSpy layout</small></span>
-          <ol class="member-order-list">
-            @for (var i = 0; i < memberGroupOrder.Count; i++)
-            {
-              var index = i;
-              <li class="member-order-item">
-                <span>@MemberGroups.Label(memberGroupOrder[index])</span>
-                <span class="member-order-buttons">
-                  <button type="button" title="Move up" aria-label="Move up" disabled="@(index == 0)" @onclick="() => MoveMemberGroupAsync(index, -1)">▲</button>
-                  <button type="button" title="Move down" aria-label="Move down" disabled="@(index == memberGroupOrder.Count - 1)" @onclick="() => MoveMemberGroupAsync(index, 1)">▼</button>
-                </span>
-              </li>
-            }
-          </ol>
-        </div>
+        <div class="settings-section-heading"><strong>Appearance</strong><small>Theme, typeface, and layout</small></div>
+        <div class="settings-row"><span><strong>Theme</strong><small>Application and code colours</small></span><select class="settings-select" value="@themeId" @onchange="ThemeChangedAsync">@foreach (var theme in Themes.All) { <option value="@theme.Id">@theme.Name</option> }</select></div>
+        <label class="settings-row"><span><strong>Code font</strong><small>Bundled and installed system fonts</small></span><select class="settings-select settings-font" value="@codeFontFamily" @onchange="CodeFontChangedAsync">@foreach (var font in AvailableCodeFonts) { <option value="@font">@font</option> }</select></label>
+        <div class="settings-row"><span><strong>Application zoom</strong><small>Scale the entire interface</small></span><div class="application-zoom"><button aria-label="Zoom out" disabled="@(zoomPercent <= MinimumZoom)" @onclick="() => ChangeApplicationZoom(-1)">−</button><button class="zoom-percent" aria-label="Reset zoom to 100%" @onclick="ResetApplicationZoom">@zoomPercent%</button><button aria-label="Zoom in" disabled="@(zoomPercent >= MaximumZoom)" @onclick="() => ChangeApplicationZoom(1)">+</button></div></div>
+        <label class="settings-row"><span><strong>Line wrapping</strong><small>Wrap long source and resource text lines</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@wrapLines" @onchange="LineWrappingChangedAsync" /></label>
       }
-      <label class="settings-row"><span><strong>Line wrapping</strong><small>Wrap long source and resource text lines</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@wrapLines" @onchange="LineWrappingChangedAsync" /></label>
-      <label class="settings-row mcp-roots-setting"><span><strong>MCP allowed roots</strong><small>One absolute directory per line</small></span><textarea value="@mcpAllowedRoots" @onchange="McpRootsChangedAsync" placeholder="/path/to/assemblies"></textarea></label>
+      else if (settingsPage == SettingsPage.Browser)
+      {
+        <div class="settings-section-heading"><strong>Assembly browser</strong><small>Choose how metadata appears in the tree</small></div>
+        <label class="settings-row"><span><strong>Type members</strong><small>Expand classes and other types</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@showTypeMembers" @onchange="TypeMembersChangedAsync" /></label>
+        <label class="settings-row"><span><strong>Compiler-generated code</strong><small>Show generated types and members</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@showCompilerGenerated" @onchange="CompilerGeneratedChangedAsync" /></label>
+      }
+      else if (settingsPage == SettingsPage.Decompiler)
+      {
+        <div class="settings-section-heading"><strong>Decompiler</strong><small>Control generated source output</small></div>
+        <label class="settings-row"><span><strong>Metadata tokens</strong><small>Show token and RID comments</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@showMetadataTokens" @onchange="MetadataTokensChangedAsync" /></label>
+        <div class="settings-row"><span><strong>C# output style</strong><small>Both styles use the ILSpy engine</small></span><select class="settings-select" value="@memberOrder" @onchange="MemberOrderChangedAsync"><option value="@MemberOrder.Ilspy">ILSpy (default)</option><option value="@MemberOrder.DnSpy">dnSpy</option></select></div>
+        @if (memberOrder == MemberOrder.DnSpy)
+        {
+          <div class="settings-row member-order-row"><span><strong>Member group order</strong><small>Order used by the dnSpy layout</small></span>
+            <ol class="member-order-list">
+              @for (var i = 0; i < memberGroupOrder.Count; i++)
+              {
+                var index = i;
+                <li class="member-order-item">
+                  <span>@MemberGroups.Label(memberGroupOrder[index])</span>
+                  <span class="member-order-buttons">
+                    <button type="button" title="Move up" aria-label="Move up" disabled="@(index == 0)" @onclick="() => MoveMemberGroupAsync(index, -1)">▲</button>
+                    <button type="button" title="Move down" aria-label="Move down" disabled="@(index == memberGroupOrder.Count - 1)" @onclick="() => MoveMemberGroupAsync(index, 1)">▼</button>
+                  </span>
+                </li>
+              }
+            </ol>
+          </div>
+        }
+      }
+      else
+      {
+        <div class="settings-section-heading"><strong>Advanced</strong><small>Diagnostics and external access</small></div>
+        <label class="settings-row"><span><strong>Debug logging</strong><small>Write detailed diagnostics to the console</small></span><input class="settings-checkbox" type="checkbox" role="switch" checked="@debugLogging" @onchange="DebugLoggingChanged" /></label>
+        <label class="settings-row mcp-roots-setting"><span><strong>MCP allowed roots</strong><small>One absolute directory per line</small></span><textarea value="@mcpAllowedRoots" @onchange="McpRootsChangedAsync" placeholder="/path/to/assemblies"></textarea></label>
+      }
+      </div>
     </section>
   }
   @if (debugDialogOpen)
@@ -303,6 +329,7 @@
   private string searchScope = "All";
   private bool menuOpen;
   private bool settingsOpen;
+  private SettingsPage settingsPage;
   private bool debugDialogOpen;
   private string debugStartMode = "launch";
   private string debugLaunchPath = "";
@@ -327,6 +354,7 @@
   private double searchPanelHeight = 230;
   private int treeCollapseVersion;
   private int treeSelectionVersion;
+  private int treeFilterVersion;
   private const int MinimumZoom = 50;
   private const int MaximumZoom = 200;
   private const int ZoomStep = 10;
@@ -334,6 +362,8 @@
   private string themeId = Themes.DefaultId;
   private bool debugLogging;
   private bool showMetadataTokens;
+  private bool showTypeMembers;
+  private bool showCompilerGenerated;
   private MemberOrder memberOrder;
   private List<MemberGroup> memberGroupOrder = MemberGroups.DefaultOrder.ToList();
   private bool wrapLines;
@@ -353,6 +383,7 @@
   private string contextSymbolName = "";
   private TreeNodeKind contextSymbolKind;
   private AnalyzerView? analyzerView;
+  private enum SettingsPage { Appearance, Browser, Decompiler, Advanced }
   private List<AnalyzerRootState> analyzerRoots = [];
   private int contextMenuX;
   private int contextMenuY;
@@ -445,6 +476,8 @@
       themeId = Themes.Normalize(ui.ThemeId);
       debugLogging = ui.DebugLogging;
       showMetadataTokens = ui.ShowMetadataTokens;
+      showTypeMembers = ui.ShowTypeMembers;
+      showCompilerGenerated = ui.ShowCompilerGenerated;
       memberOrder = ui.MemberOrder.ValidOrDefault();
       memberGroupOrder = MemberGroups.Normalize(ui.MemberGroupOrder).ToList();
       wrapLines = ui.WrapLines;
@@ -452,6 +485,8 @@
       language = ui.Language.ValidOrDefault();
       LoggingSettings.DebugEnabled = debugLogging;
       DisplaySettings.ShowMetadataTokens = showMetadataTokens;
+      DisplaySettings.ShowTypeMembers = showTypeMembers;
+      DisplaySettings.ShowCompilerGenerated = showCompilerGenerated;
       DisplaySettings.MemberOrder = memberOrder;
       DisplaySettings.MemberGroupOrder = memberGroupOrder.ToArray();
       Zoom.SetZoom(zoomPercent);
@@ -566,6 +601,8 @@
     LastOpenDirectory: lastOpenDirectory,
     MemberOrder: memberOrder,
     MemberGroupOrder: memberGroupOrder.ToArray(),
+    ShowTypeMembers: showTypeMembers,
+    ShowCompilerGenerated: showCompilerGenerated,
     DebuggerPanel: debuggerPanel,
     DebuggerInspectPanel: debuggerInspectPanel,
     DebuggerBreakpoints: Debugger.Breakpoints,
@@ -1358,6 +1395,26 @@
     Session.UiState = CaptureUiState();
     await Session.SaveAsync();
     foreach (var tab in Workspace.Tabs.Where(tab => tab.Document.Resource is null).ToArray()) await RefreshTabLanguageAsync(tab);
+  }
+  private async Task TypeMembersChangedAsync(ChangeEventArgs e)
+  {
+    showTypeMembers = e.Value is true;
+    DisplaySettings.ShowTypeMembers = showTypeMembers;
+    await SaveTreeDisplaySettingsAsync();
+  }
+  private async Task CompilerGeneratedChangedAsync(ChangeEventArgs e)
+  {
+    showCompilerGenerated = e.Value is true;
+    DisplaySettings.ShowCompilerGenerated = showCompilerGenerated;
+    await SaveTreeDisplaySettingsAsync();
+  }
+  private async Task SaveTreeDisplaySettingsAsync()
+  {
+    Session.UiState = CaptureUiState();
+    await Session.SaveAsync();
+    treeFilterVersion++;
+    treeSelectionVersion++;
+    StateHasChanged();
   }
   private async Task MemberOrderChangedAsync(ChangeEventArgs e)
   {

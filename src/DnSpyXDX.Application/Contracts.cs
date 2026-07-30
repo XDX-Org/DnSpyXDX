@@ -89,6 +89,20 @@ public sealed class NeighborLoadingSettings
 
 public sealed class RuntimeDisplaySettings
 {
+    private int showTypeMembers;
+    public bool ShowTypeMembers
+    {
+        get => Volatile.Read(ref showTypeMembers) != 0;
+        set => Volatile.Write(ref showTypeMembers, value ? 1 : 0);
+    }
+
+    private int showCompilerGenerated;
+    public bool ShowCompilerGenerated
+    {
+        get => Volatile.Read(ref showCompilerGenerated) != 0;
+        set => Volatile.Write(ref showCompilerGenerated, value ? 1 : 0);
+    }
+
     private int showMetadataTokens;
     public bool ShowMetadataTokens
     {

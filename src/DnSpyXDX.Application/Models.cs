@@ -220,6 +220,8 @@ public sealed record UiSessionState(
     string LastOpenDirectory = "",
     MemberOrder MemberOrder = MemberOrder.Ilspy,
     IReadOnlyList<MemberGroup>? MemberGroupOrder = null,
+    bool ShowTypeMembers = false,
+    bool ShowCompilerGenerated = false,
     string DebuggerPanel = "inspect",
     string DebuggerInspectPanel = "variables",
     IReadOnlyList<DebugBreakpoint>? DebuggerBreakpoints = null,
