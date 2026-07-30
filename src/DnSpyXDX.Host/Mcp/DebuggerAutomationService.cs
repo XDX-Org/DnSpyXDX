@@ -57,6 +57,7 @@ public sealed class DebuggerAutomationService : IDisposable
         try
         {
             workspace.SetMcpControl(true);
+            await workspace.SetMcpBreakpointsAsync(breakpoints, cancellationToken);
             await debugger.StartAsync(
                 new DebugLaunchRequest(
                     DebugRuntimeKind.CoreClr,
@@ -66,7 +67,7 @@ public sealed class DebuggerAutomationService : IDisposable
                     Environment: environment,
                     StopAtEntry: stopAtEntry)
                 {
-                    InitialBreakpoints = breakpoints
+                    InitialBreakpoints = workspace.Breakpoints
                 },
                 cancellationToken);
             return Status(sessionId);
@@ -74,6 +75,7 @@ public sealed class DebuggerAutomationService : IDisposable
         catch
         {
             lock (gate) sessionId = Guid.Empty;
+            workspace.ClearMcpBreakpoints();
             workspace.SetMcpControl(false);
             throw;
         }
@@ -183,7 +185,7 @@ public sealed class DebuggerAutomationService : IDisposable
         CancellationToken cancellationToken)
     {
         RequireSession(requestedSession);
-        return await debugger.SetBreakpointsAsync(breakpoints, cancellationToken);
+        return await workspace.SetMcpBreakpointsAsync(breakpoints, cancellationToken);
     }
 
     public async Task<IReadOnlyList<DebugThread>> ThreadsAsync(
@@ -236,6 +238,7 @@ public sealed class DebuggerAutomationService : IDisposable
                 ? []
                 : await ReadVariablesAsync(
                     scope.Variables,
+                    frame,
                     maximumDepth,
                     visited,
                     () => remaining,
@@ -298,6 +301,7 @@ public sealed class DebuggerAutomationService : IDisposable
         else
             await debugger.DetachAsync(cancellationToken);
         var result = Status(requestedSession);
+        workspace.ClearMcpBreakpoints();
         workspace.SetMcpControl(false);
         return result;
     }
@@ -308,6 +312,7 @@ public sealed class DebuggerAutomationService : IDisposable
         disposed = true;
         debugger.StateChanged -= OnStateChanged;
         leaseTimer.Dispose();
+        workspace.ClearMcpBreakpoints();
         workspace.SetMcpControl(false);
     }
 
@@ -330,6 +335,7 @@ public sealed class DebuggerAutomationService : IDisposable
         }
         finally
         {
+            workspace.ClearMcpBreakpoints();
             workspace.SetMcpControl(false);
         }
     }
@@ -362,7 +368,11 @@ public sealed class DebuggerAutomationService : IDisposable
             signal = changed;
             changed = NewSignal();
         }
-        if (releaseControl) workspace.SetMcpControl(false);
+        if (releaseControl)
+        {
+            workspace.ClearMcpBreakpoints();
+            workspace.SetMcpControl(false);
+        }
         signal.TrySetResult();
     }
 
@@ -392,6 +402,7 @@ public sealed class DebuggerAutomationService : IDisposable
 
     private async Task<IReadOnlyList<McpDebugVariable>> ReadVariablesAsync(
         DebugVariableReference reference,
+        DebugFrameId frame,
         int depth,
         HashSet<DebugVariableReference> visited,
         Func<int> getRemaining,
@@ -407,9 +418,28 @@ public sealed class DebuggerAutomationService : IDisposable
             if (remaining == 0) break;
             setRemaining(remaining - 1);
             var variable = raw;
+            if (depth > 0 && variable.Variables.Value == 0 &&
+                !string.IsNullOrWhiteSpace(variable.EvaluateName) &&
+                !DebugVariableTypes.IsScalar(variable.Type))
+            {
+                try
+                {
+                    var evaluated = await debugger.EvaluateAsync(
+                        variable.EvaluateName,
+                        frame,
+                        cancellationToken);
+                    if (evaluated.Variables.Value != 0)
+                        variable = variable with { Variables = evaluated.Variables };
+                }
+                catch (Exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    // Some adapters cannot re-evaluate synthetic variables.
+                }
+            }
             var children = depth > 0
                 ? await ReadVariablesAsync(
                     variable.Variables,
+                    frame,
                     depth - 1,
                     visited,
                     getRemaining,
@@ -435,6 +465,7 @@ public sealed class DebuggerAutomationService : IDisposable
         {
             if (debugger.Snapshot.Status is DebugSessionStatus.Running or DebugSessionStatus.Paused)
                 await debugger.TerminateAsync();
+            workspace.ClearMcpBreakpoints();
             workspace.SetMcpControl(false);
         }
         catch

@@ -111,6 +111,33 @@ public sealed class DebuggerService(IDebuggerEngineRegistry engines) : IDebugger
     public async Task TerminateAsync(CancellationToken cancellationToken = default)
         => await EndSessionAsync(terminate: true, cancellationToken).ConfigureAwait(false);
 
+    public async Task ForceCloseAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var current = engine;
+        var handler = engineHandler;
+        engine = null;
+        engineHandler = null;
+        if (current is null) return;
+        Interlocked.Increment(ref engineGeneration);
+        if (handler is not null) current.EventReceived -= handler;
+        SetSnapshot(Snapshot with { Status = DebugSessionStatus.Stopping, Stop = null });
+        try
+        {
+            await current.ForceCloseAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            await current.DisposeAsync().ConfigureAwait(false);
+            SetBreakpoints([]);
+            SetSnapshot(Snapshot with
+            {
+                Status = DebugSessionStatus.Terminated,
+                Stop = null
+            });
+        }
+    }
+
     public async Task DetachAsync(CancellationToken cancellationToken = default)
         => await EndSessionAsync(terminate: false, cancellationToken).ConfigureAwait(false);
 

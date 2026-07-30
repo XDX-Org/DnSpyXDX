@@ -186,6 +186,20 @@ public sealed record DebugVariable(
     string? EvaluateName = null,
     bool CanSetValue = false);
 
+public static class DebugVariableTypes
+{
+    public static bool IsScalar(string? type) => type is null or
+        "bool" or "byte" or "sbyte" or "short" or "ushort" or "int" or
+        "uint" or "long" or "ulong" or "float" or "double" or "decimal" or
+        "char" or "string" or "nint" or "nuint" or
+        "System.Boolean" or "System.Byte" or "System.SByte" or
+        "System.Int16" or "System.UInt16" or "System.Int32" or
+        "System.UInt32" or "System.Int64" or "System.UInt64" or
+        "System.Single" or "System.Double" or "System.Decimal" or
+        "System.Char" or "System.String" or "System.IntPtr" or
+        "System.UIntPtr";
+}
+
 public sealed record DebugEvaluationResult(
     string Value,
     string? Type,

@@ -29,6 +29,8 @@ public interface IDebuggerEngine : IAsyncDisposable
         DebugStartRequest request,
         CancellationToken cancellationToken);
     Task TerminateAsync(CancellationToken cancellationToken);
+    Task ForceCloseAsync(CancellationToken cancellationToken) =>
+        TerminateAsync(cancellationToken);
     Task DetachAsync(CancellationToken cancellationToken);
     Task ContinueAsync(CancellationToken cancellationToken);
     Task PauseAsync(CancellationToken cancellationToken);

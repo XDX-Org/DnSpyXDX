@@ -158,6 +158,21 @@ public sealed class DebuggerServiceTests
     }
 
     [Fact]
+    public async Task Force_close_uses_the_engine_emergency_path()
+    {
+        var engine = new FakeEngine();
+        await using var debugger = CreateDebugger(DebugRuntimeKind.CoreClr, engine);
+        await debugger.StartAsync(new DebugLaunchRequest(DebugRuntimeKind.CoreClr, "sample.dll"));
+
+        await debugger.ForceCloseAsync();
+
+        Assert.Equal(1, engine.ForceCloseCount);
+        Assert.Equal(0, engine.TerminateCount);
+        Assert.Equal(DebugSessionStatus.Terminated, debugger.Snapshot.Status);
+        Assert.True(engine.IsDisposed);
+    }
+
+    [Fact]
     public void Debug_document_map_resolves_both_directions()
     {
         var method = new DebugMethodId(Guid.NewGuid(), 0x06000001);
@@ -211,6 +226,7 @@ public sealed class DebuggerServiceTests
         public int ContinueCount { get; private set; }
         public int DetachCount { get; private set; }
         public int TerminateCount { get; private set; }
+        public int ForceCloseCount { get; private set; }
         public bool IsDisposed { get; private set; }
         public DebugEngineEvent? EventDuringStart { get; init; }
 
@@ -227,6 +243,12 @@ public sealed class DebuggerServiceTests
         public Task TerminateAsync(CancellationToken cancellationToken)
         {
             TerminateCount++;
+            return Task.CompletedTask;
+        }
+
+        public Task ForceCloseAsync(CancellationToken cancellationToken)
+        {
+            ForceCloseCount++;
             return Task.CompletedTask;
         }
 

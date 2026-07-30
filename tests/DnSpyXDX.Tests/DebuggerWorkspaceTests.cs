@@ -117,7 +117,9 @@ public sealed class DebuggerWorkspaceTests
             "items",
             "System.Int32[1]",
             "System.Int32[]",
-            childReference);
+            default,
+            "items");
+        var expandedRoot = root with { Variables = childReference };
         var debugger = new FakeDebuggerService
         {
             ThreadResults = [firstThread, stoppedThread]
@@ -131,23 +133,25 @@ public sealed class DebuggerWorkspaceTests
         debugger.VariableResults[rootReference] = [root];
         debugger.VariableResults[childReference] =
             [new DebugVariable("[0]", "42", "System.Int32", default)];
+        debugger.EvaluationResults["items"] =
+            new DebugEvaluationResult("System.Int32[1]", "System.Int32[]", childReference);
         using var workspace = new DebuggerWorkspace(debugger);
 
         debugger.PublishPaused(stoppedThread.Id);
 
         Assert.Equal(stoppedThread.Id, workspace.SelectedThread);
         Assert.Equal(stoppedFrame, Assert.Single(workspace.Frames));
-        Assert.Equal(root, Assert.Single(workspace.Variables));
+        Assert.Equal(expandedRoot, Assert.Single(workspace.Variables));
         Assert.Equal(stoppedFrame.Location, workspace.CurrentLocation);
 
-        await workspace.ToggleVariableAsync(root);
+        await workspace.ToggleVariableAsync(expandedRoot);
 
         Assert.True(workspace.TryGetVariableChildren(
             childReference,
             out var children));
         Assert.Equal("42", Assert.Single(children).Value);
 
-        await workspace.ToggleVariableAsync(root);
+        await workspace.ToggleVariableAsync(expandedRoot);
 
         Assert.False(workspace.TryGetVariableChildren(
             childReference,

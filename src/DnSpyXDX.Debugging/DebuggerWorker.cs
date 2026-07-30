@@ -177,6 +177,8 @@ public sealed class DebuggerWorker : IAsyncDisposable
         }
     }
 
+    public void ForceClose() => KillProcessTree();
+
     private async Task<DebuggerWorkerExit> MonitorExitAsync()
     {
         await process.WaitForExitAsync().ConfigureAwait(false);

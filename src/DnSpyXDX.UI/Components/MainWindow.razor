@@ -46,6 +46,7 @@
       <button class="toolbar-icon" title="Continue (F5)" aria-label="Continue" disabled="@(!DebuggerUi.CanContinue)" @onclick="() => Debugger.ContinueAsync()">▷</button>
       <button class="toolbar-icon" title="Pause (Ctrl+Alt+Pause)" aria-label="Pause" disabled="@(!DebuggerUi.CanPause)" @onclick="() => Debugger.PauseAsync()">Ⅱ</button>
       <button class="toolbar-icon" title="Stop debugging (Shift+F5)" aria-label="Stop debugging" disabled="@(!DebuggerUi.CanStop)" @onclick="() => Debugger.TerminateAsync()">■</button>
+      <button class="toolbar-icon danger" title="Force close debugger connection" aria-label="Force close debugger connection" disabled="@(!CanForceCloseDebugger)" @onclick="() => Debugger.ForceCloseAsync()">✕</button>
       <button class="toolbar-icon" title="Restart debugging (Ctrl+Shift+F5)" aria-label="Restart debugging" disabled="@(!DebuggerUi.CanRestart)" @onclick="RestartDebuggerAsync">↻</button>
       <span class="debug-toolbar-separator" role="separator"></span>
       <button class="toolbar-icon debug-step" title="Step over (F10)" aria-label="Step over" disabled="@(!DebuggerUi.CanStep)" @onclick="() => Debugger.StepAsync(DebugStepKind.Over)">↷</button>
@@ -395,6 +396,10 @@
     Debugger.Snapshot,
     Debugger.IsBusy,
     Debugger.StartRequest is not null);
+  private bool CanForceCloseDebugger => Debugger.Snapshot.Status is
+    DebugSessionStatus.Starting or DebugSessionStatus.Running or
+    DebugSessionStatus.Paused or DebugSessionStatus.Stopping or
+    DebugSessionStatus.Faulted;
   private string DebugStatus => DebuggerUi.StatusText;
   private string SelectedDebugConfigurationValue =>
     selectedDebugConfiguration?.ToString("D") ?? "";

@@ -78,6 +78,58 @@ public sealed class DebuggerAutomationTests
         Assert.Equal(DebugSessionStatus.Paused, (await wait).Status);
     }
 
+    [Fact]
+    public async Task Variables_expand_objects_by_evaluating_missing_references()
+    {
+        var debugger = new FakeDebuggerService();
+        using var workspace = new DebuggerWorkspace(debugger);
+        using var automation = new DebuggerAutomationService(
+            debugger, workspace, new McpServerSettings());
+        var owner = Guid.NewGuid();
+        McpDebugStatus launched;
+        using (automation.EnterOwner(owner))
+            launched = await automation.LaunchAsync("sample.dll", [], null, false, [], default);
+        debugger.Publish(DebugSessionStatus.Paused, new(DebugStopReason.Breakpoint, new(7)));
+        McpDebugStatus paused;
+        using (automation.EnterOwner(owner)) paused = automation.Status(launched.SessionId);
+
+        IReadOnlyList<McpDebugScopeVariables> scopes;
+        using (automation.EnterOwner(owner))
+            scopes = await automation.VariablesAsync(
+                launched.SessionId, paused.StopGeneration, new(9), 20, 2, default);
+
+        var instance = Assert.Single(Assert.Single(scopes).Variables);
+        Assert.Equal("this", instance.Name);
+        Assert.Equal(12, instance.VariablesReference);
+        Assert.Equal("field", Assert.Single(instance.Children).Name);
+    }
+
+    [Fact]
+    public async Task Mcp_breakpoints_are_visible_and_removed_with_the_session()
+    {
+        var debugger = new FakeDebuggerService();
+        using var workspace = new DebuggerWorkspace(debugger);
+        using var automation = new DebuggerAutomationService(
+            debugger, workspace, new McpServerSettings());
+        var owner = Guid.NewGuid();
+        var breakpoint = new DebugBreakpoint(
+            Guid.NewGuid(),
+            new DebugCodeLocation(new DebugMethodId(Guid.NewGuid(), 0x06000001), 7));
+        McpDebugStatus launched;
+        using (automation.EnterOwner(owner))
+            launched = await automation.LaunchAsync(
+                "sample.dll", [], null, false, [breakpoint], default);
+
+        Assert.Equal(breakpoint, Assert.Single(workspace.Breakpoints));
+        Assert.True(Assert.Single(workspace.Bindings).IsVerified);
+
+        using (automation.EnterOwner(owner))
+            await automation.StopAsync(launched.SessionId, terminate: true, default);
+
+        Assert.Empty(workspace.Breakpoints);
+        Assert.Empty(workspace.Bindings);
+    }
+
     private sealed class FakeDebuggerService : IDebuggerService
     {
         public DebugSessionSnapshot Snapshot { get; private set; } = DebugSessionSnapshot.Initial;
@@ -98,7 +150,9 @@ public sealed class DebuggerAutomationTests
                 null,
                 null);
             StateChanged?.Invoke(Snapshot);
-            return Task.CompletedTask;
+            return request.InitialBreakpoints is { } breakpoints
+                ? SetBreakpointsAsync(breakpoints, cancellationToken)
+                : Task.CompletedTask;
         }
 
         public Task TerminateAsync(CancellationToken cancellationToken = default)
@@ -142,10 +196,14 @@ public sealed class DebuggerAutomationTests
             Task.FromResult<IReadOnlyList<DebugScope>>([new("Locals", new(11))]);
 
         public Task<IReadOnlyList<DebugVariable>> GetVariablesAsync(DebugVariableReference reference, CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<DebugVariable>>([new("value", "42", "int", default)]);
+            Task.FromResult<IReadOnlyList<DebugVariable>>(reference.Value == 12
+                ? [new("field", "42", "int", default, "this.field")]
+                : [new("this", "{Sample}", "Sample", default, "this")]);
 
         public Task<DebugEvaluationResult> EvaluateAsync(string expression, DebugFrameId? frame = null, CancellationToken cancellationToken = default) =>
-            Task.FromResult(new DebugEvaluationResult("42", "int", default));
+            Task.FromResult(expression == "this"
+                ? new DebugEvaluationResult("{Sample}", "Sample", new(12))
+                : new DebugEvaluationResult("42", "int", default));
 
         public void Publish(DebugSessionStatus status, DebugStopInfo? stop = null)
         {

@@ -13,6 +13,8 @@ public interface IDebuggerService : IAsyncDisposable
 
     Task StartAsync(DebugStartRequest request, CancellationToken cancellationToken = default);
     Task TerminateAsync(CancellationToken cancellationToken = default);
+    Task ForceCloseAsync(CancellationToken cancellationToken = default) =>
+        TerminateAsync(cancellationToken);
     Task DetachAsync(CancellationToken cancellationToken = default);
     Task ContinueAsync(CancellationToken cancellationToken = default);
     Task PauseAsync(CancellationToken cancellationToken = default);

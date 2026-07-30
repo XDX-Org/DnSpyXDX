@@ -23,6 +23,7 @@ public sealed class DebuggerWorkspace : IDisposable
     private CancellationTokenSource? refresh;
     private IReadOnlyList<DebugBreakpoint> breakpoints = [];
     private IReadOnlyList<DebugBreakpointBinding> bindings = [];
+    private HashSet<Guid> mcpBreakpointIds = [];
     private IReadOnlyList<DebugThread> threads = [];
     private IReadOnlyList<DebugStackFrame> frames = [];
     private IReadOnlyList<DebugScopeGroup> scopeGroups = [];
@@ -78,6 +79,34 @@ public sealed class DebuggerWorkspace : IDisposable
 
     public DebugBreakpoint? BreakpointAt(DebugCodeLocation location) =>
         breakpoints.FirstOrDefault(value => value.Location == location);
+
+    public async Task<IReadOnlyList<DebugBreakpointBinding>> SetMcpBreakpointsAsync(
+        IReadOnlyList<DebugBreakpoint> values,
+        CancellationToken cancellationToken = default)
+    {
+        breakpoints = breakpoints
+            .Where(value => !mcpBreakpointIds.Contains(value.Id))
+            .Concat(values)
+            .GroupBy(value => value.Id)
+            .Select(value => value.Last())
+            .ToArray();
+        mcpBreakpointIds = values.Select(value => value.Id).ToHashSet();
+        await SynchronizeBreakpointsAsync(cancellationToken);
+        return bindings.Where(value => mcpBreakpointIds.Contains(value.BreakpointId)).ToArray();
+    }
+
+    public void ClearMcpBreakpoints()
+    {
+        if (mcpBreakpointIds.Count == 0) return;
+        breakpoints = breakpoints
+            .Where(value => !mcpBreakpointIds.Contains(value.Id))
+            .ToArray();
+        bindings = bindings
+            .Where(value => !mcpBreakpointIds.Contains(value.BreakpointId))
+            .ToArray();
+        mcpBreakpointIds.Clear();
+        NotifyChanged();
+    }
 
     public Task LaunchAsync(
         string executablePath,
@@ -215,6 +244,12 @@ public sealed class DebuggerWorkspace : IDisposable
             NotifyPersistentStateChanged();
         }, cancellationToken, requireActiveSession: false);
 
+    public Task ForceCloseAsync(CancellationToken cancellationToken = default) =>
+        RunAsync(
+            token => debugger.ForceCloseAsync(token),
+            cancellationToken,
+            requireActiveSession: false);
+
     public Task SelectFrameAsync(
         DebugStackFrame frame,
         CancellationToken cancellationToken = default) =>
@@ -247,8 +282,10 @@ public sealed class DebuggerWorkspace : IDisposable
                 return;
             }
 
-            variableChildren[variable.Variables] =
-                await debugger.GetVariablesAsync(variable.Variables, token);
+            var children = await debugger.GetVariablesAsync(variable.Variables, token);
+            variableChildren[variable.Variables] = selectedFrame is { } frame
+                ? await RecoverVariableReferencesAsync(children, frame, token)
+                : children;
             NotifyChanged();
         }, cancellationToken, requireActiveSession: false);
 
@@ -624,6 +661,10 @@ public sealed class DebuggerWorkspace : IDisposable
             var loaded = await debugger.GetVariablesAsync(
                 scope.Variables,
                 cancellationToken);
+            loaded = await RecoverVariableReferencesAsync(
+                loaded,
+                frame.Id,
+                cancellationToken);
             loadedGroups.Add(new DebugScopeGroup(scope.Name, loaded));
         }
         selectedFrame = frame.Id;
@@ -632,6 +673,39 @@ public sealed class DebuggerWorkspace : IDisposable
         variableChildren.Clear();
         await EvaluateWatchesAsync(frame.Id, cancellationToken);
         NotifyChanged();
+    }
+
+    private async Task<IReadOnlyList<DebugVariable>> RecoverVariableReferencesAsync(
+        IReadOnlyList<DebugVariable> source,
+        DebugFrameId frame,
+        CancellationToken cancellationToken)
+    {
+        if (!Snapshot.Capabilities.SupportsEvaluate) return source;
+        var result = new DebugVariable[source.Count];
+        for (var index = 0; index < source.Count; index++)
+        {
+            var variable = source[index];
+            if (variable.Variables.Value == 0 &&
+                !string.IsNullOrWhiteSpace(variable.EvaluateName) &&
+                !DebugVariableTypes.IsScalar(variable.Type))
+            {
+                try
+                {
+                    var evaluated = await debugger.EvaluateAsync(
+                        variable.EvaluateName,
+                        frame,
+                        cancellationToken);
+                    if (evaluated.Variables.Value != 0)
+                        variable = variable with { Variables = evaluated.Variables };
+                }
+                catch (Exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    // Some adapters cannot re-evaluate synthetic variables.
+                }
+            }
+            result[index] = variable;
+        }
+        return result;
     }
 
     private async Task EvaluateWatchesAsync(
