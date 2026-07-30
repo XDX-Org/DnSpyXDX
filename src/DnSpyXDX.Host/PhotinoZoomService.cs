@@ -13,6 +13,7 @@ public sealed class PhotinoZoomService : IApplicationZoomService
     {
         window = mainWindow;
         window.SetZoom(ZoomPercent);
+        window.RegisterWindowCreatedHandler((_, _) => SetZoom(ZoomPercent));
     }
 
     public void SetZoom(int percent)

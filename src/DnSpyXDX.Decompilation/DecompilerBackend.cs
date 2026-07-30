@@ -336,7 +336,7 @@ internal sealed class AssemblySession : IDisposable
     // A content hash of this assembly, so a patched or rebuilt file never reads another build's cached source.
     // Computed once, lazily, the first time a cacheable document is decompiled (under the decompile gate).
     private string? assemblyId;
-    private readonly Dictionary<(int Token, DecompilerLanguage Language, bool ShowMetadataTokens, MemberOrder MemberOrder, string GroupOrder), DecompilerDocument> cache = [];
+    private readonly Dictionary<(int Token, DecompilerLanguage Language, bool ShowMetadataTokens, bool ShowCompilerGenerated, MemberOrder MemberOrder, string GroupOrder), DecompilerDocument> cache = [];
     private byte[]? image;
     private IReadOnlyList<BinaryRegion>? binaryRegions;
     private IReadOnlyDictionary<string, SymbolId>? typeLinks;
@@ -379,6 +379,8 @@ internal sealed class AssemblySession : IDisposable
         var settings = new DecompilerSettings { ThrowOnAssemblyResolveErrors = false };
         settings.CSharpFormattingOptions.IndentationString = "\t";
         settings.CSharpFormattingOptions.IndentSwitchBody = true;
+        settings.CSharpFormattingOptions.MinimumBlankLinesBetweenMembers = 1;
+        settings.CSharpFormattingOptions.MinimumBlankLinesBetweenTypes = 1;
         var decompiler = new CSharpDecompiler(module, resolver, settings);
         var sessionId = Guid.NewGuid();
         var descriptor = new AssemblyDescriptor(sessionId, mvid, name, path, module.DetectTargetFrameworkId() ?? "Unknown", module.Reader.PEHeaders.CoffHeader.Machine.ToString(), new NodeId(sessionId, "root"));
@@ -874,6 +876,7 @@ internal sealed class AssemblySession : IDisposable
     {
         if (!Enum.IsDefined(language)) throw new ArgumentOutOfRangeException(nameof(language));
         var showMetadataTokens = displaySettings.ShowMetadataTokens;
+        var showCompilerGenerated = displaySettings.ShowCompilerGenerated;
         // Member order only reshapes the C# view; every other view keeps ILSpy's order so those cache
         // entries stay shared across the setting instead of duplicating per option.
         var memberOrder = language == DecompilerLanguage.CSharp ? displaySettings.MemberOrder.ValidOrDefault() : MemberOrder.Ilspy;
@@ -881,7 +884,7 @@ internal sealed class AssemblySession : IDisposable
         // empty and their cache entries stay shared regardless of the group setting.
         var groupOrder = memberOrder == MemberOrder.DnSpy ? MemberGroups.Normalize(displaySettings.MemberGroupOrder) : MemberGroups.DefaultOrder;
         var groupSignature = memberOrder == MemberOrder.DnSpy ? MemberGroups.Signature(groupOrder) : "";
-        var key = (symbol.MetadataToken, language, showMetadataTokens, memberOrder, groupSignature);
+        var key = (symbol.MetadataToken, language, showMetadataTokens, showCompilerGenerated, memberOrder, groupSignature);
         if (cache.TryGetValue(key, out var cached)) return cached;
         await gate.WaitAsync(ct);
         try
@@ -889,7 +892,7 @@ internal sealed class AssemblySession : IDisposable
             if (cache.TryGetValue(key, out cached)) return cached;
             // A previous run may have already decompiled this exact document; loading it from disk avoids
             // re-running ILSpy, which is what makes restoring a saved session (or reopening a type) fast.
-            var cacheable = documentCache is not null && PersistentDecompileCache.IsCacheable(language);
+            var cacheable = documentCache is not null && !showCompilerGenerated && PersistentDecompileCache.IsCacheable(language);
             string? cacheAssemblyId = null;
             if (cacheable)
             {
@@ -909,6 +912,7 @@ internal sealed class AssemblySession : IDisposable
                         symbol,
                         handle,
                         showMetadataTokens,
+                        showCompilerGenerated,
                         memberOrder,
                         groupOrder),
                     ct);
@@ -965,6 +969,7 @@ internal sealed class AssemblySession : IDisposable
             SymbolId symbol,
             EntityHandle handle,
             bool showMetadataTokens,
+            bool showCompilerGenerated,
             MemberOrder memberOrder,
             IReadOnlyList<MemberGroup> groupOrder)
     {
@@ -975,7 +980,13 @@ internal sealed class AssemblySession : IDisposable
         // emitted as `get { return x; }` rather than `=> x`. The setting is flipped per call, which is safe
         // because DecompileAsync serialises every decompile on this session through its gate.
         settings.UseExpressionBodyForCalculatedGetterOnlyProperties = memberOrder != MemberOrder.DnSpy;
-        var tree = decompiler.Decompile([handle]);
+        var handles = new List<EntityHandle> { handle };
+        if (showCompilerGenerated && handle.Kind == HandleKind.TypeDefinition)
+            handles.AddRange(metadata.GetTypeDefinition((TypeDefinitionHandle)handle).GetNestedTypes()
+                .Where(nested => IsCompilerGenerated(nested))
+                .Select(nested => (EntityHandle)nested));
+        var tree = decompiler.Decompile(handles);
+        if (handles.Count > 1) NestGeneratedTypes(tree, handle, handles.Skip(1));
         if (memberOrder == MemberOrder.DnSpy) ReorderMembersDnSpyStyle(tree, groupOrder);
         var (text, spans, references) = SemanticHighlighter.Highlight(tree, settings.CSharpFormattingOptions);
         var lines = SplitIntoClassifiedLines(text, spans, references);
@@ -984,6 +995,26 @@ internal sealed class AssemblySession : IDisposable
         var debugMap = BuildDebugDocumentMap(symbol, tree, lines);
         var flattened = FlattenClassifiedLines(lines);
         return (flattened.Text, flattened.Spans, flattened.References, debugMap);
+    }
+
+    private static void NestGeneratedTypes(SyntaxTree tree, EntityHandle parentHandle, IEnumerable<EntityHandle> nestedHandles)
+    {
+        var parentToken = MetadataTokens.GetToken(parentHandle);
+        var nestedTokens = nestedHandles.Select(MetadataTokens.GetToken).ToHashSet();
+        var declarations = tree.Descendants.OfType<TypeDeclaration>().ToList();
+        var parent = declarations.FirstOrDefault(declaration =>
+            declaration.Annotation<TypeResolveResult>()?.Type.GetDefinition()?.MetadataToken is { IsNil: false } token &&
+            MetadataTokens.GetToken(token) == parentToken);
+        if (parent is null) return;
+
+        foreach (var declaration in declarations.Where(declaration =>
+                     declaration.Annotation<TypeResolveResult>()?.Type.GetDefinition()?.MetadataToken is { IsNil: false } token &&
+                     nestedTokens.Contains(MetadataTokens.GetToken(token))))
+        {
+            if (declaration.Parent == parent) continue;
+            declaration.Remove();
+            parent.Members.Add(declaration);
+        }
     }
 
     // dnSpy lists a type's members in source-code order, not ILSpy's kind-grouped order (which clusters all

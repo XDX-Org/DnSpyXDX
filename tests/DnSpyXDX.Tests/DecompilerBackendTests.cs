@@ -525,6 +525,29 @@ public sealed class DecompilerBackendTests
     }
 
     [Fact]
+    public async Task Compiler_generated_nested_types_are_included_in_the_type_document_when_enabled()
+    {
+        var displaySettings = new RuntimeDisplaySettings();
+        await using var backend = new DecompilerBackend(displaySettings);
+        var assembly = await backend.OpenAsync(typeof(DecompilerBackendTests).Assembly.Location);
+        var namespaces = (await backend.GetChildrenAsync(assembly.RootNode)).Single(n => n.Name == "Namespaces");
+        var ownNamespace = (await backend.GetChildrenAsync(namespaces.Id)).Single(n => n.Name == "DnSpyXDX.Tests");
+        var host = (await backend.GetChildrenAsync(ownNamespace.Id)).Single(n => n.Name == nameof(CompilerGeneratedHost));
+
+        var hidden = await backend.DecompileAsync(host.Symbol!.Value, DecompilerLanguage.CSharp);
+        Assert.DoesNotContain("GeneratedAsync>d__", hidden.Text);
+
+        displaySettings.ShowCompilerGenerated = true;
+        var shown = await backend.DecompileAsync(host.Symbol!.Value, DecompilerLanguage.CSharp);
+        Assert.Contains("GeneratedAsync>d__", shown.Text);
+        var generatedLine = shown.Text.Split('\n').Single(line => line.Contains("GeneratedAsync>d__", StringComparison.Ordinal) && line.Contains("class", StringComparison.Ordinal));
+        Assert.StartsWith("\t", generatedLine);
+        var generatedIndex = shown.Text.IndexOf(generatedLine, StringComparison.Ordinal);
+        var attributeBlock = shown.Text.LastIndexOf("\n\t[", generatedIndex, StringComparison.Ordinal);
+        Assert.True(attributeBlock > 0 && shown.Text[attributeBlock - 1] == '\n');
+    }
+
+    [Fact]
     public async Task Hides_property_and_event_accessors_from_the_method_list()
     {
         await using var backend = new DecompilerBackend(new RuntimeDisplaySettings { ShowCompilerGenerated = true });
@@ -813,6 +836,11 @@ public sealed class CompilerGeneratedHost
     public sealed class VisibleNested { }
     [System.Runtime.CompilerServices.CompilerGenerated]
     public sealed class GeneratedNested { }
+    public async Task<int> GeneratedAsync()
+    {
+        await Task.Yield();
+        return 1;
+    }
 }
 
 public struct Marker { }

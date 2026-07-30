@@ -1407,6 +1407,7 @@
     showCompilerGenerated = e.Value is true;
     DisplaySettings.ShowCompilerGenerated = showCompilerGenerated;
     await SaveTreeDisplaySettingsAsync();
+    foreach (var tab in Workspace.Tabs.Where(tab => tab.Document.Resource is null && tab.Document.Language == DecompilerLanguage.CSharp.Key()).ToArray()) await RefreshTabLanguageAsync(tab);
   }
   private async Task SaveTreeDisplaySettingsAsync()
   {
