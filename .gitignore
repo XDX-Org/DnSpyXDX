@@ -21,6 +21,7 @@ artifacts/
 .vs/
 .vscode/
 .idea/
+.Nova/
 *.user
 *.suo
 *.userosscache
