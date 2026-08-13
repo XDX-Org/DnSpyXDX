@@ -16,7 +16,10 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
-        var builder = PhotinoExBlazorAppBuilder.CreateDefault(args);
+        var builder = PhotinoExBlazorAppBuilder.CreateDefault(
+            "com.xdxorg.dnspyxdx",
+            args: args
+        );
         var loggingSettings = new RuntimeLoggingSettings();
         builder.Services.AddLogging(logging =>
         {
